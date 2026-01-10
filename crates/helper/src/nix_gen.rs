@@ -3,7 +3,7 @@
 use common::actions::{default_bundles, default_profiles};
 use common::config::paths;
 use common::ipc::{GeneratedFile, NetworkConfig, ServicesConfig};
-use common::nix::{generate_custom_packages_nix, generate_dns_nix, generate_firewall_nix, generate_hardware_nix, generate_hostname_nix, generate_selected_nix_full, generate_services_nix, generate_ssh_nix, generate_user_groups_nix, read_template, NixGenOptions};
+use common::nix::{generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix, generate_hostname_nix, generate_selected_nix_full, generate_services_nix, generate_user_groups_nix, read_template, NixGenOptions};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -213,45 +213,39 @@ pub fn generate_all_files(
         // Generate a combined network config that includes firewall, SSH, and VPN settings
         let mut network_content = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
 
-        // Firewall configuration
-        let firewall_section = generate_firewall_nix(
-            network_config.firewall_enabled,
-            &network_config.allowed_tcp_ports,
-            &network_config.allowed_udp_ports,
-        );
-        // Extract just the inner content (skip the module wrapper)
-        for line in firewall_section.lines() {
-            if line.trim().starts_with("networking.firewall") {
-                network_content.push_str("  ");
-                network_content.push_str(line.trim());
-                network_content.push('\n');
-            }
-        }
+        // Firewall configuration - generate directly
+        let tcp_str = network_config.allowed_tcp_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let udp_str = network_config.allowed_udp_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        // SSH configuration
+        network_content.push_str("  # Firewall\n");
+        network_content.push_str(&format!(
+            "  networking.firewall = {{\n    enable = {};\n    allowedTCPPorts = [ {} ];\n    allowedUDPPorts = [ {} ];\n  }};\n",
+            if network_config.firewall_enabled { "true" } else { "false" },
+            tcp_str,
+            udp_str
+        ));
+
+        // SSH configuration - generate directly
         if network_config.ssh_enabled {
-            let ssh_section = generate_ssh_nix(
-                network_config.ssh_enabled,
+            network_content.push_str("\n  # SSH\n");
+            network_content.push_str(&format!(
+                "  services.openssh = {{\n    enable = true;\n    ports = [ {} ];\n    settings = {{\n      PasswordAuthentication = {};\n      PermitRootLogin = \"{}\";\n    }};\n  }};\n",
                 network_config.ssh_port,
-                network_config.ssh_password_auth,
-                &network_config.ssh_root_login,
-                network_config.fail2ban_enabled,
-            );
-            // Extract just the services.openssh and services.fail2ban sections
-            let mut in_services = false;
-            for line in ssh_section.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("services.openssh") || trimmed.starts_with("services.fail2ban") {
-                    in_services = true;
-                }
-                if in_services {
-                    network_content.push_str("  ");
-                    network_content.push_str(trimmed);
-                    network_content.push('\n');
-                    if trimmed == "};" {
-                        in_services = false;
-                    }
-                }
+                if network_config.ssh_password_auth { "true" } else { "false" },
+                network_config.ssh_root_login
+            ));
+
+            if network_config.fail2ban_enabled {
+                network_content.push_str("\n  # Fail2ban\n");
+                network_content.push_str("  services.fail2ban = {\n    enable = true;\n    jails.sshd = {\n      enabled = true;\n    };\n  };\n");
             }
         }
 

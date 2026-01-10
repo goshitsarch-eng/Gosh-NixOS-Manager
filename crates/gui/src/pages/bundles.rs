@@ -168,9 +168,13 @@ impl BundlesPage {
             bundle.description.clone()
         };
 
+        // Escape special characters for Pango markup (& -> &amp;)
+        let escaped_title = glib::markup_escape_text(&bundle.name);
+        let escaped_subtitle = glib::markup_escape_text(&subtitle);
+
         let row = adw::ExpanderRow::builder()
-            .title(&bundle.name)
-            .subtitle(&subtitle)
+            .title(escaped_title)
+            .subtitle(escaped_subtitle)
             .show_enable_switch(true)
             .enable_expansion(false)
             .build();

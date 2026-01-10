@@ -615,43 +615,39 @@ pub fn generate_preview_full(options: &NixGenOptions) -> String {
         preview.push_str(&format!("\n--- {} ---\n", paths::NETWORK_NIX));
         let mut network_preview = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
 
-        // Show firewall settings
-        let firewall = generate_firewall_nix(
-            options.network_config.firewall_enabled,
-            &options.network_config.allowed_tcp_ports,
-            &options.network_config.allowed_udp_ports,
-        );
-        for line in firewall.lines() {
-            if line.trim().starts_with("networking.firewall") {
-                network_preview.push_str("  ");
-                network_preview.push_str(line.trim());
-                network_preview.push('\n');
-            }
-        }
+        // Show firewall settings - generate directly
+        let tcp_str = options.network_config.allowed_tcp_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let udp_str = options.network_config.allowed_udp_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        // Show SSH settings
+        network_preview.push_str("  # Firewall\n");
+        network_preview.push_str(&format!(
+            "  networking.firewall = {{\n    enable = {};\n    allowedTCPPorts = [ {} ];\n    allowedUDPPorts = [ {} ];\n  }};\n",
+            if options.network_config.firewall_enabled { "true" } else { "false" },
+            tcp_str,
+            udp_str
+        ));
+
+        // Show SSH settings - generate directly
         if options.network_config.ssh_enabled {
-            let ssh = generate_ssh_nix(
-                options.network_config.ssh_enabled,
+            network_preview.push_str("\n  # SSH\n");
+            network_preview.push_str(&format!(
+                "  services.openssh = {{\n    enable = true;\n    ports = [ {} ];\n    settings = {{\n      PasswordAuthentication = {};\n      PermitRootLogin = \"{}\";\n    }};\n  }};\n",
                 options.network_config.ssh_port,
-                options.network_config.ssh_password_auth,
-                &options.network_config.ssh_root_login,
-                options.network_config.fail2ban_enabled,
-            );
-            let mut in_services = false;
-            for line in ssh.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("services.openssh") || trimmed.starts_with("services.fail2ban") {
-                    in_services = true;
-                }
-                if in_services {
-                    network_preview.push_str("  ");
-                    network_preview.push_str(trimmed);
-                    network_preview.push('\n');
-                    if trimmed == "};" {
-                        in_services = false;
-                    }
-                }
+                if options.network_config.ssh_password_auth { "true" } else { "false" },
+                options.network_config.ssh_root_login
+            ));
+
+            if options.network_config.fail2ban_enabled {
+                network_preview.push_str("\n  # Fail2ban\n");
+                network_preview.push_str("  services.fail2ban = {\n    enable = true;\n    jails.sshd = {\n      enabled = true;\n    };\n  };\n");
             }
         }
 

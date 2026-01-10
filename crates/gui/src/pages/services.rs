@@ -193,7 +193,7 @@ impl ServicesPage {
 
         // === Sync & Backup Services ===
         let sync_group = adw::PreferencesGroup::builder()
-            .title("Sync & Backup")
+            .title("Sync &amp; Backup")
             .description("File synchronization and backup services")
             .build();
 
