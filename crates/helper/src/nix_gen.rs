@@ -161,7 +161,7 @@ pub fn generate_all_files(
         let packages_to_use: Vec<String> = if let Some(custom_packages) = bundle_packages.get(&bundle.id) {
             custom_packages.clone()
         } else {
-            bundle.packages.clone()
+            bundle.packages.iter().map(|p| p.id.clone()).collect()
         };
 
         // If user has customized packages, always generate a custom template

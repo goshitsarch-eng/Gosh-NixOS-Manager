@@ -370,7 +370,7 @@ impl PackagesPage {
 
         for bundle in bundles {
             for pkg in &bundle.packages {
-                map.insert(pkg.clone(), bundle.name.clone());
+                map.insert(pkg.id.clone(), bundle.name.clone());
             }
         }
 

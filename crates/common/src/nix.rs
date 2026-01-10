@@ -57,7 +57,7 @@ impl<'a> NixGenOptions<'a> {
         if let Some(packages) = self.bundle_packages.get(&bundle.id) {
             packages.clone()
         } else {
-            bundle.packages.clone()
+            bundle.packages.iter().map(|p| p.id.clone()).collect()
         }
     }
 }

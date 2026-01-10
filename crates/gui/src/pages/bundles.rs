@@ -208,28 +208,30 @@ impl BundlesPage {
         // Add individual package rows inside the expander
         for package in &bundle.packages {
             let pkg_row = adw::ActionRow::builder()
-                .title(package)
-                .subtitle(&format!("nixpkgs#{}", package))
+                .title(&package.display_name)
+                .subtitle(&format!("pkgs.{}", package.id))
                 .build();
+            // Enable title wrapping for long names
+            pkg_row.set_title_lines(0);
 
             let check = gtk::CheckButton::builder()
                 .valign(gtk::Align::Center)
                 .build();
 
-            // Store reference
+            // Store reference using package ID
             imp.package_checks.borrow_mut().insert(
-                (bundle.id.clone(), package.clone()),
+                (bundle.id.clone(), package.id.clone()),
                 check.clone(),
             );
 
             // Connect package toggle
             let bundle_id = bundle.id.clone();
-            let package_name = package.clone();
+            let package_id = package.id.clone();
             check.connect_toggled(glib::clone!(
                 #[weak(rename_to = page)]
                 self,
                 move |check| {
-                    page.toggle_package(&bundle_id, &package_name, check.is_active());
+                    page.toggle_package(&bundle_id, &package_id, check.is_active());
                 }
             ));
 
@@ -240,13 +242,14 @@ impl BundlesPage {
 
         // Connect bundle enable switch
         let bundle_id = bundle.id.clone();
-        let packages = bundle.packages.clone();
+        // Extract package IDs for the toggle callback
+        let package_ids: Vec<String> = bundle.packages.iter().map(|p| p.id.clone()).collect();
         row.connect_enable_expansion_notify(glib::clone!(
             #[weak(rename_to = page)]
             self,
             move |expander| {
                 let enabled = expander.enables_expansion();
-                page.toggle_bundle(&bundle_id, enabled, &packages);
+                page.toggle_bundle(&bundle_id, enabled, &package_ids);
             }
         ));
 
@@ -429,16 +432,16 @@ impl BundlesPage {
                         saved_packages.clone()
                     } else {
                         // Backwards compatibility: if no saved packages, use all from bundle definition
-                        bundle.packages.iter().cloned().collect()
+                        bundle.packages.iter().map(|p| p.id.clone()).collect()
                     };
 
                     imp.enabled_packages.borrow_mut().insert(bundle_id.clone(), pkg_set.clone());
 
                     // Update checkboxes based on saved package selection
                     for package in &bundle.packages {
-                        let key = (bundle_id.clone(), package.clone());
+                        let key = (bundle_id.clone(), package.id.clone());
                         if let Some(check) = imp.package_checks.borrow().get(&key) {
-                            check.set_active(pkg_set.contains(package));
+                            check.set_active(pkg_set.contains(&package.id));
                         }
                     }
                 }
@@ -446,7 +449,7 @@ impl BundlesPage {
                 // Bundle is disabled, uncheck all packages
                 if let Some(bundle) = bundles.iter().find(|b| &b.id == bundle_id) {
                     for package in &bundle.packages {
-                        let key = (bundle_id.clone(), package.clone());
+                        let key = (bundle_id.clone(), package.id.clone());
                         if let Some(check) = imp.package_checks.borrow().get(&key) {
                             check.set_active(false);
                         }
