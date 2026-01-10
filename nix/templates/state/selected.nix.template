@@ -1,0 +1,18 @@
+# NixOS Toolkit - Managed Configuration
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+#
+# This file is managed by nixos-toolkit. To make changes,
+# use the GUI application and click "Apply".
+#
+# Last updated: {{TIMESTAMP}}
+# Selected profile: {{PROFILE_NAME}}
+# Enabled bundles: {{BUNDLE_NAMES}}
+
+{ config, lib, pkgs, ... }:
+
+{
+  imports = [
+{{IMPORTS}}
+  ];
+{{INLINE_CONFIG}}
+}

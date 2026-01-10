@@ -1,0 +1,32 @@
+[package]
+name = "helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NixOS Toolkit Helper - Privileged operations"
+
+[[bin]]
+name = "nixos-toolkit-helper"
+path = "src/main.rs"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async runtime for process spawning
+tokio = { workspace = true, features = ["process", "io-util", "fs", "rt-multi-thread", "macros"] }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# File operations
+tempfile = { workspace = true }
+
+# Internal
+common = { workspace = true }

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>NixOS Toolkit</vendor>
+  <vendor_url>https://github.com/devjonesafrica/NixOSApp</vendor_url>
+  <icon_name>nixos-toolkit</icon_name>
+
+  <action id="org.nixos-toolkit.helper.manage-system">
+    <description>Manage NixOS system configuration</description>
+    <description xml:lang="en">Manage NixOS system configuration</description>
+    <message>Authentication is required to manage NixOS system configuration</message>
+    <message xml:lang="en">Authentication is required to manage NixOS system configuration</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/run/current-system/sw/bin/nixos-toolkit-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <action id="org.nixos-toolkit.helper.write-config">
+    <description>Write NixOS configuration files</description>
+    <description xml:lang="en">Write NixOS configuration files</description>
+    <message>Authentication is required to write NixOS configuration files</message>
+    <message xml:lang="en">Authentication is required to write NixOS configuration files</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.nixos-toolkit.helper.rebuild">
+    <description>Run nixos-rebuild</description>
+    <description xml:lang="en">Run nixos-rebuild to apply system configuration</description>
+    <message>Authentication is required to rebuild the NixOS system</message>
+    <message xml:lang="en">Authentication is required to rebuild the NixOS system</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

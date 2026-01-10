@@ -1,0 +1,8 @@
+/home/gosh/Downloads/NixOSApp-main/target/debug/deps/errno-75be5e89ddeeddaa.d: /home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/lib.rs /home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/unix.rs
+
+/home/gosh/Downloads/NixOSApp-main/target/debug/deps/liberrno-75be5e89ddeeddaa.rlib: /home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/lib.rs /home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/unix.rs
+
+/home/gosh/Downloads/NixOSApp-main/target/debug/deps/liberrno-75be5e89ddeeddaa.rmeta: /home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/lib.rs /home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/unix.rs
+
+/home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/lib.rs:
+/home/gosh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/unix.rs:

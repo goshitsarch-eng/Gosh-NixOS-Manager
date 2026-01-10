@@ -1,0 +1,303 @@
+//! Nix file generation
+
+use common::actions::{default_bundles, default_profiles};
+use common::config::paths;
+use common::ipc::GeneratedFile;
+use common::nix::{generate_custom_packages_nix, generate_hostname_nix, generate_selected_nix_full, read_template, NixGenOptions};
+use std::fs;
+use std::path::Path;
+
+/// Generate all configuration files
+pub fn generate_all_files(
+    selected_profile: &Option<String>,
+    enabled_bundles: &[String],
+    hostname: Option<&str>,
+    custom_packages: &[String],
+    dry_run: bool,
+) -> anyhow::Result<Vec<GeneratedFile>> {
+    let mut files = Vec::new();
+
+    let profiles = default_profiles();
+    let bundles = default_bundles();
+
+    // Find selected profile
+    let profile = selected_profile
+        .as_ref()
+        .and_then(|id| profiles.iter().find(|p| &p.id == id));
+
+    // Find enabled bundles
+    let enabled: Vec<_> = bundles
+        .iter()
+        .filter(|b| enabled_bundles.contains(&b.id))
+        .collect();
+
+    // Build options for Nix generation
+    let options = NixGenOptions {
+        profile,
+        bundles: enabled.clone(),
+        hostname,
+        custom_packages: custom_packages.to_vec(),
+        ..Default::default()
+    };
+
+    // Generate selected.nix
+    let selected_content = generate_selected_nix_full(&options);
+    files.push(GeneratedFile {
+        path: paths::SELECTED_NIX.to_string(),
+        content: selected_content.clone(),
+    });
+
+    if !dry_run {
+        atomic_write(paths::SELECTED_NIX, &selected_content)?;
+    }
+
+    // Generate hostname.nix if needed
+    if let Some(h) = hostname {
+        let hostname_content = generate_hostname_nix(h);
+        files.push(GeneratedFile {
+            path: paths::HOSTNAME_NIX.to_string(),
+            content: hostname_content.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(paths::HOSTNAME_NIX, &hostname_content)?;
+        }
+    }
+
+    // Copy profile template if selected
+    if let Some(p) = profile {
+        let dest_path = format!("{}/{}.nix", paths::PROFILES_DIR, p.id);
+        if let Ok(content) = read_template(&p.template) {
+            files.push(GeneratedFile {
+                path: dest_path.clone(),
+                content: content.clone(),
+            });
+
+            if !dry_run {
+                atomic_write(&dest_path, &content)?;
+            }
+        } else {
+            // Use fallback template
+            let fallback = generate_fallback_profile(&p.id);
+            files.push(GeneratedFile {
+                path: dest_path.clone(),
+                content: fallback.clone(),
+            });
+
+            if !dry_run {
+                atomic_write(&dest_path, &fallback)?;
+            }
+        }
+    }
+
+    // Copy bundle templates
+    for bundle in &enabled {
+        let dest_path = format!("{}/{}.nix", paths::BUNDLES_DIR, bundle.id);
+        if let Ok(content) = read_template(&bundle.template) {
+            files.push(GeneratedFile {
+                path: dest_path.clone(),
+                content: content.clone(),
+            });
+
+            if !dry_run {
+                atomic_write(&dest_path, &content)?;
+            }
+        } else {
+            // Use fallback template
+            let fallback = generate_fallback_bundle(&bundle.id, &bundle.packages);
+            files.push(GeneratedFile {
+                path: dest_path.clone(),
+                content: fallback.clone(),
+            });
+
+            if !dry_run {
+                atomic_write(&dest_path, &fallback)?;
+            }
+        }
+    }
+
+    // Generate custom-packages.nix if custom packages exist
+    if !custom_packages.is_empty() {
+        let custom_content = generate_custom_packages_nix(custom_packages);
+        files.push(GeneratedFile {
+            path: paths::CUSTOM_PACKAGES_NIX.to_string(),
+            content: custom_content.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(paths::CUSTOM_PACKAGES_NIX, &custom_content)?;
+        }
+    }
+
+    Ok(files)
+}
+
+/// Atomic write to a file (write to temp, then rename)
+fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
+    let path = Path::new(path);
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Write to temp file
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, content)?;
+
+    // Rename to final path
+    fs::rename(&temp_path, path)?;
+
+    // Verify the write succeeded by reading back
+    let written = fs::read_to_string(path)?;
+    if written != content {
+        anyhow::bail!("Write verification failed for {}: content mismatch", path.display());
+    }
+
+    tracing::info!("Wrote and verified {}", path.display());
+    Ok(())
+}
+
+/// Generate a fallback profile template
+fn generate_fallback_profile(id: &str) -> String {
+    match id {
+        "gnome" => r#"# GNOME Desktop Profile
+# Generated by NixOS Toolkit
+
+{ config, lib, pkgs, ... }:
+
+{
+  services.xserver.enable = true;
+  services.displayManager.gdm.enable = true;
+  services.displayManager.gdm.wayland = true;
+  services.desktopManager.gnome.enable = true;
+  services.gnome.core-utilities.enable = true;
+  programs.dconf.enable = true;
+  environment.systemPackages = with pkgs; [ gnome-tweaks dconf-editor gnome-extension-manager ];
+}
+"#
+        .to_string(),
+        "kde" => r#"# KDE Plasma 6 Desktop Profile
+# Generated by NixOS Toolkit
+
+{ config, lib, pkgs, ... }:
+
+{
+  services.displayManager.sddm.enable = true;
+  services.displayManager.sddm.wayland.enable = true;
+  services.desktopManager.plasma6.enable = true;
+  programs.kdeconnect.enable = true;
+  environment.systemPackages = with pkgs; [ kdePackages.kate kdePackages.konsole kdePackages.dolphin ];
+}
+"#
+        .to_string(),
+        "xfce" => r#"# XFCE Desktop Profile
+# Generated by NixOS Toolkit
+
+{ config, lib, pkgs, ... }:
+
+{
+  services.xserver.enable = true;
+  services.xserver.displayManager.lightdm.enable = true;
+  services.xserver.desktopManager.xfce.enable = true;
+  programs.nm-applet.enable = true;
+  xdg.portal.enable = true;
+  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
+}
+"#
+        .to_string(),
+        "mate" => r#"# MATE Desktop Profile
+# Generated by NixOS Toolkit
+
+{ config, lib, pkgs, ... }:
+
+{
+  services.xserver.enable = true;
+  services.xserver.displayManager.lightdm.enable = true;
+  services.xserver.desktopManager.mate.enable = true;
+  programs.nm-applet.enable = true;
+  xdg.portal.enable = true;
+  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
+}
+"#
+        .to_string(),
+        "cinnamon" => r#"# Cinnamon Desktop Profile
+# Generated by NixOS Toolkit
+
+{ config, lib, pkgs, ... }:
+
+{
+  services.xserver.enable = true;
+  services.xserver.displayManager.lightdm.enable = true;
+  services.xserver.desktopManager.cinnamon.enable = true;
+}
+"#
+        .to_string(),
+        "pantheon" => r#"# Pantheon Desktop Profile
+# Generated by NixOS Toolkit
+
+{ config, lib, pkgs, ... }:
+
+{
+  services.xserver.enable = true;
+  services.xserver.displayManager.lightdm.enable = true;
+  services.xserver.desktopManager.pantheon.enable = true;
+  services.pantheon.apps.enable = true;
+  xdg.portal.enable = true;
+  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk pkgs.xdg-desktop-portal-pantheon ];
+}
+"#
+        .to_string(),
+        "cosmic" => r#"# COSMIC Desktop Profile
+# Generated by NixOS Toolkit
+
+{ config, lib, pkgs, ... }:
+
+{
+  services.displayManager.cosmic-greeter.enable = true;
+  services.desktopManager.cosmic.enable = true;
+  hardware.graphics.enable = true;
+  xdg.portal.enable = true;
+  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-cosmic ];
+}
+"#
+        .to_string(),
+        _ => format!(
+            r#"# {} Desktop Profile
+# Generated by NixOS Toolkit
+
+{{ config, lib, pkgs, ... }}:
+
+{{
+  # Profile: {}
+  services.xserver.enable = true;
+}}
+"#,
+            id, id
+        ),
+    }
+}
+
+/// Generate a fallback bundle
+fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
+    let pkg_list = packages
+        .iter()
+        .map(|p| format!("    {}", p))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"# {} Bundle
+# Generated by NixOS Toolkit
+
+{{ config, lib, pkgs, ... }}:
+
+{{
+  environment.systemPackages = with pkgs; [
+{}
+  ];
+}}
+"#,
+        id, pkg_list
+    )
+}
