@@ -139,8 +139,6 @@
           nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
           postInstall = ''
-            mv $out/bin/helper $out/bin/nixos-toolkit-helper
-
             # Install polkit policy
             install -Dm644 ${./data/polkit/org.nixos-toolkit.helper.policy} \
               $out/share/polkit-1/actions/org.nixos-toolkit.helper.policy || true
