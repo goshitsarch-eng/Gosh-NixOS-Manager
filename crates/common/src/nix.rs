@@ -198,12 +198,12 @@ pub fn generate_hostname_nix(hostname: &str) -> String {
     format!(
         r#"# NixOS Toolkit - Hostname Configuration
 # DO NOT EDIT MANUALLY
-# Uses lib.mkDefault so explicit settings in configuration.nix take precedence
+# This setting takes precedence - remove networking.hostName from configuration.nix
 
 {{ config, lib, pkgs, ... }}:
 
 {{
-  networking.hostName = lib.mkDefault "{}";
+  networking.hostName = lib.mkForce "{}";
 }}
 "#,
         hostname
