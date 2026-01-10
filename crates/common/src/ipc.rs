@@ -24,6 +24,7 @@ pub enum HelperRequest {
     Generate {
         selected_profile: Option<String>,
         enabled_bundles: Vec<String>,
+        bundle_packages: std::collections::HashMap<String, Vec<String>>,
         hostname: Option<String>,
         custom_packages: Vec<String>,
         dry_run: bool,
@@ -33,6 +34,7 @@ pub enum HelperRequest {
     Apply {
         selected_profile: Option<String>,
         enabled_bundles: Vec<String>,
+        bundle_packages: std::collections::HashMap<String, Vec<String>>,
         hostname: Option<String>,
         custom_packages: Vec<String>,
         rebuild_type: RebuildType,
@@ -197,6 +199,10 @@ pub struct AppState {
     pub selected_profile: Option<String>,
     /// Enabled bundle IDs
     pub enabled_bundles: Vec<String>,
+    /// Per-bundle package selections: bundle_id -> list of enabled package names
+    /// When a bundle is in enabled_bundles but not in bundle_packages, all packages are installed
+    #[serde(default)]
+    pub bundle_packages: std::collections::HashMap<String, Vec<String>>,
     /// Custom hostname (if changed)
     pub hostname: Option<String>,
     /// Custom DNS servers (e.g., ["1.1.1.1", "8.8.8.8"])

@@ -264,9 +264,14 @@ impl BundlesPage {
         }
 
         // Update internal state
+        let pkg_set: HashSet<String> = if enabled {
+            packages.iter().cloned().collect()
+        } else {
+            HashSet::new()
+        };
+
         if enabled {
-            let pkg_set: HashSet<String> = packages.iter().cloned().collect();
-            imp.enabled_packages.borrow_mut().insert(bundle_id.to_string(), pkg_set);
+            imp.enabled_packages.borrow_mut().insert(bundle_id.to_string(), pkg_set.clone());
         } else {
             imp.enabled_packages.borrow_mut().remove(bundle_id);
         }
@@ -277,6 +282,8 @@ impl BundlesPage {
                 window.update_app_state(|state| {
                     if enabled {
                         state.enable_bundle(bundle_id);
+                        // Initialize bundle_packages with all packages from the bundle
+                        state.set_bundle_packages(bundle_id, pkg_set.clone());
                     } else {
                         state.disable_bundle(bundle_id);
                     }
@@ -297,6 +304,9 @@ impl BundlesPage {
     fn toggle_package(&self, bundle_id: &str, package: &str, enabled: bool) {
         let imp = self.imp();
 
+        // Skip window update during sync to prevent feedback loops
+        let is_syncing = imp.is_syncing.get();
+
         // Update internal state
         let mut enabled_packages = imp.enabled_packages.borrow_mut();
         let bundle_packages = enabled_packages
@@ -309,15 +319,29 @@ impl BundlesPage {
             bundle_packages.remove(package);
         }
 
+        // Clone the current package set for updating main window state
+        let current_packages = bundle_packages.clone();
+
         drop(enabled_packages);
         self.update_summary();
 
-        tracing::info!(
-            "Package {} in bundle {} {}",
-            package,
-            bundle_id,
-            if enabled { "enabled" } else { "disabled" }
-        );
+        // Update main window state (skip during sync to prevent feedback)
+        if !is_syncing {
+            if let Some(window) = self.root().and_then(|r| r.downcast::<crate::window::MainWindow>().ok()) {
+                window.update_app_state(|state| {
+                    state.toggle_bundle_package(bundle_id, package, enabled);
+                    // Also update the full package set to ensure consistency
+                    state.set_bundle_packages(bundle_id, current_packages.clone());
+                });
+            }
+
+            tracing::info!(
+                "Package {} in bundle {} {}",
+                package,
+                bundle_id,
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
     }
 
     fn update_summary(&self) {
@@ -374,11 +398,16 @@ impl BundlesPage {
     }
 
     /// Sync UI state from saved AppState (called after state is loaded)
-    pub fn sync_from_state(&self, enabled_bundles: &std::collections::HashSet<String>) {
+    pub fn sync_from_state(
+        &self,
+        enabled_bundles: &std::collections::HashSet<String>,
+        bundle_packages: &std::collections::HashMap<String, HashSet<String>>,
+    ) {
         let imp = self.imp();
         let bundles = default_bundles();
 
         tracing::debug!("Syncing bundles from state: {:?}", enabled_bundles);
+        tracing::debug!("Bundle packages: {:?}", bundle_packages);
 
         // Set syncing flag to prevent signal feedback loops
         imp.is_syncing.set(true);
@@ -389,17 +418,33 @@ impl BundlesPage {
             // Set the expander row's enable switch
             row.set_enable_expansion(is_enabled);
 
-            // If enabled, also check all packages
             if is_enabled {
                 if let Some(bundle) = bundles.iter().find(|b| &b.id == bundle_id) {
-                    let pkg_set: HashSet<String> = bundle.packages.iter().cloned().collect();
+                    // Use saved package selection if available, otherwise use all packages
+                    let pkg_set: HashSet<String> = if let Some(saved_packages) = bundle_packages.get(bundle_id) {
+                        saved_packages.clone()
+                    } else {
+                        // Backwards compatibility: if no saved packages, use all from bundle definition
+                        bundle.packages.iter().cloned().collect()
+                    };
+
                     imp.enabled_packages.borrow_mut().insert(bundle_id.clone(), pkg_set.clone());
 
-                    // Update checkboxes
+                    // Update checkboxes based on saved package selection
                     for package in &bundle.packages {
                         let key = (bundle_id.clone(), package.clone());
                         if let Some(check) = imp.package_checks.borrow().get(&key) {
-                            check.set_active(true);
+                            check.set_active(pkg_set.contains(package));
+                        }
+                    }
+                }
+            } else {
+                // Bundle is disabled, uncheck all packages
+                if let Some(bundle) = bundles.iter().find(|b| &b.id == bundle_id) {
+                    for package in &bundle.packages {
+                        let key = (bundle_id.clone(), package.clone());
+                        if let Some(check) = imp.package_checks.borrow().get(&key) {
+                            check.set_active(false);
                         }
                     }
                 }

@@ -35,11 +35,27 @@ pub struct NixOutput {
 pub struct NixGenOptions<'a> {
     pub profile: Option<&'a ProfileDef>,
     pub bundles: Vec<&'a BundleDef>,
+    /// Per-bundle package selections: bundle_id -> list of enabled package names.
+    /// If a bundle is not in this map, all its packages are included.
+    pub bundle_packages: std::collections::HashMap<String, Vec<String>>,
     pub hostname: Option<&'a str>,
     pub dns_servers: Vec<String>,
     pub user_groups: Vec<String>,
     pub username: Option<&'a str>,
     pub custom_packages: Vec<String>,
+}
+
+impl<'a> NixGenOptions<'a> {
+    /// Get the packages that should be enabled for a specific bundle.
+    /// If bundle_packages contains an entry for this bundle, returns that list.
+    /// Otherwise, returns all packages from the bundle definition.
+    pub fn get_bundle_packages(&self, bundle: &BundleDef) -> Vec<String> {
+        if let Some(packages) = self.bundle_packages.get(&bundle.id) {
+            packages.clone()
+        } else {
+            bundle.packages.clone()
+        }
+    }
 }
 
 /// Generate the selected.nix file content with full options

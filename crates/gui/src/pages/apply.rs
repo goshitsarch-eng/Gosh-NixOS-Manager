@@ -230,10 +230,18 @@ impl ApplyPage {
                 .filter(|b| state.enabled_bundles.contains(&b.id))
                 .collect();
 
-            // Build options including custom packages
+            // Convert bundle_packages from HashSet to Vec for IPC format
+            let bundle_packages: std::collections::HashMap<String, Vec<String>> = state
+                .bundle_packages
+                .iter()
+                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+                .collect();
+
+            // Build options including custom packages and bundle_packages
             let options = NixGenOptions {
                 profile,
                 bundles: enabled_bundles,
+                bundle_packages,
                 hostname: state.hostname.as_deref(),
                 custom_packages: state.custom_packages.iter().cloned().collect(),
                 ..Default::default()
@@ -349,7 +357,7 @@ impl ApplyPage {
         }
 
         // Get current state from main window
-        let (selected_profile, enabled_bundles, hostname, custom_packages) = if let Some(window) = self
+        let (selected_profile, enabled_bundles, bundle_packages, hostname, custom_packages) = if let Some(window) = self
             .root()
             .and_then(|r| r.downcast::<crate::window::MainWindow>().ok())
         {
@@ -357,6 +365,11 @@ impl ApplyPage {
             (
                 state.selected_profile.clone(),
                 state.enabled_bundles.iter().cloned().collect::<Vec<_>>(),
+                state
+                    .bundle_packages
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.iter().cloned().collect::<Vec<_>>()))
+                    .collect::<std::collections::HashMap<_, _>>(),
                 state.hostname.clone(),
                 state.custom_packages.iter().cloned().collect::<Vec<_>>(),
             )
@@ -429,6 +442,7 @@ impl ApplyPage {
                 let request = HelperRequest::Apply {
                     selected_profile,
                     enabled_bundles,
+                    bundle_packages,
                     hostname,
                     custom_packages,
                     rebuild_type: RebuildType::Switch,

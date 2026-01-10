@@ -361,7 +361,7 @@ impl MainWindow {
             .child_by_name("bundles")
             .and_then(|w| w.downcast::<BundlesPage>().ok())
         {
-            bundles_page.sync_from_state(&state.enabled_bundles);
+            bundles_page.sync_from_state(&state.enabled_bundles, &state.bundle_packages);
         }
 
         // Sync ProfilesPage

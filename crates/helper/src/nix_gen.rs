@@ -4,6 +4,7 @@ use common::actions::{default_bundles, default_profiles};
 use common::config::paths;
 use common::ipc::GeneratedFile;
 use common::nix::{generate_custom_packages_nix, generate_hostname_nix, generate_selected_nix_full, read_template, NixGenOptions};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -11,6 +12,7 @@ use std::path::Path;
 pub fn generate_all_files(
     selected_profile: &Option<String>,
     enabled_bundles: &[String],
+    bundle_packages: &HashMap<String, Vec<String>>,
     hostname: Option<&str>,
     custom_packages: &[String],
     dry_run: bool,
@@ -35,6 +37,7 @@ pub fn generate_all_files(
     let options = NixGenOptions {
         profile,
         bundles: enabled.clone(),
+        bundle_packages: bundle_packages.clone(),
         hostname,
         custom_packages: custom_packages.to_vec(),
         ..Default::default()
@@ -93,26 +96,43 @@ pub fn generate_all_files(
     // Copy bundle templates
     for bundle in &enabled {
         let dest_path = format!("{}/{}.nix", paths::BUNDLES_DIR, bundle.id);
-        if let Ok(content) = read_template(&bundle.template) {
-            files.push(GeneratedFile {
-                path: dest_path.clone(),
-                content: content.clone(),
-            });
 
-            if !dry_run {
-                atomic_write(&dest_path, &content)?;
-            }
+        // Get the packages to use for this bundle
+        // If bundle_packages has an entry, use that (user customized); otherwise use all packages
+        let packages_to_use: Vec<String> = if let Some(custom_packages) = bundle_packages.get(&bundle.id) {
+            custom_packages.clone()
         } else {
-            // Use fallback template
-            let fallback = generate_fallback_bundle(&bundle.id, &bundle.packages);
-            files.push(GeneratedFile {
-                path: dest_path.clone(),
-                content: fallback.clone(),
-            });
+            bundle.packages.clone()
+        };
 
-            if !dry_run {
-                atomic_write(&dest_path, &fallback)?;
+        // If user has customized packages, always generate a custom template
+        // This ensures the generated Nix file reflects the user's package selection
+        let has_custom_packages = bundle_packages.contains_key(&bundle.id);
+
+        if !has_custom_packages {
+            // No customization - try to use the pre-made template
+            if let Ok(content) = read_template(&bundle.template) {
+                files.push(GeneratedFile {
+                    path: dest_path.clone(),
+                    content: content.clone(),
+                });
+
+                if !dry_run {
+                    atomic_write(&dest_path, &content)?;
+                }
+                continue;
             }
+        }
+
+        // Either customized packages or no template available - generate fallback
+        let fallback = generate_fallback_bundle(&bundle.id, &packages_to_use);
+        files.push(GeneratedFile {
+            path: dest_path.clone(),
+            content: fallback.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(&dest_path, &fallback)?;
         }
     }
 

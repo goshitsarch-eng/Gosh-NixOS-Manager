@@ -205,6 +205,7 @@ pub fn validate(
 pub fn generate(
     selected_profile: Option<String>,
     enabled_bundles: Vec<String>,
+    bundle_packages: std::collections::HashMap<String, Vec<String>>,
     hostname: Option<String>,
     custom_packages: Vec<String>,
     dry_run: bool,
@@ -217,7 +218,7 @@ pub fn generate(
     }
 
     // Generate files
-    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, hostname.as_deref(), &custom_packages, dry_run)
+    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &custom_packages, dry_run)
     {
         Ok(files) => {
             // Generate preview
@@ -240,12 +241,13 @@ pub fn generate(
 pub fn apply(
     selected_profile: Option<String>,
     enabled_bundles: Vec<String>,
+    bundle_packages: std::collections::HashMap<String, Vec<String>>,
     hostname: Option<String>,
     custom_packages: Vec<String>,
     rebuild_type: RebuildType,
 ) -> HelperResponse {
     // First generate files (not dry run)
-    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, hostname.as_deref(), &custom_packages, false)
+    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &custom_packages, false)
     {
         Ok(files) => {
             // Log each file that was written

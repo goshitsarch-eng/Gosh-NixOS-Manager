@@ -11,6 +11,8 @@ pub struct AppState {
     pub selected_profile: Option<String>,
     /// Set of enabled bundle IDs
     pub enabled_bundles: HashSet<String>,
+    /// Per-bundle package selections: bundle_id -> enabled package names
+    pub bundle_packages: std::collections::HashMap<String, HashSet<String>>,
     /// Custom hostname (if changed from current)
     pub hostname: Option<String>,
     /// Custom DNS servers (e.g., ["1.1.1.1", "8.8.8.8"])
@@ -62,12 +64,37 @@ impl AppState {
     /// Disable a bundle
     pub fn disable_bundle(&mut self, bundle_id: &str) {
         self.enabled_bundles.remove(bundle_id);
+        self.bundle_packages.remove(bundle_id);
         self.has_changes = true;
     }
 
     /// Check if a bundle is enabled
     pub fn is_bundle_enabled(&self, bundle_id: &str) -> bool {
         self.enabled_bundles.contains(bundle_id)
+    }
+
+    /// Set the enabled packages for a bundle
+    pub fn set_bundle_packages(&mut self, bundle_id: impl Into<String>, packages: HashSet<String>) {
+        self.bundle_packages.insert(bundle_id.into(), packages);
+        self.has_changes = true;
+    }
+
+    /// Get the enabled packages for a bundle
+    pub fn get_bundle_packages(&self, bundle_id: &str) -> Option<&HashSet<String>> {
+        self.bundle_packages.get(bundle_id)
+    }
+
+    /// Toggle a package within a bundle on/off
+    pub fn toggle_bundle_package(&mut self, bundle_id: &str, package: impl Into<String>, enabled: bool) {
+        let pkg = package.into();
+        if let Some(packages) = self.bundle_packages.get_mut(bundle_id) {
+            if enabled {
+                packages.insert(pkg);
+            } else {
+                packages.remove(&pkg);
+            }
+            self.has_changes = true;
+        }
     }
 
     /// Set custom hostname
@@ -165,6 +192,11 @@ impl AppState {
         IpcAppState {
             selected_profile: self.selected_profile.clone(),
             enabled_bundles: self.enabled_bundles.iter().cloned().collect(),
+            bundle_packages: self
+                .bundle_packages
+                .iter()
+                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+                .collect(),
             hostname: self.hostname.clone(),
             dns_servers: self.dns_servers.clone(),
             user_groups: self.user_groups.iter().cloned().collect(),
@@ -179,6 +211,11 @@ impl AppState {
         Self {
             selected_profile: ipc.selected_profile,
             enabled_bundles: ipc.enabled_bundles.into_iter().collect(),
+            bundle_packages: ipc
+                .bundle_packages
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().collect()))
+                .collect(),
             hostname: ipc.hostname,
             dns_servers: ipc.dns_servers,
             user_groups: ipc.user_groups.into_iter().collect(),
