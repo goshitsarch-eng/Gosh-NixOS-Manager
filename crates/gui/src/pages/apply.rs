@@ -664,9 +664,15 @@ impl ApplyPage {
             let mut end = buffer.end_iter();
             buffer.insert(&mut end, text);
 
-            // Scroll to end
-            let mark = buffer.create_mark(None, &buffer.end_iter(), false);
-            view.scroll_to_mark(&mark, 0.0, true, 0.0, 1.0);
+            // Scroll to end using idle callback to avoid conflicts with window redraws
+            let view_clone = view.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(buffer) = view_clone.buffer().into() {
+                    let buffer: gtk::TextBuffer = buffer;
+                    let end_iter = buffer.end_iter();
+                    view_clone.scroll_to_iter(&mut end_iter.clone(), 0.0, false, 0.0, 1.0);
+                }
+            });
         }
     }
 }
