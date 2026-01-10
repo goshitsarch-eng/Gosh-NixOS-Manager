@@ -2,6 +2,7 @@
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
+use common::ipc::NetworkConfig;
 use gtk::glib;
 use std::cell::RefCell;
 
@@ -356,24 +357,50 @@ impl NetworkPage {
             tailscale_enabled: imp.tailscale_enabled.borrow().as_ref().map(|s| s.is_active()).unwrap_or(false),
         }
     }
+
+    /// Set network configuration from loaded state
+    pub fn set_network_config(&self, config: &NetworkConfig) {
+        let imp = self.imp();
+
+        // Firewall
+        if let Some(switch) = imp.firewall_enabled.borrow().as_ref() {
+            switch.set_active(config.firewall_enabled);
+        }
+        *imp.allowed_tcp_ports.borrow_mut() = config.allowed_tcp_ports.clone();
+        *imp.allowed_udp_ports.borrow_mut() = config.allowed_udp_ports.clone();
+
+        // SSH
+        if let Some(switch) = imp.ssh_enabled.borrow().as_ref() {
+            switch.set_active(config.ssh_enabled);
+        }
+        if let Some(spin) = imp.ssh_port.borrow().as_ref() {
+            spin.set_value(config.ssh_port as f64);
+        }
+        if let Some(switch) = imp.ssh_password_auth.borrow().as_ref() {
+            switch.set_active(config.ssh_password_auth);
+        }
+        if let Some(combo) = imp.ssh_root_login.borrow().as_ref() {
+            let idx = match config.ssh_root_login.as_str() {
+                "no" => 0,
+                "prohibit-password" => 1,
+                "yes" => 2,
+                _ => 0,
+            };
+            combo.set_selected(idx);
+        }
+        if let Some(switch) = imp.fail2ban_enabled.borrow().as_ref() {
+            switch.set_active(config.fail2ban_enabled);
+        }
+
+        // VPN
+        if let Some(switch) = imp.tailscale_enabled.borrow().as_ref() {
+            switch.set_active(config.tailscale_enabled);
+        }
+    }
 }
 
 impl Default for NetworkPage {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Network configuration state
-#[derive(Debug, Clone, Default)]
-pub struct NetworkConfig {
-    pub firewall_enabled: bool,
-    pub allowed_tcp_ports: Vec<u16>,
-    pub allowed_udp_ports: Vec<u16>,
-    pub ssh_enabled: bool,
-    pub ssh_port: u16,
-    pub ssh_password_auth: bool,
-    pub ssh_root_login: String,
-    pub fail2ban_enabled: bool,
-    pub tailscale_enabled: bool,
 }

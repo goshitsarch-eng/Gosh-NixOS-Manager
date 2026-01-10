@@ -274,7 +274,28 @@ impl MainWindow {
     }
 
     pub fn get_app_state(&self) -> AppState {
-        self.imp().app_state.borrow().clone()
+        let imp = self.imp();
+        let mut state = imp.app_state.borrow().clone();
+
+        // Collect current network config from NetworkPage
+        if let Some(network_page) = imp
+            .content_stack
+            .child_by_name("network")
+            .and_then(|w| w.downcast::<NetworkPage>().ok())
+        {
+            state.network_config = network_page.get_network_config();
+        }
+
+        // Collect current services config from ServicesPage
+        if let Some(services_page) = imp
+            .content_stack
+            .child_by_name("services")
+            .and_then(|w| w.downcast::<ServicesPage>().ok())
+        {
+            state.services_config = services_page.get_services_config();
+        }
+
+        state
     }
 
     pub fn update_app_state<F>(&self, f: F)
@@ -380,6 +401,24 @@ impl MainWindow {
             .and_then(|w| w.downcast::<PackagesPage>().ok())
         {
             packages_page.sync_from_state(&state.custom_packages);
+        }
+
+        // Sync NetworkPage
+        if let Some(network_page) = imp
+            .content_stack
+            .child_by_name("network")
+            .and_then(|w| w.downcast::<NetworkPage>().ok())
+        {
+            network_page.set_network_config(&state.network_config);
+        }
+
+        // Sync ServicesPage
+        if let Some(services_page) = imp
+            .content_stack
+            .child_by_name("services")
+            .and_then(|w| w.downcast::<ServicesPage>().ok())
+        {
+            services_page.set_services_config(&state.services_config);
         }
     }
 }

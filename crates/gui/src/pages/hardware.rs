@@ -219,6 +219,16 @@ impl HardwarePage {
             .active(false)
             .build();
         bt_enabled.add_prefix(&gtk::Image::from_icon_name("bluetooth-symbolic"));
+
+        // Connect to main window state when Bluetooth is toggled
+        bt_enabled.connect_active_notify(glib::clone!(@weak self as page => move |switch| {
+            if let Some(window) = page.root().and_then(|r| r.downcast::<crate::window::MainWindow>().ok()) {
+                window.update_app_state(|state| {
+                    state.set_bluetooth_enabled(switch.is_active());
+                });
+            }
+        }));
+
         bluetooth_group.add(&bt_enabled);
         *imp.bluetooth_enabled.borrow_mut() = Some(bt_enabled);
 

@@ -2,8 +2,8 @@
 
 use common::actions::{default_bundles, default_profiles};
 use common::config::paths;
-use common::ipc::GeneratedFile;
-use common::nix::{generate_custom_packages_nix, generate_hostname_nix, generate_selected_nix_full, read_template, NixGenOptions};
+use common::ipc::{GeneratedFile, NetworkConfig, ServicesConfig};
+use common::nix::{generate_custom_packages_nix, generate_dns_nix, generate_firewall_nix, generate_hardware_nix, generate_hostname_nix, generate_selected_nix_full, generate_services_nix, generate_ssh_nix, generate_user_groups_nix, read_template, NixGenOptions};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -14,7 +14,13 @@ pub fn generate_all_files(
     enabled_bundles: &[String],
     bundle_packages: &HashMap<String, Vec<String>>,
     hostname: Option<&str>,
+    dns_servers: &[String],
+    user_groups: &[String],
+    username: Option<&str>,
+    bluetooth_enabled: bool,
     custom_packages: &[String],
+    network_config: &NetworkConfig,
+    services_config: &ServicesConfig,
     dry_run: bool,
 ) -> anyhow::Result<Vec<GeneratedFile>> {
     let mut files = Vec::new();
@@ -39,8 +45,13 @@ pub fn generate_all_files(
         bundles: enabled.clone(),
         bundle_packages: bundle_packages.clone(),
         hostname,
+        dns_servers: dns_servers.to_vec(),
+        user_groups: user_groups.to_vec(),
+        username,
+        bluetooth_enabled,
         custom_packages: custom_packages.to_vec(),
-        ..Default::default()
+        network_config: network_config.clone(),
+        services_config: services_config.clone(),
     };
 
     // Generate selected.nix
@@ -64,6 +75,54 @@ pub fn generate_all_files(
 
         if !dry_run {
             atomic_write(paths::HOSTNAME_NIX, &hostname_content)?;
+        }
+    }
+
+    // Generate dns.nix if DNS servers are configured
+    if !dns_servers.is_empty() {
+        let dns_content = generate_dns_nix(dns_servers);
+        files.push(GeneratedFile {
+            path: paths::DNS_NIX.to_string(),
+            content: dns_content.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(paths::DNS_NIX, &dns_content)?;
+        }
+    }
+
+    // Generate users.nix if user groups are configured
+    if let Some(user) = username {
+        if !user_groups.is_empty() {
+            let users_content = generate_user_groups_nix(user, user_groups);
+            files.push(GeneratedFile {
+                path: paths::USERS_NIX.to_string(),
+                content: users_content.clone(),
+            });
+
+            if !dry_run {
+                atomic_write(paths::USERS_NIX, &users_content)?;
+            }
+        }
+    }
+
+    // Generate hardware.nix if Bluetooth is enabled
+    if bluetooth_enabled {
+        let hardware_content = generate_hardware_nix(
+            false, // nvidia_enabled - not implemented yet
+            false, // nvidia_open
+            false, // audio_pipewire
+            true,  // bluetooth_enabled
+            false, // tlp_enabled
+            false, // thermald_enabled
+        );
+        files.push(GeneratedFile {
+            path: paths::HARDWARE_NIX.to_string(),
+            content: hardware_content.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(paths::HARDWARE_NIX, &hardware_content)?;
         }
     }
 
@@ -146,6 +205,86 @@ pub fn generate_all_files(
 
         if !dry_run {
             atomic_write(paths::CUSTOM_PACKAGES_NIX, &custom_content)?;
+        }
+    }
+
+    // Generate network.nix if network settings are configured
+    if network_config.has_settings() {
+        // Generate a combined network config that includes firewall, SSH, and VPN settings
+        let mut network_content = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
+
+        // Firewall configuration
+        let firewall_section = generate_firewall_nix(
+            network_config.firewall_enabled,
+            &network_config.allowed_tcp_ports,
+            &network_config.allowed_udp_ports,
+        );
+        // Extract just the inner content (skip the module wrapper)
+        for line in firewall_section.lines() {
+            if line.trim().starts_with("networking.firewall") {
+                network_content.push_str("  ");
+                network_content.push_str(line.trim());
+                network_content.push('\n');
+            }
+        }
+
+        // SSH configuration
+        if network_config.ssh_enabled {
+            let ssh_section = generate_ssh_nix(
+                network_config.ssh_enabled,
+                network_config.ssh_port,
+                network_config.ssh_password_auth,
+                &network_config.ssh_root_login,
+                network_config.fail2ban_enabled,
+            );
+            // Extract just the services.openssh and services.fail2ban sections
+            let mut in_services = false;
+            for line in ssh_section.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("services.openssh") || trimmed.starts_with("services.fail2ban") {
+                    in_services = true;
+                }
+                if in_services {
+                    network_content.push_str("  ");
+                    network_content.push_str(trimmed);
+                    network_content.push('\n');
+                    if trimmed == "};" {
+                        in_services = false;
+                    }
+                }
+            }
+        }
+
+        // Tailscale VPN
+        if network_config.tailscale_enabled {
+            network_content.push_str("\n  # Tailscale VPN\n");
+            network_content.push_str("  services.tailscale.enable = true;\n");
+        }
+
+        network_content.push_str("}\n");
+
+        files.push(GeneratedFile {
+            path: paths::NETWORK_NIX.to_string(),
+            content: network_content.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(paths::NETWORK_NIX, &network_content)?;
+        }
+    }
+
+    // Generate services.nix if services are configured
+    if services_config.has_settings() {
+        let enabled_services: Vec<&str> = services_config.enabled_services();
+        let services_content = generate_services_nix(&enabled_services);
+
+        files.push(GeneratedFile {
+            path: paths::SERVICES_NIX.to_string(),
+            content: services_content.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(paths::SERVICES_NIX, &services_content)?;
         }
     }
 

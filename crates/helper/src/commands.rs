@@ -3,7 +3,7 @@
 use crate::nix_gen;
 use crate::rebuild;
 use common::config::{paths, ConfigMode, IntegrationStatus, SystemInfo};
-use common::ipc::{AppState, Generation, HelperResponse, LogLevel, RebuildType};
+use common::ipc::{AppState, Generation, HelperResponse, LogLevel, NetworkConfig, RebuildType, ServicesConfig};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -207,7 +207,13 @@ pub fn generate(
     enabled_bundles: Vec<String>,
     bundle_packages: std::collections::HashMap<String, Vec<String>>,
     hostname: Option<String>,
+    dns_servers: Vec<String>,
+    user_groups: Vec<String>,
+    username: Option<String>,
+    bluetooth_enabled: bool,
     custom_packages: Vec<String>,
+    network_config: NetworkConfig,
+    services_config: ServicesConfig,
     dry_run: bool,
 ) -> HelperResponse {
     // First ensure directories exist
@@ -218,7 +224,7 @@ pub fn generate(
     }
 
     // Generate files
-    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &custom_packages, dry_run)
+    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &dns_servers, &user_groups, username.as_deref(), bluetooth_enabled, &custom_packages, &network_config, &services_config, dry_run)
     {
         Ok(files) => {
             // Generate preview
@@ -243,11 +249,17 @@ pub fn apply(
     enabled_bundles: Vec<String>,
     bundle_packages: std::collections::HashMap<String, Vec<String>>,
     hostname: Option<String>,
+    dns_servers: Vec<String>,
+    user_groups: Vec<String>,
+    username: Option<String>,
+    bluetooth_enabled: bool,
     custom_packages: Vec<String>,
+    network_config: NetworkConfig,
+    services_config: ServicesConfig,
     rebuild_type: RebuildType,
 ) -> HelperResponse {
     // First generate files (not dry run)
-    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &custom_packages, false)
+    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &dns_servers, &user_groups, username.as_deref(), bluetooth_enabled, &custom_packages, &network_config, &services_config, false)
     {
         Ok(files) => {
             // Log each file that was written

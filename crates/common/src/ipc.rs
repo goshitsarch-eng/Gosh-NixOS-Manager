@@ -26,7 +26,13 @@ pub enum HelperRequest {
         enabled_bundles: Vec<String>,
         bundle_packages: std::collections::HashMap<String, Vec<String>>,
         hostname: Option<String>,
+        dns_servers: Vec<String>,
+        user_groups: Vec<String>,
+        username: Option<String>,
+        bluetooth_enabled: bool,
         custom_packages: Vec<String>,
+        network_config: NetworkConfig,
+        services_config: ServicesConfig,
         dry_run: bool,
     },
 
@@ -36,7 +42,13 @@ pub enum HelperRequest {
         enabled_bundles: Vec<String>,
         bundle_packages: std::collections::HashMap<String, Vec<String>>,
         hostname: Option<String>,
+        dns_servers: Vec<String>,
+        user_groups: Vec<String>,
+        username: Option<String>,
+        bluetooth_enabled: bool,
         custom_packages: Vec<String>,
+        network_config: NetworkConfig,
+        services_config: ServicesConfig,
         rebuild_type: RebuildType,
     },
 
@@ -192,6 +204,142 @@ impl LogLevel {
     }
 }
 
+/// Network configuration for firewall, SSH, and VPN
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    /// Enable firewall
+    #[serde(default = "default_true")]
+    pub firewall_enabled: bool,
+    /// Allowed TCP ports
+    #[serde(default)]
+    pub allowed_tcp_ports: Vec<u16>,
+    /// Allowed UDP ports
+    #[serde(default)]
+    pub allowed_udp_ports: Vec<u16>,
+    /// Enable SSH server
+    #[serde(default)]
+    pub ssh_enabled: bool,
+    /// SSH port (default 22)
+    #[serde(default = "default_ssh_port")]
+    pub ssh_port: u16,
+    /// Allow password authentication
+    #[serde(default)]
+    pub ssh_password_auth: bool,
+    /// Root login policy: "no", "prohibit-password", or "yes"
+    #[serde(default = "default_root_login")]
+    pub ssh_root_login: String,
+    /// Enable fail2ban for SSH protection
+    #[serde(default)]
+    pub fail2ban_enabled: bool,
+    /// Enable Tailscale VPN
+    #[serde(default)]
+    pub tailscale_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+fn default_root_login() -> String {
+    "no".to_string()
+}
+
+impl NetworkConfig {
+    /// Check if any network settings are configured (non-default)
+    pub fn has_settings(&self) -> bool {
+        !self.allowed_tcp_ports.is_empty()
+            || !self.allowed_udp_ports.is_empty()
+            || self.ssh_enabled
+            || self.tailscale_enabled
+            || !self.firewall_enabled // Disabled is non-default
+    }
+}
+
+/// Services configuration for system services
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServicesConfig {
+    #[serde(default)]
+    pub printing: bool,
+    #[serde(default)]
+    pub avahi: bool,
+    #[serde(default)]
+    pub fwupd: bool,
+    #[serde(default)]
+    pub upower: bool,
+    #[serde(default)]
+    pub networkmanager: bool,
+    #[serde(default)]
+    pub resolved: bool,
+    #[serde(default)]
+    pub rustdesk: bool,
+    #[serde(default)]
+    pub syncthing: bool,
+    #[serde(default)]
+    pub locate: bool,
+    #[serde(default)]
+    pub flatpak: bool,
+    #[serde(default)]
+    pub gnome_keyring: bool,
+    #[serde(default)]
+    pub gnome_tweaks: bool,
+    #[serde(default)]
+    pub dconf: bool,
+    #[serde(default)]
+    pub docker: bool,
+    #[serde(default)]
+    pub libvirtd: bool,
+    #[serde(default)]
+    pub postgresql: bool,
+    #[serde(default)]
+    pub redis: bool,
+    #[serde(default)]
+    pub earlyoom: bool,
+    #[serde(default)]
+    pub auto_upgrade: bool,
+    #[serde(default)]
+    pub auto_gc: bool,
+    #[serde(default)]
+    pub store_optimize: bool,
+}
+
+impl ServicesConfig {
+    /// Get list of enabled service IDs
+    pub fn enabled_services(&self) -> Vec<&'static str> {
+        let mut services = Vec::new();
+        if self.printing { services.push("printing"); }
+        if self.avahi { services.push("avahi"); }
+        if self.fwupd { services.push("fwupd"); }
+        if self.upower { services.push("upower"); }
+        if self.networkmanager { services.push("networkmanager"); }
+        if self.resolved { services.push("resolved"); }
+        if self.rustdesk { services.push("rustdesk"); }
+        if self.syncthing { services.push("syncthing"); }
+        if self.locate { services.push("locate"); }
+        if self.flatpak { services.push("flatpak"); }
+        if self.gnome_keyring { services.push("gnome_keyring"); }
+        if self.gnome_tweaks { services.push("gnome_tweaks"); }
+        if self.dconf { services.push("dconf"); }
+        if self.docker { services.push("docker"); }
+        if self.libvirtd { services.push("libvirtd"); }
+        if self.postgresql { services.push("postgresql"); }
+        if self.redis { services.push("redis"); }
+        if self.earlyoom { services.push("earlyoom"); }
+        if self.auto_upgrade { services.push("auto_upgrade"); }
+        if self.auto_gc { services.push("auto_gc"); }
+        if self.store_optimize { services.push("store_optimize"); }
+        services
+    }
+
+    /// Check if any services are enabled
+    pub fn has_settings(&self) -> bool {
+        !self.enabled_services().is_empty()
+    }
+}
+
 /// Persisted application state
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppState {
@@ -211,8 +359,17 @@ pub struct AppState {
     pub user_groups: Vec<String>,
     /// Username for group membership
     pub username: Option<String>,
+    /// Bluetooth enabled
+    #[serde(default)]
+    pub bluetooth_enabled: bool,
     /// Last successful apply timestamp
     pub last_applied: Option<String>,
     /// Custom packages manually added by user (e.g., ["zed-editor", "htop"])
     pub custom_packages: Vec<String>,
+    /// Network configuration (firewall, SSH, VPN)
+    #[serde(default)]
+    pub network_config: NetworkConfig,
+    /// Services configuration
+    #[serde(default)]
+    pub services_config: ServicesConfig,
 }

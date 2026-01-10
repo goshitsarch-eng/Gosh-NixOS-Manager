@@ -243,8 +243,13 @@ impl ApplyPage {
                 bundles: enabled_bundles,
                 bundle_packages,
                 hostname: state.hostname.as_deref(),
+                dns_servers: state.dns_servers.clone(),
+                user_groups: state.user_groups.iter().cloned().collect(),
+                username: state.username.as_deref(),
+                bluetooth_enabled: state.bluetooth_enabled,
                 custom_packages: state.custom_packages.iter().cloned().collect(),
-                ..Default::default()
+                network_config: state.network_config.clone(),
+                services_config: state.services_config.clone(),
             };
 
             // Generate preview
@@ -357,7 +362,7 @@ impl ApplyPage {
         }
 
         // Get current state from main window
-        let (selected_profile, enabled_bundles, bundle_packages, hostname, custom_packages) = if let Some(window) = self
+        let (selected_profile, enabled_bundles, bundle_packages, hostname, dns_servers, user_groups, username, bluetooth_enabled, custom_packages, network_config, services_config) = if let Some(window) = self
             .root()
             .and_then(|r| r.downcast::<crate::window::MainWindow>().ok())
         {
@@ -371,7 +376,13 @@ impl ApplyPage {
                     .map(|(k, v)| (k.clone(), v.iter().cloned().collect::<Vec<_>>()))
                     .collect::<std::collections::HashMap<_, _>>(),
                 state.hostname.clone(),
+                state.dns_servers.clone(),
+                state.user_groups.iter().cloned().collect::<Vec<_>>(),
+                state.username.clone(),
+                state.bluetooth_enabled,
                 state.custom_packages.iter().cloned().collect::<Vec<_>>(),
+                state.network_config.clone(),
+                state.services_config.clone(),
             )
         } else {
             self.append_log("Error: Could not get application state\n");
@@ -388,9 +399,26 @@ impl ApplyPage {
             self.append_log(&format!("Custom packages: {:?}\n", custom_packages));
         }
         self.append_log(&format!(
-            "Hostname: {}\n\n",
+            "Hostname: {}\n",
             hostname.as_deref().unwrap_or("(unchanged)")
         ));
+        if !dns_servers.is_empty() {
+            self.append_log(&format!("DNS servers: {:?}\n", dns_servers));
+        }
+        if !user_groups.is_empty() {
+            self.append_log(&format!("User groups: {:?}\n", user_groups));
+        }
+        if bluetooth_enabled {
+            self.append_log("Bluetooth: Enabled\n");
+        }
+        if network_config.has_settings() {
+            self.append_log(&format!("Network: SSH={}, Tailscale={}, TCP ports={:?}\n",
+                network_config.ssh_enabled, network_config.tailscale_enabled, network_config.allowed_tcp_ports));
+        }
+        if services_config.has_settings() {
+            self.append_log(&format!("Services: {:?}\n", services_config.enabled_services()));
+        }
+        self.append_log("\n");
 
         // Spawn helper with pkexec
         let helper_path = std::env::var("NIXOS_TOOLKIT_HELPER")
@@ -444,7 +472,13 @@ impl ApplyPage {
                     enabled_bundles,
                     bundle_packages,
                     hostname,
+                    dns_servers,
+                    user_groups,
+                    username,
+                    bluetooth_enabled,
                     custom_packages,
+                    network_config,
+                    services_config,
                     rebuild_type: RebuildType::Switch,
                 };
 

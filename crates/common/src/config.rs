@@ -102,6 +102,15 @@ pub mod paths {
     /// Custom packages snippet file
     pub const CUSTOM_PACKAGES_NIX: &str = "/etc/nixos/nixos-toolkit/state/custom-packages.nix";
 
+    /// Hardware configuration snippet file (Bluetooth, GPU, etc.)
+    pub const HARDWARE_NIX: &str = "/etc/nixos/nixos-toolkit/state/hardware.nix";
+
+    /// Network configuration snippet file (firewall, SSH, VPN)
+    pub const NETWORK_NIX: &str = "/etc/nixos/nixos-toolkit/state/network.nix";
+
+    /// Services configuration snippet file
+    pub const SERVICES_NIX: &str = "/etc/nixos/nixos-toolkit/state/services.nix";
+
     /// Get the managed directory path
     pub fn managed_dir() -> PathBuf {
         PathBuf::from(MANAGED_DIR)

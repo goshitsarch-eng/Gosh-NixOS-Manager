@@ -2,6 +2,7 @@
 
 use crate::actions::{BundleDef, ProfileDef};
 use crate::config::paths;
+use crate::ipc::{NetworkConfig, ServicesConfig};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -42,7 +43,10 @@ pub struct NixGenOptions<'a> {
     pub dns_servers: Vec<String>,
     pub user_groups: Vec<String>,
     pub username: Option<&'a str>,
+    pub bluetooth_enabled: bool,
     pub custom_packages: Vec<String>,
+    pub network_config: NetworkConfig,
+    pub services_config: ServicesConfig,
 }
 
 impl<'a> NixGenOptions<'a> {
@@ -92,6 +96,21 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
         imports.push("    ./custom-packages.nix".to_string());
     }
 
+    // Add hardware config if Bluetooth is enabled
+    if options.bluetooth_enabled {
+        imports.push("    ./hardware.nix".to_string());
+    }
+
+    // Add network config if network settings are configured
+    if options.network_config.has_settings() {
+        imports.push("    ./network.nix".to_string());
+    }
+
+    // Add services config if services are configured
+    if options.services_config.has_settings() {
+        imports.push("    ./services.nix".to_string());
+    }
+
     // Build the imports section
     let imports_str = if imports.is_empty() {
         "    # No profiles or bundles selected".to_string()
@@ -110,7 +129,10 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
 # Enabled bundles: {}
 # DNS servers: {}
 # User groups: {}
+# Bluetooth: {}
 # Custom packages: {}
+# Network: {}
+# Services: {}
 
 {{ config, lib, pkgs, ... }}:
 
@@ -140,10 +162,17 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
         } else {
             options.user_groups.join(", ")
         },
+        if options.bluetooth_enabled { "Enabled" } else { "Disabled" },
         if options.custom_packages.is_empty() {
             "None".to_string()
         } else {
             options.custom_packages.join(", ")
+        },
+        if options.network_config.has_settings() { "Configured" } else { "Default" },
+        if options.services_config.has_settings() {
+            options.services_config.enabled_services().join(", ")
+        } else {
+            "None".to_string()
         },
         imports_str,
     )
@@ -566,6 +595,81 @@ pub fn generate_preview_full(options: &NixGenOptions) -> String {
     if !options.custom_packages.is_empty() {
         preview.push_str(&format!("\n--- {} ---\n", paths::CUSTOM_PACKAGES_NIX));
         preview.push_str(&generate_custom_packages_nix(&options.custom_packages));
+    }
+
+    // hardware.nix if Bluetooth enabled
+    if options.bluetooth_enabled {
+        preview.push_str(&format!("\n--- {} ---\n", paths::HARDWARE_NIX));
+        preview.push_str(&generate_hardware_nix(
+            false, // nvidia_enabled - not implemented yet
+            false, // nvidia_open
+            false, // audio_pipewire
+            true,  // bluetooth_enabled
+            false, // tlp_enabled
+            false, // thermald_enabled
+        ));
+    }
+
+    // network.nix if network settings are configured
+    if options.network_config.has_settings() {
+        preview.push_str(&format!("\n--- {} ---\n", paths::NETWORK_NIX));
+        let mut network_preview = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
+
+        // Show firewall settings
+        let firewall = generate_firewall_nix(
+            options.network_config.firewall_enabled,
+            &options.network_config.allowed_tcp_ports,
+            &options.network_config.allowed_udp_ports,
+        );
+        for line in firewall.lines() {
+            if line.trim().starts_with("networking.firewall") {
+                network_preview.push_str("  ");
+                network_preview.push_str(line.trim());
+                network_preview.push('\n');
+            }
+        }
+
+        // Show SSH settings
+        if options.network_config.ssh_enabled {
+            let ssh = generate_ssh_nix(
+                options.network_config.ssh_enabled,
+                options.network_config.ssh_port,
+                options.network_config.ssh_password_auth,
+                &options.network_config.ssh_root_login,
+                options.network_config.fail2ban_enabled,
+            );
+            let mut in_services = false;
+            for line in ssh.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("services.openssh") || trimmed.starts_with("services.fail2ban") {
+                    in_services = true;
+                }
+                if in_services {
+                    network_preview.push_str("  ");
+                    network_preview.push_str(trimmed);
+                    network_preview.push('\n');
+                    if trimmed == "};" {
+                        in_services = false;
+                    }
+                }
+            }
+        }
+
+        // Show Tailscale
+        if options.network_config.tailscale_enabled {
+            network_preview.push_str("\n  # Tailscale VPN\n");
+            network_preview.push_str("  services.tailscale.enable = true;\n");
+        }
+
+        network_preview.push_str("}\n");
+        preview.push_str(&network_preview);
+    }
+
+    // services.nix if services are configured
+    if options.services_config.has_settings() {
+        preview.push_str(&format!("\n--- {} ---\n", paths::SERVICES_NIX));
+        let enabled_services: Vec<&str> = options.services_config.enabled_services();
+        preview.push_str(&generate_services_nix(&enabled_services));
     }
 
     // Profile template (if selected and exists)

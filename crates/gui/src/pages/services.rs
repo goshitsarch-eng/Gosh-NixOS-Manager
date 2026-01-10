@@ -2,6 +2,7 @@
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
+use common::ipc::ServicesConfig;
 use gtk::glib;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -429,6 +430,34 @@ impl ServicesPage {
             store_optimize: switches.get("store_optimize").map(|s| s.is_active()).unwrap_or(false),
         }
     }
+
+    /// Set services configuration from loaded state
+    pub fn set_services_config(&self, config: &ServicesConfig) {
+        let imp = self.imp();
+        let switches = imp.service_switches.borrow();
+
+        if let Some(s) = switches.get("printing") { s.set_active(config.printing); }
+        if let Some(s) = switches.get("avahi") { s.set_active(config.avahi); }
+        if let Some(s) = switches.get("fwupd") { s.set_active(config.fwupd); }
+        if let Some(s) = switches.get("upower") { s.set_active(config.upower); }
+        if let Some(s) = switches.get("networkmanager") { s.set_active(config.networkmanager); }
+        if let Some(s) = switches.get("resolved") { s.set_active(config.resolved); }
+        if let Some(s) = switches.get("rustdesk") { s.set_active(config.rustdesk); }
+        if let Some(s) = switches.get("syncthing") { s.set_active(config.syncthing); }
+        if let Some(s) = switches.get("locate") { s.set_active(config.locate); }
+        if let Some(s) = switches.get("flatpak") { s.set_active(config.flatpak); }
+        if let Some(s) = switches.get("gnome_keyring") { s.set_active(config.gnome_keyring); }
+        if let Some(s) = switches.get("gnome_tweaks") { s.set_active(config.gnome_tweaks); }
+        if let Some(s) = switches.get("dconf") { s.set_active(config.dconf); }
+        if let Some(s) = switches.get("docker") { s.set_active(config.docker); }
+        if let Some(s) = switches.get("libvirtd") { s.set_active(config.libvirtd); }
+        if let Some(s) = switches.get("postgresql") { s.set_active(config.postgresql); }
+        if let Some(s) = switches.get("redis") { s.set_active(config.redis); }
+        if let Some(s) = switches.get("earlyoom") { s.set_active(config.earlyoom); }
+        if let Some(s) = switches.get("auto_upgrade") { s.set_active(config.auto_upgrade); }
+        if let Some(s) = switches.get("auto_gc") { s.set_active(config.auto_gc); }
+        if let Some(s) = switches.get("store_optimize") { s.set_active(config.store_optimize); }
+    }
 }
 
 impl Default for ServicesPage {
@@ -444,30 +473,4 @@ struct ServiceDef {
     description: &'static str,
     icon: &'static str,
     nix_option: &'static str,
-}
-
-/// Services configuration state
-#[derive(Debug, Clone, Default)]
-pub struct ServicesConfig {
-    pub printing: bool,
-    pub avahi: bool,
-    pub fwupd: bool,
-    pub upower: bool,
-    pub networkmanager: bool,
-    pub resolved: bool,
-    pub rustdesk: bool,
-    pub syncthing: bool,
-    pub locate: bool,
-    pub flatpak: bool,
-    pub gnome_keyring: bool,
-    pub gnome_tweaks: bool,
-    pub dconf: bool,
-    pub docker: bool,
-    pub libvirtd: bool,
-    pub postgresql: bool,
-    pub redis: bool,
-    pub earlyoom: bool,
-    pub auto_upgrade: bool,
-    pub auto_gc: bool,
-    pub store_optimize: bool,
 }

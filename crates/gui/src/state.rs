@@ -1,6 +1,6 @@
 //! Application state management
 
-use common::ipc::AppState as IpcAppState;
+use common::ipc::{AppState as IpcAppState, NetworkConfig, ServicesConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -21,8 +21,14 @@ pub struct AppState {
     pub user_groups: HashSet<String>,
     /// Username for group membership
     pub username: Option<String>,
+    /// Bluetooth enabled
+    pub bluetooth_enabled: bool,
     /// Custom packages manually added by user (e.g., ["zed-editor", "htop"])
     pub custom_packages: HashSet<String>,
+    /// Network configuration (firewall, SSH, VPN)
+    pub network_config: NetworkConfig,
+    /// Services configuration
+    pub services_config: ServicesConfig,
     /// Whether there are unsaved changes
     pub has_changes: bool,
 }
@@ -162,6 +168,12 @@ impl AppState {
         self.has_changes = true;
     }
 
+    /// Set Bluetooth enabled state
+    pub fn set_bluetooth_enabled(&mut self, enabled: bool) {
+        self.bluetooth_enabled = enabled;
+        self.has_changes = true;
+    }
+
     /// Add a custom package
     pub fn add_custom_package(&mut self, package: impl Into<String>) {
         let pkg = package.into();
@@ -187,6 +199,18 @@ impl AppState {
         self.has_changes = false;
     }
 
+    /// Set network configuration
+    pub fn set_network_config(&mut self, config: NetworkConfig) {
+        self.network_config = config;
+        self.has_changes = true;
+    }
+
+    /// Set services configuration
+    pub fn set_services_config(&mut self, config: ServicesConfig) {
+        self.services_config = config;
+        self.has_changes = true;
+    }
+
     /// Convert to IPC state format
     pub fn to_ipc_state(&self) -> IpcAppState {
         IpcAppState {
@@ -201,8 +225,11 @@ impl AppState {
             dns_servers: self.dns_servers.clone(),
             user_groups: self.user_groups.iter().cloned().collect(),
             username: self.username.clone(),
+            bluetooth_enabled: self.bluetooth_enabled,
             last_applied: None,
             custom_packages: self.custom_packages.iter().cloned().collect(),
+            network_config: self.network_config.clone(),
+            services_config: self.services_config.clone(),
         }
     }
 
@@ -220,7 +247,10 @@ impl AppState {
             dns_servers: ipc.dns_servers,
             user_groups: ipc.user_groups.into_iter().collect(),
             username: ipc.username,
+            bluetooth_enabled: ipc.bluetooth_enabled,
             custom_packages: ipc.custom_packages.into_iter().collect(),
+            network_config: ipc.network_config,
+            services_config: ipc.services_config,
             has_changes: false,
         }
     }
@@ -255,9 +285,34 @@ impl AppState {
             }
         }
 
+        if self.bluetooth_enabled {
+            parts.push("Bluetooth: Enabled".to_string());
+        }
+
         if !self.custom_packages.is_empty() {
             let packages: Vec<_> = self.custom_packages.iter().cloned().collect();
             parts.push(format!("Custom packages: {}", packages.join(", ")));
+        }
+
+        if self.network_config.has_settings() {
+            let mut net_parts = Vec::new();
+            if self.network_config.ssh_enabled {
+                net_parts.push(format!("SSH on port {}", self.network_config.ssh_port));
+            }
+            if self.network_config.tailscale_enabled {
+                net_parts.push("Tailscale".to_string());
+            }
+            if !self.network_config.allowed_tcp_ports.is_empty() {
+                net_parts.push(format!("TCP ports: {:?}", self.network_config.allowed_tcp_ports));
+            }
+            if !net_parts.is_empty() {
+                parts.push(format!("Network: {}", net_parts.join(", ")));
+            }
+        }
+
+        if self.services_config.has_settings() {
+            let services = self.services_config.enabled_services();
+            parts.push(format!("Services: {}", services.join(", ")));
         }
 
         if parts.is_empty() {
