@@ -16,7 +16,7 @@
     ungoogled-chromium
 
     # Privacy-focused
-    tor-browser
+    tor-browser-bundle-bin
 
     # Minimal/alternative
     qutebrowser

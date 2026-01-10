@@ -9,7 +9,7 @@
   environment.systemPackages = with pkgs; [
     # Office suite
     libreoffice-fresh
-    onlyoffice-bin     # Alternative office suite
+    onlyoffice-desktopeditors  # Alternative office suite
 
     # PDF
     evince             # PDF viewer
