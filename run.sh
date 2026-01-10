@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # NixOS Toolkit Installer v2
-# https://github.com/devjonesafrica/NixOSApp
+# https://github.com/goshitsarch-eng/Gosh-NixOS-Manager
 
 set -e
 
-REPO="github:devjonesafrica/NixOSApp"
+REPO="github:goshitsarch-eng/Gosh-NixOS-Manager"
 ALIAS_NAME="nixos-toolkit"
 
 printf "===================================\n"

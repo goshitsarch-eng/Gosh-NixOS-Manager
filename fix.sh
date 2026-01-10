@@ -2,7 +2,7 @@
 # NixOS Toolkit Quick Installer
 set -e
 
-REPO="github:devjonesafrica/NixOSApp"
+REPO="github:goshitsarch-eng/Gosh-NixOS-Manager"
 
 echo "==================================="
 echo "  NixOS Toolkit Installer"

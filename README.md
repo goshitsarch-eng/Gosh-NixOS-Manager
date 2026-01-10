@@ -4,7 +4,7 @@ A GTK4/libadwaita GUI application for declarative NixOS system management.
 
 ## Quick Start
 
-1. **Install**: `nix run github:Goshitsarch/NixOSApp`
+1. **Install**: `nix run github:goshitsarch-eng/Gosh-NixOS-Manager`
 2. **Setup**: Create the toolkit directory and placeholder file ([see One-Time Setup](#one-time-setup))
 3. **Integrate**: Add the import to your `configuration.nix`
 4. **Rebuild**: `sudo nixos-rebuild switch`
@@ -151,7 +151,7 @@ Toggle 19 common NixOS services:
 Run the installer script to set up aliases and desktop entry:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Goshitsarch/Gosh-NixOS-Manager/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/goshitsarch-eng/Gosh-NixOS-Manager/main/install.sh | bash
 ```
 
 This will:
@@ -164,13 +164,13 @@ This will:
 If you have flakes enabled:
 
 ```bash
-nix run github:Goshitsarch/NixOSApp
+nix run github:goshitsarch-eng/Gosh-NixOS-Manager
 ```
 
 If flakes are NOT enabled (longer command):
 
 ```bash
-nix --extra-experimental-features 'nix-command flakes' run github:Goshitsarch/Gosh-NixOS-Manager --no-write-lock-file
+nix --extra-experimental-features 'nix-command flakes' run github:goshitsarch-eng/Gosh-NixOS-Manager --no-write-lock-file
 ```
 
 ### Enable Flakes (Recommended)
@@ -186,14 +186,14 @@ Then run `sudo nixos-rebuild switch` and you can use the shorter commands.
 ### Install to Profile
 
 ```bash
-nix profile install github:Goshitsarch/NixOSApp
+nix profile install github:goshitsarch-eng/Gosh-NixOS-Manager
 ```
 
 ### Add to your NixOS configuration
 
 ```nix
 # In your flake.nix inputs:
-inputs.nixos-toolkit.url = "github:Goshitsarch/NixOSApp";
+inputs.nixos-toolkit.url = "github:goshitsarch-eng/Gosh-NixOS-Manager";
 
 # In your nixosConfigurations:
 modules = [

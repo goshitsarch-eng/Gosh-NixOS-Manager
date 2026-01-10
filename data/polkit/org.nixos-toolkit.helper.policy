@@ -4,7 +4,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
   <vendor>NixOS Toolkit</vendor>
-  <vendor_url>https://github.com/devjonesafrica/NixOSApp</vendor_url>
+  <vendor_url>https://github.com/goshitsarch-eng/Gosh-NixOS-Manager</vendor_url>
   <icon_name>nixos-toolkit</icon_name>
 
   <action id="org.nixos-toolkit.helper.manage-system">

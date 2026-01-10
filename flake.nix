@@ -123,7 +123,7 @@
 
           meta = with pkgs.lib; {
             description = "NixOS Toolkit - Declarative system management GUI";
-            homepage = "https://github.com/devjonesafrica/NixOSApp";
+            homepage = "https://github.com/goshitsarch-eng/Gosh-NixOS-Manager";
             license = licenses.gpl3Plus;
             mainProgram = "nixos-toolkit";
             platforms = platforms.linux;
