@@ -419,6 +419,51 @@ impl SystemPage {
             .map(|s| s.is_active())
             .unwrap_or(false)
     }
+
+    /// Sync UI from loaded state
+    pub fn sync_from_state(
+        &self,
+        hostname: Option<&str>,
+        dns_servers: &[String],
+        username: Option<&str>,
+        user_groups: &std::collections::HashSet<String>,
+    ) {
+        let imp = self.imp();
+
+        // Restore hostname
+        if let Some(h) = hostname {
+            if let Some(entry) = imp.hostname_entry.borrow().as_ref() {
+                entry.set_text(h);
+            }
+        }
+
+        // Restore DNS servers
+        if !dns_servers.is_empty() {
+            if let Some(entry) = imp.dns_entry.borrow().as_ref() {
+                entry.set_text(&dns_servers.join(", "));
+            }
+        }
+
+        // Restore username
+        if let Some(u) = username {
+            if let Some(entry) = imp.username_entry.borrow().as_ref() {
+                entry.set_text(u);
+            }
+        }
+
+        // Restore user group switches
+        for (group, switch) in imp.group_switches.borrow().iter() {
+            switch.set_active(user_groups.contains(group));
+        }
+
+        tracing::info!(
+            "SystemPage synced from state: hostname={:?}, dns={:?}, username={:?}, groups={:?}",
+            hostname,
+            dns_servers,
+            username,
+            user_groups
+        );
+    }
 }
 
 impl Default for SystemPage {

@@ -350,6 +350,14 @@ impl HardwarePage {
             thermald_enabled: imp.thermald_enabled.borrow().as_ref().map(|s| s.is_active()).unwrap_or(false),
         }
     }
+
+    /// Set Bluetooth enabled state from loaded state
+    pub fn set_bluetooth_enabled(&self, enabled: bool) {
+        if let Some(switch) = self.imp().bluetooth_enabled.borrow().as_ref() {
+            switch.set_active(enabled);
+        }
+        tracing::info!("HardwarePage synced bluetooth_enabled={}", enabled);
+    }
 }
 
 impl Default for HardwarePage {

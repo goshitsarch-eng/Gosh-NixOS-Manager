@@ -420,5 +420,28 @@ impl MainWindow {
         {
             services_page.set_services_config(&state.services_config);
         }
+
+        // Sync SystemPage (hostname, DNS, user groups)
+        if let Some(system_page) = imp
+            .content_stack
+            .child_by_name("system")
+            .and_then(|w| w.downcast::<SystemPage>().ok())
+        {
+            system_page.sync_from_state(
+                state.hostname.as_deref(),
+                &state.dns_servers,
+                state.username.as_deref(),
+                &state.user_groups,
+            );
+        }
+
+        // Sync HardwarePage (Bluetooth)
+        if let Some(hardware_page) = imp
+            .content_stack
+            .child_by_name("hardware")
+            .and_then(|w| w.downcast::<HardwarePage>().ok())
+        {
+            hardware_page.set_bluetooth_enabled(state.bluetooth_enabled);
+        }
     }
 }

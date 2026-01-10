@@ -369,6 +369,17 @@ impl NetworkPage {
         *imp.allowed_tcp_ports.borrow_mut() = config.allowed_tcp_ports.clone();
         *imp.allowed_udp_ports.borrow_mut() = config.allowed_udp_ports.clone();
 
+        // Update entry field with custom ports (excluding preset ports)
+        let preset_ports: [u16; 4] = [22, 80, 443, 8080];
+        let custom_ports: Vec<String> = config.allowed_tcp_ports
+            .iter()
+            .filter(|p| !preset_ports.contains(p))
+            .map(|p| p.to_string())
+            .collect();
+        if let Some(entry) = imp.open_ports_entry.borrow().as_ref() {
+            entry.set_text(&custom_ports.join(", "));
+        }
+
         // SSH
         if let Some(switch) = imp.ssh_enabled.borrow().as_ref() {
             switch.set_active(config.ssh_enabled);
@@ -396,6 +407,14 @@ impl NetworkPage {
         if let Some(switch) = imp.tailscale_enabled.borrow().as_ref() {
             switch.set_active(config.tailscale_enabled);
         }
+
+        tracing::info!(
+            "NetworkPage synced: firewall={}, tcp_ports={:?}, ssh={}, tailscale={}",
+            config.firewall_enabled,
+            config.allowed_tcp_ports,
+            config.ssh_enabled,
+            config.tailscale_enabled
+        );
     }
 }
 
