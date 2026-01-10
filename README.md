@@ -1,5 +1,4 @@
-# NixOS Toolkit
-
+# Gosh - NixOS - Manager 
 A GTK4/libadwaita GUI application for declarative NixOS system management.
 
 ## Quick Start
