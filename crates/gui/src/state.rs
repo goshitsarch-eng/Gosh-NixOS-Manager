@@ -1,6 +1,6 @@
 //! Application state management
 
-use common::ipc::{AppState as IpcAppState, NetworkConfig, ServicesConfig};
+use common::ipc::{AppState as IpcAppState, HardwareConfig, NetworkConfig, ServicesConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -29,6 +29,8 @@ pub struct AppState {
     pub network_config: NetworkConfig,
     /// Services configuration
     pub services_config: ServicesConfig,
+    /// Hardware configuration (GPU, audio, bluetooth, power)
+    pub hardware_config: HardwareConfig,
     /// Whether there are unsaved changes
     pub has_changes: bool,
 }
@@ -211,6 +213,12 @@ impl AppState {
         self.has_changes = true;
     }
 
+    /// Set hardware configuration
+    pub fn set_hardware_config(&mut self, config: HardwareConfig) {
+        self.hardware_config = config;
+        self.has_changes = true;
+    }
+
     /// Convert to IPC state format
     pub fn to_ipc_state(&self) -> IpcAppState {
         IpcAppState {
@@ -230,6 +238,7 @@ impl AppState {
             custom_packages: self.custom_packages.iter().cloned().collect(),
             network_config: self.network_config.clone(),
             services_config: self.services_config.clone(),
+            hardware_config: self.hardware_config.clone(),
         }
     }
 
@@ -251,6 +260,7 @@ impl AppState {
             custom_packages: ipc.custom_packages.into_iter().collect(),
             network_config: ipc.network_config,
             services_config: ipc.services_config,
+            hardware_config: ipc.hardware_config,
             has_changes: false,
         }
     }

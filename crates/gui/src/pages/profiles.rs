@@ -13,6 +13,7 @@ mod imp {
     pub struct ProfilesPage {
         pub selected_profile: RefCell<Option<String>>,
         pub profile_rows: RefCell<Vec<(String, adw::ActionRow)>>,
+        pub preview_view: RefCell<Option<gtk::TextView>>,
     }
 
     #[glib::object_subclass]
@@ -124,6 +125,7 @@ impl ProfilesPage {
         preview_view.add_css_class("card");
         preview_view.buffer().set_text("# Select a profile to see preview");
         preview_scroll.set_child(Some(&preview_view));
+        *imp.preview_view.borrow_mut() = Some(preview_view);
 
         preview_group.add(&preview_scroll);
         content.append(&preview_group);
@@ -175,6 +177,9 @@ impl ProfilesPage {
             }
         }
 
+        // Update preview with template content
+        self.update_preview(profile_id);
+
         // Update main window state
         if let Some(window) = self.root().and_then(|r| r.downcast::<crate::window::MainWindow>().ok()) {
             window.update_app_state(|state| {
@@ -183,6 +188,25 @@ impl ProfilesPage {
         }
 
         tracing::info!("Selected profile: {}", profile_id);
+    }
+
+    fn update_preview(&self, profile_id: &str) {
+        let imp = self.imp();
+        let profiles = default_profiles();
+
+        if let Some(profile) = profiles.iter().find(|p| p.id == profile_id) {
+            let preview_text = match common::nix::read_template(&profile.template) {
+                Ok(content) => content,
+                Err(_) => format!(
+                    "# Profile: {}\n# Template: {}\n# (Template file not found - will be available after installation)",
+                    profile.name, profile.template
+                ),
+            };
+
+            if let Some(ref view) = *imp.preview_view.borrow() {
+                view.buffer().set_text(&preview_text);
+            }
+        }
     }
 
     pub fn get_selected_profile(&self) -> Option<String> {
@@ -203,6 +227,9 @@ impl ProfilesPage {
                     check.set_active(id == profile_id);
                 }
             }
+
+            // Update preview with template content
+            self.update_preview(profile_id);
 
             tracing::info!("Restored selected profile: {}", profile_id);
         }

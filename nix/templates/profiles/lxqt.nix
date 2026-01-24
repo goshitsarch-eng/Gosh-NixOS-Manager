@@ -10,8 +10,12 @@
   # Enable X server
   services.xserver.enable = true;
 
+  # Disable other display managers
+  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.lightdm.enable = lib.mkForce false;
+
   # Enable SDDM display manager (Qt-based, matches LXQt)
-  services.displayManager.sddm.enable = true;
+  services.displayManager.sddm.enable = lib.mkForce true;
 
   # Enable LXQt desktop environment
   services.xserver.desktopManager.lxqt.enable = true;

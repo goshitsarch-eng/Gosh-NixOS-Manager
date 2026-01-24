@@ -9,7 +9,15 @@
 {
   # Enable Pantheon desktop environment (Wayland by default)
   services.xserver.enable = true;
-  services.xserver.displayManager.lightdm.enable = true;
+
+  # Disable other display managers
+  services.displayManager.gdm.enable = lib.mkForce false;
+  services.displayManager.sddm.enable = lib.mkForce false;
+
+  # Enable LightDM display manager
+  services.xserver.displayManager.lightdm.enable = lib.mkForce true;
+
+  # Enable Pantheon desktop
   services.xserver.desktopManager.pantheon.enable = true;
 
   # Pantheon-specific services

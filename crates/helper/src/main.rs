@@ -118,5 +118,6 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
         HelperRequest::RollbackGeneration { generation } => commands::rollback_generation(generation),
         HelperRequest::DeleteGenerations { generations } => commands::delete_generations(generations),
         HelperRequest::RunMaintenance { command } => commands::run_maintenance(command),
+        HelperRequest::GetDiskUsage => commands::get_disk_usage(),
     }
 }

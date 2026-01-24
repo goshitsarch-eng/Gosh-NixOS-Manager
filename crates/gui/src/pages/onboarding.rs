@@ -262,6 +262,11 @@ impl OnboardingPage {
             IntegrationStatus::Unknown => "Could not verify integration. Please check manually.",
         };
 
+        // Show toast notification to user
+        if let Some(window) = self.root().and_then(|r| r.downcast::<crate::window::MainWindow>().ok()) {
+            window.show_toast(message);
+        }
+
         tracing::info!("Integration check: {}", message);
     }
 }

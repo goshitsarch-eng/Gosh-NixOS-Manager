@@ -8,8 +8,13 @@
 { config, lib, pkgs, ... }:
 
 {
+  # Disable other display managers
+  services.displayManager.gdm.enable = lib.mkForce false;
+  services.displayManager.sddm.enable = lib.mkForce false;
+  services.xserver.displayManager.lightdm.enable = lib.mkForce false;
+
   # Enable COSMIC greeter (display manager)
-  services.displayManager.cosmic-greeter.enable = true;
+  services.displayManager.cosmic-greeter.enable = lib.mkForce true;
 
   # Enable COSMIC desktop environment
   services.desktopManager.cosmic.enable = true;

@@ -24,6 +24,7 @@ mod imp {
         pub sidebar_list: gtk::ListBox,
         pub content_stack: gtk::Stack,
         pub status_banner: adw::Banner,
+        pub toast_overlay: adw::ToastOverlay,
         pub app_state: RefCell<AppState>,
         pub system_info: RefCell<SystemInfo>,
     }
@@ -35,6 +36,7 @@ mod imp {
                 sidebar_list: gtk::ListBox::new(),
                 content_stack: gtk::Stack::new(),
                 status_banner: adw::Banner::new(""),
+                toast_overlay: adw::ToastOverlay::new(),
                 app_state: RefCell::new(AppState::default()),
                 system_info: RefCell::new(SystemInfo::default()),
             }
@@ -199,7 +201,9 @@ impl MainWindow {
         breakpoint.add_setter(&imp.split_view, "collapsed", Some(&true.to_value()));
         self.add_breakpoint(breakpoint);
 
-        self.set_content(Some(&imp.split_view));
+        // Wrap split view in toast overlay for toast notifications
+        imp.toast_overlay.set_child(Some(&imp.split_view));
+        self.set_content(Some(&imp.toast_overlay));
 
         // Select first row by default
         if let Some(first_row) = imp.sidebar_list.row_at_index(0) {
@@ -295,6 +299,15 @@ impl MainWindow {
             state.services_config = services_page.get_services_config();
         }
 
+        // Collect current hardware config from HardwarePage
+        if let Some(hardware_page) = imp
+            .content_stack
+            .child_by_name("hardware")
+            .and_then(|w| w.downcast::<HardwarePage>().ok())
+        {
+            state.hardware_config = hardware_page.get_hardware_config();
+        }
+
         state
     }
 
@@ -303,6 +316,13 @@ impl MainWindow {
         F: FnOnce(&mut AppState),
     {
         f(&mut self.imp().app_state.borrow_mut());
+    }
+
+    /// Show a toast notification
+    pub fn show_toast(&self, message: &str) {
+        let toast = adw::Toast::new(message);
+        toast.set_timeout(3);
+        self.imp().toast_overlay.add_toast(toast);
     }
 
     /// Load persisted state from the helper on startup
@@ -435,13 +455,13 @@ impl MainWindow {
             );
         }
 
-        // Sync HardwarePage (Bluetooth)
+        // Sync HardwarePage (full hardware config)
         if let Some(hardware_page) = imp
             .content_stack
             .child_by_name("hardware")
             .and_then(|w| w.downcast::<HardwarePage>().ok())
         {
-            hardware_page.set_bluetooth_enabled(state.bluetooth_enabled);
+            hardware_page.set_hardware_config(&state.hardware_config);
         }
     }
 }

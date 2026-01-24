@@ -2,6 +2,7 @@
 
 use crate::nix_gen;
 use crate::rebuild;
+use common::actions::{default_bundles, default_profiles};
 use common::config::{paths, ConfigMode, IntegrationStatus, SystemInfo};
 use common::ipc::{AppState, Generation, HelperResponse, LogLevel, NetworkConfig, RebuildType, ServicesConfig};
 use std::fs;
@@ -157,23 +158,18 @@ pub fn validate(
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
-    // Validate profile
+    // Validate profile using dynamic profile list
     if let Some(ref profile) = selected_profile {
-        let valid_profiles = [
-            "gnome", "kde", "xfce", "mate", "cinnamon", "pantheon", "cosmic",
-        ];
-        if !valid_profiles.contains(&profile.as_str()) {
+        let valid_profiles: Vec<String> = default_profiles().into_iter().map(|p| p.id).collect();
+        if !valid_profiles.contains(profile) {
             errors.push(format!("Unknown profile: {}", profile));
         }
     }
 
-    // Validate bundles
-    let valid_bundles = [
-        "devtools", "gaming", "virtualization", "virtualbox",
-        "containers", "flatpak", "multimedia", "office",
-    ];
+    // Validate bundles using dynamic bundle list
+    let valid_bundles: Vec<String> = default_bundles().into_iter().map(|b| b.id).collect();
     for bundle in &enabled_bundles {
-        if !valid_bundles.contains(&bundle.as_str()) {
+        if !valid_bundles.contains(bundle) {
             warnings.push(format!("Unknown bundle: {}", bundle));
         }
     }
@@ -258,7 +254,12 @@ pub fn apply(
     services_config: ServicesConfig,
     rebuild_type: RebuildType,
 ) -> HelperResponse {
-    // First generate files (not dry run)
+    // Ensure directories exist before generating files
+    if let HelperResponse::Error { message, details } = ensure_directories() {
+        return HelperResponse::Error { message, details };
+    }
+
+    // Generate files (not dry run)
     match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &dns_servers, &user_groups, username.as_deref(), bluetooth_enabled, &custom_packages, &network_config, &services_config, false)
     {
         Ok(files) => {
@@ -656,4 +657,57 @@ pub fn run_maintenance(command: String) -> HelperResponse {
             details: Some(e.to_string()),
         },
     }
+}
+
+/// Get disk usage information for Nix store and generations
+pub fn get_disk_usage() -> HelperResponse {
+    use std::process::Command;
+
+    let mut store_size = "Unknown".to_string();
+    let mut generation_count = 0u32;
+    let mut error = None;
+
+    // Get Nix store size using du
+    match Command::new("du").args(["-sh", "/nix/store"]).output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // du output format: "45G\t/nix/store"
+            if let Some(size) = stdout.split_whitespace().next() {
+                store_size = size.to_string();
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error = Some(format!("du failed: {}", stderr.trim()));
+        }
+        Err(e) => {
+            error = Some(format!("Failed to run du: {}", e));
+        }
+    }
+
+    // Count generations using nix-env
+    match Command::new("nix-env")
+        .args(["--list-generations", "-p", "/nix/var/nix/profiles/system"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            generation_count = stdout.lines().filter(|l| !l.trim().is_empty()).count() as u32;
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let err_msg = format!("nix-env failed: {}", stderr.trim());
+            error = error.map(|e| format!("{}; {}", e, err_msg)).or(Some(err_msg));
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to run nix-env: {}", e);
+            error = error.map(|e| format!("{}; {}", e, err_msg)).or(Some(err_msg));
+        }
+    }
+
+    HelperResponse::DiskUsage(common::ipc::DiskUsageInfo {
+        store_size,
+        generation_count,
+        error,
+    })
 }

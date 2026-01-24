@@ -20,8 +20,12 @@
     };
   };
 
+  # Disable other display managers
+  services.displayManager.gdm.enable = lib.mkForce false;
+  services.displayManager.sddm.enable = lib.mkForce false;
+
   # Display manager
-  services.displayManager.lightdm.enable = true;
+  services.xserver.displayManager.lightdm.enable = lib.mkForce true;
 
   # Essential packages for i3
   environment.systemPackages = with pkgs; [

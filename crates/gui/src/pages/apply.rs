@@ -19,6 +19,7 @@ mod imp {
         pub preview_view: RefCell<Option<gtk::TextView>>,
         pub log_view: RefCell<Option<gtk::TextView>>,
         pub apply_button: RefCell<Option<gtk::Button>>,
+        pub dry_run_button: RefCell<Option<gtk::Button>>,
         pub spinner: RefCell<Option<gtk::Spinner>>,
         pub status_label: RefCell<Option<gtk::Label>>,
         pub is_applying: RefCell<bool>,
@@ -155,6 +156,7 @@ impl ApplyPage {
         dry_run_button.connect_clicked(glib::clone!(@weak self as page => move |_| {
             page.do_dry_run();
         }));
+        *imp.dry_run_button.borrow_mut() = Some(dry_run_button.clone());
 
         // Spinner for progress indication
         let spinner = gtk::Spinner::builder()
@@ -331,19 +333,36 @@ impl ApplyPage {
     }
 
     fn do_apply(&self) {
+        self.do_rebuild(RebuildType::Switch);
+    }
+
+    fn do_rebuild(&self, rebuild_type: RebuildType) {
         let imp = self.imp();
+        let is_dry_run = matches!(rebuild_type, RebuildType::DryBuild);
 
         if *imp.is_applying.borrow() {
-            tracing::warn!("Already applying, ignoring request");
+            tracing::warn!("Already running, ignoring request");
             return;
         }
 
         *imp.is_applying.borrow_mut() = true;
 
-        // Disable apply button and show spinner
+        // Disable buttons and show spinner
         if let Some(ref button) = *imp.apply_button.borrow() {
             button.set_sensitive(false);
-            button.set_label("Applying...");
+        }
+        if let Some(ref button) = *imp.dry_run_button.borrow() {
+            button.set_sensitive(false);
+        }
+
+        let (button_label, status_text, log_start) = if is_dry_run {
+            ("Building...", "Validating configuration...", "Starting nixos-rebuild dry-build...\n\n")
+        } else {
+            ("Applying...", "Building configuration...", "Starting nixos-rebuild switch...\n\n")
+        };
+
+        if let Some(ref button) = *imp.apply_button.borrow() {
+            button.set_label(button_label);
         }
 
         // Show spinner and status
@@ -353,12 +372,12 @@ impl ApplyPage {
         }
         if let Some(ref label) = *imp.status_label.borrow() {
             label.set_visible(true);
-            label.set_label("Building configuration...");
+            label.set_label(status_text);
         }
 
         // Clear log
         if let Some(ref view) = *imp.log_view.borrow() {
-            view.buffer().set_text("Starting nixos-rebuild switch...\n\n");
+            view.buffer().set_text(log_start);
         }
 
         // Get current state from main window
@@ -466,7 +485,8 @@ impl ApplyPage {
                 }
 
                 // Send Apply request
-                self.append_log("Generating configuration and running nixos-rebuild switch...\n\n");
+                let rebuild_mode = if is_dry_run { "dry-build" } else { "switch" };
+                self.append_log(&format!("Generating configuration and running nixos-rebuild {}...\n\n", rebuild_mode));
                 let request = HelperRequest::Apply {
                     selected_profile,
                     enabled_bundles,
@@ -479,7 +499,7 @@ impl ApplyPage {
                     custom_packages,
                     network_config,
                     services_config,
-                    rebuild_type: RebuildType::Switch,
+                    rebuild_type,
                 };
 
                 if let Err(e) = client.send(&request) {
@@ -491,6 +511,7 @@ impl ApplyPage {
                 // Poll for responses using glib timeout
                 let client = Rc::new(RefCell::new(Some(client)));
                 let page = self.downgrade();
+                let skip_state_save = is_dry_run;
 
                 glib::timeout_add_local(
                     std::time::Duration::from_millis(100),
@@ -513,8 +534,8 @@ impl ApplyPage {
                                 HelperResponse::ApplyComplete { success, message } => {
                                     page.append_log(&format!("\n{}\n", message));
 
-                                    // Save state using the same helper session if apply succeeded
-                                    if success {
+                                    // Save state using the same helper session if apply succeeded (skip for dry-run)
+                                    if success && !skip_state_save {
                                         if let Some(window) = page
                                             .root()
                                             .and_then(|r| r.downcast::<crate::window::MainWindow>().ok())
@@ -540,6 +561,8 @@ impl ApplyPage {
                                                 }
                                             }
                                         }
+                                    } else if success && skip_state_save {
+                                        page.append_log("Dry run completed - no changes applied.\n");
                                     }
 
                                     page.finish_apply(success);
@@ -578,10 +601,13 @@ impl ApplyPage {
         let imp = self.imp();
         *imp.is_applying.borrow_mut() = false;
 
-        // Re-enable button
+        // Re-enable buttons
         if let Some(ref button) = *imp.apply_button.borrow() {
             button.set_sensitive(true);
             button.set_label("Apply Changes");
+        }
+        if let Some(ref button) = *imp.dry_run_button.borrow() {
+            button.set_sensitive(true);
         }
 
         // Stop and hide spinner
@@ -652,10 +678,7 @@ impl ApplyPage {
     }
 
     fn do_dry_run(&self) {
-        self.append_log("\n--- Dry Run ---\n");
-        self.append_log("Would run: nixos-rebuild dry-build\n");
-        self.refresh_preview();
-        self.append_log("Preview updated. No changes applied.\n");
+        self.do_rebuild(RebuildType::DryBuild);
     }
 
     fn append_log(&self, text: &str) {

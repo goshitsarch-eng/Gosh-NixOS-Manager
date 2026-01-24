@@ -266,20 +266,6 @@ impl NetworkPage {
         tailscale_info.add_prefix(&gtk::Image::from_icon_name("dialog-information-symbolic"));
         vpn_group.add(&tailscale_info);
 
-        // Placeholder for WireGuard
-        let wireguard_row = adw::ActionRow::builder()
-            .title("WireGuard")
-            .subtitle("Native kernel VPN - configure manually in configuration.nix")
-            .build();
-        wireguard_row.add_prefix(&gtk::Image::from_icon_name("network-vpn-symbolic"));
-        let wg_status = gtk::Label::builder()
-            .label("Manual")
-            .css_classes(["dim-label", "caption"])
-            .valign(gtk::Align::Center)
-            .build();
-        wireguard_row.add_suffix(&wg_status);
-        vpn_group.add(&wireguard_row);
-
         content.append(&vpn_group);
 
         // Note about changes

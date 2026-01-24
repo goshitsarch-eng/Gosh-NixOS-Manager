@@ -10,8 +10,12 @@
   # Enable X server
   services.xserver.enable = true;
 
+  # Disable other display managers
+  services.displayManager.gdm.enable = lib.mkForce false;
+  services.displayManager.sddm.enable = lib.mkForce false;
+
   # Enable LightDM display manager
-  services.displayManager.lightdm.enable = true;
+  services.xserver.displayManager.lightdm.enable = lib.mkForce true;
 
   # Enable Enlightenment desktop
   services.xserver.desktopManager.enlightenment.enable = true;

@@ -72,6 +72,9 @@ pub enum HelperRequest {
 
     /// Run a maintenance command
     RunMaintenance { command: String },
+
+    /// Get disk usage information
+    GetDiskUsage,
 }
 
 /// Type of nixos-rebuild to run
@@ -158,6 +161,9 @@ pub enum HelperResponse {
 
     /// Maintenance command output
     MaintenanceOutput { stdout: String, stderr: String, success: bool },
+
+    /// Disk usage information
+    DiskUsage(DiskUsageInfo),
 }
 
 /// Information about a NixOS generation
@@ -175,6 +181,17 @@ pub struct Generation {
     pub kernel_version: Option<String>,
     /// Configuration revision (if using flakes)
     pub config_rev: Option<String>,
+}
+
+/// Disk usage information for Nix store
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskUsageInfo {
+    /// Size of /nix/store as a human-readable string (e.g., "45G")
+    pub store_size: String,
+    /// Number of system generations
+    pub generation_count: u32,
+    /// Any error message if partial data was retrieved
+    pub error: Option<String>,
 }
 
 /// A file that will be/was generated
@@ -340,6 +357,44 @@ impl ServicesConfig {
     }
 }
 
+/// Hardware configuration for GPU, audio, bluetooth, and power management
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HardwareConfig {
+    /// NVIDIA driver selection: 0=Stable, 1=Beta, 2=Open, 3=Nouveau, None=not NVIDIA
+    #[serde(default)]
+    pub nvidia_driver: Option<u8>,
+    /// Enable kernel modesetting for NVIDIA
+    #[serde(default)]
+    pub nvidia_modesetting: bool,
+    /// Enable NVIDIA power management
+    #[serde(default)]
+    pub nvidia_powermanagement: bool,
+    /// Use open-source NVIDIA kernel modules
+    #[serde(default)]
+    pub nvidia_open: bool,
+    /// Audio server: 0=PipeWire, 1=PulseAudio, 2=None
+    #[serde(default)]
+    pub audio_server: u8,
+    /// Enable low-latency audio settings
+    #[serde(default)]
+    pub audio_lowlatency: bool,
+    /// Enable Bluetooth hardware and services
+    #[serde(default)]
+    pub bluetooth_enabled: bool,
+    /// Automatically power on Bluetooth at boot
+    #[serde(default)]
+    pub bluetooth_autopower: bool,
+    /// Power profile: 0=Balanced, 1=Performance, 2=Power Saver
+    #[serde(default)]
+    pub power_profile: u8,
+    /// Enable TLP power management
+    #[serde(default)]
+    pub tlp_enabled: bool,
+    /// Enable Intel Thermald
+    #[serde(default)]
+    pub thermald_enabled: bool,
+}
+
 /// Persisted application state
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppState {
@@ -372,4 +427,7 @@ pub struct AppState {
     /// Services configuration
     #[serde(default)]
     pub services_config: ServicesConfig,
+    /// Hardware configuration (GPU, audio, bluetooth, power)
+    #[serde(default)]
+    pub hardware_config: HardwareConfig,
 }

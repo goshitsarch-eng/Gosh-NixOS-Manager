@@ -8,8 +8,12 @@
 { config, lib, pkgs, ... }:
 
 {
+  # Disable other display managers
+  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.lightdm.enable = lib.mkForce false;
+
   # Enable SDDM display manager with Wayland
-  services.displayManager.sddm.enable = true;
+  services.displayManager.sddm.enable = lib.mkForce true;
   services.displayManager.sddm.wayland.enable = true;
 
   # Enable KDE Plasma 6

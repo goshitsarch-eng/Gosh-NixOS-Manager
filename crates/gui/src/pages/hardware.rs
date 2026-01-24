@@ -2,6 +2,7 @@
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
+use common::ipc::HardwareConfig;
 use common::CpuArch;
 use gtk::glib;
 use std::cell::RefCell;
@@ -219,16 +220,6 @@ impl HardwarePage {
             .active(false)
             .build();
         bt_enabled.add_prefix(&gtk::Image::from_icon_name("bluetooth-symbolic"));
-
-        // Connect to main window state when Bluetooth is toggled
-        bt_enabled.connect_active_notify(glib::clone!(@weak self as page => move |switch| {
-            if let Some(window) = page.root().and_then(|r| r.downcast::<crate::window::MainWindow>().ok()) {
-                window.update_app_state(|state| {
-                    state.set_bluetooth_enabled(switch.is_active());
-                });
-            }
-        }));
-
         bluetooth_group.add(&bt_enabled);
         *imp.bluetooth_enabled.borrow_mut() = Some(bt_enabled);
 
@@ -351,12 +342,54 @@ impl HardwarePage {
         }
     }
 
-    /// Set Bluetooth enabled state from loaded state
-    pub fn set_bluetooth_enabled(&self, enabled: bool) {
-        if let Some(switch) = self.imp().bluetooth_enabled.borrow().as_ref() {
-            switch.set_active(enabled);
+    /// Set full hardware configuration from loaded state
+    pub fn set_hardware_config(&self, config: &HardwareConfig) {
+        let imp = self.imp();
+
+        // NVIDIA settings
+        if let Some(driver) = imp.nvidia_driver.borrow().as_ref() {
+            if let Some(idx) = config.nvidia_driver {
+                driver.set_selected(idx as u32);
+            }
         }
-        tracing::info!("HardwarePage synced bluetooth_enabled={}", enabled);
+        if let Some(switch) = imp.nvidia_modesetting.borrow().as_ref() {
+            switch.set_active(config.nvidia_modesetting);
+        }
+        if let Some(switch) = imp.nvidia_powermanagement.borrow().as_ref() {
+            switch.set_active(config.nvidia_powermanagement);
+        }
+        if let Some(switch) = imp.nvidia_open.borrow().as_ref() {
+            switch.set_active(config.nvidia_open);
+        }
+
+        // Audio settings
+        if let Some(combo) = imp.audio_server.borrow().as_ref() {
+            combo.set_selected(config.audio_server as u32);
+        }
+        if let Some(switch) = imp.audio_lowlatency.borrow().as_ref() {
+            switch.set_active(config.audio_lowlatency);
+        }
+
+        // Bluetooth settings
+        if let Some(switch) = imp.bluetooth_enabled.borrow().as_ref() {
+            switch.set_active(config.bluetooth_enabled);
+        }
+        if let Some(switch) = imp.bluetooth_autopower.borrow().as_ref() {
+            switch.set_active(config.bluetooth_autopower);
+        }
+
+        // Power settings
+        if let Some(combo) = imp.power_profile.borrow().as_ref() {
+            combo.set_selected(config.power_profile as u32);
+        }
+        if let Some(switch) = imp.tlp_enabled.borrow().as_ref() {
+            switch.set_active(config.tlp_enabled);
+        }
+        if let Some(switch) = imp.thermald_enabled.borrow().as_ref() {
+            switch.set_active(config.thermald_enabled);
+        }
+
+        tracing::info!("HardwarePage synced from state");
     }
 }
 
@@ -364,20 +397,4 @@ impl Default for HardwarePage {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Hardware configuration state
-#[derive(Debug, Clone, Default)]
-pub struct HardwareConfig {
-    pub nvidia_driver: Option<u8>,
-    pub nvidia_modesetting: bool,
-    pub nvidia_powermanagement: bool,
-    pub nvidia_open: bool,
-    pub audio_server: u8,
-    pub audio_lowlatency: bool,
-    pub bluetooth_enabled: bool,
-    pub bluetooth_autopower: bool,
-    pub power_profile: u8,
-    pub tlp_enabled: bool,
-    pub thermald_enabled: bool,
 }

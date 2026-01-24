@@ -269,12 +269,15 @@ impl GenerationsPage {
 
                             let current = current_gen == Some(number);
 
+                            // Get version metadata
+                            let (nixos_version, kernel_version) = get_generation_metadata(number);
+
                             generations.push(GenerationInfo {
                                 number,
                                 date,
                                 current,
-                                nixos_version: None,
-                                kernel_version: None,
+                                nixos_version,
+                                kernel_version,
                             });
                         }
                     }
@@ -361,9 +364,17 @@ impl GenerationsPage {
             format!("Generation {}", gen.number)
         };
 
+        // Build subtitle with version info
+        let subtitle = match (&gen.nixos_version, &gen.kernel_version) {
+            (Some(nix), Some(kern)) => format!("{} | NixOS {} | Kernel {}", gen.date, nix, kern),
+            (Some(nix), None) => format!("{} | NixOS {}", gen.date, nix),
+            (None, Some(kern)) => format!("{} | Kernel {}", gen.date, kern),
+            (None, None) => gen.date.clone(),
+        };
+
         let row = adw::ActionRow::builder()
             .title(&title)
-            .subtitle(&gen.date)
+            .subtitle(&subtitle)
             .build();
 
         // Add icon
@@ -470,27 +481,26 @@ impl GenerationsPage {
         let mode_for_check = mode.clone();
         glib::spawn_future_local(glib::clone!(@weak self as page => async move {
             let result = std::thread::spawn(move || {
-                // Build the profile path for the specific generation
-                let profile_path = format!("/nix/var/nix/profiles/system-{}-link", generation);
-
-                // Use pkexec for privilege elevation
-                let output = std::process::Command::new("pkexec")
-                    .args([&profile_path.replace("-link", ""), "/bin/switch-to-configuration", &mode])
+                // Step 1: Switch to the generation using nix-env
+                let switch_result = std::process::Command::new("pkexec")
+                    .args([
+                        "nix-env",
+                        "-p",
+                        "/nix/var/nix/profiles/system",
+                        "--switch-generation",
+                        &generation.to_string(),
+                    ])
                     .output();
 
-                // Alternative: use nix-env to switch profile then activate
-                if output.is_err() {
-                    std::process::Command::new("pkexec")
-                        .args(["nix-env", "-p", "/nix/var/nix/profiles/system", "--switch-generation", &generation.to_string()])
-                        .output()
-                        .ok();
-
-                    std::process::Command::new("pkexec")
-                        .args(["/nix/var/nix/profiles/system/bin/switch-to-configuration", &mode])
-                        .output()
-                }
-                else {
-                    output
+                match switch_result {
+                    Ok(output) if output.status.success() => {
+                        // Step 2: Activate the generation
+                        std::process::Command::new("pkexec")
+                            .args(["/nix/var/nix/profiles/system/bin/switch-to-configuration", &mode])
+                            .output()
+                    }
+                    Ok(output) => Ok(output), // Return the failed switch output
+                    Err(e) => Err(e),
                 }
             })
             .join()
@@ -602,4 +612,36 @@ struct GenerationInfo {
     current: bool,
     nixos_version: Option<String>,
     kernel_version: Option<String>,
+}
+
+/// Extract NixOS and kernel version from a generation
+fn get_generation_metadata(gen_number: u32) -> (Option<String>, Option<String>) {
+    let gen_path = format!("/nix/var/nix/profiles/system-{}-link", gen_number);
+
+    // Read NixOS version from nixos-version file
+    let nixos_version = std::fs::read_to_string(format!("{}/nixos-version", gen_path))
+        .ok()
+        .map(|s| s.trim().to_string());
+
+    // Get kernel version from kernel symlink
+    // Path looks like: /nix/store/xxx-linux-6.1.0/bzImage
+    let kernel_version = std::fs::read_link(format!("{}/kernel", gen_path))
+        .ok()
+        .and_then(|path| {
+            let path_str = path.to_string_lossy();
+            // Extract version from path like "...-linux-6.1.0/bzImage"
+            path_str
+                .split('/')
+                .find(|part| part.contains("-linux-"))
+                .and_then(|part| {
+                    // Find the linux version part
+                    if let Some(idx) = part.find("-linux-") {
+                        Some(part[idx + 7..].to_string())
+                    } else {
+                        None
+                    }
+                })
+        });
+
+    (nixos_version, kernel_version)
 }

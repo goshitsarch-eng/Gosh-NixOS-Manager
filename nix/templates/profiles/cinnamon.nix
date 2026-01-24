@@ -10,8 +10,12 @@
   # Enable X11 windowing system
   services.xserver.enable = true;
 
+  # Disable other display managers
+  services.displayManager.gdm.enable = lib.mkForce false;
+  services.displayManager.sddm.enable = lib.mkForce false;
+
   # Enable LightDM display manager
-  services.xserver.displayManager.lightdm.enable = true;
+  services.xserver.displayManager.lightdm.enable = lib.mkForce true;
 
   # Enable Cinnamon desktop environment
   services.xserver.desktopManager.cinnamon.enable = true;
