@@ -1,12 +1,11 @@
 //! Apply-empty classification and dialog copies.
 //!
 //! Exhaustive `Message` match lives in `crates/gui/src/core/apply.rs` and is not
-//! duplicated here. `AppModel::apply` is exercised in that module because
-//! `dialog` is `pub(crate)` and there is no display-free `AppModel::test_model()`.
+//! duplicated here. `AppModel::apply` is exercised in that module.
 //!
-//! Empty-apply is profile + bundles + custom packages, plus non-default
-//! hardware after C3/N5. Network/services still do not count. PackagesOnly vs
-//! Normal is not distinct.
+//! Empty-apply is true only when there is nothing to write: no profile, bundles,
+//! packages, hostname, DNS, user groups, network, services, or non-default
+//! hardware.
 
 use nixos_toolkit_gui::{AppState, Dialog, Flags};
 
@@ -24,11 +23,35 @@ fn empty_state_is_empty_apply() {
 }
 
 #[test]
-fn network_or_services_only_still_count_as_empty_apply() {
+fn network_or_services_only_is_not_empty_apply() {
+    let mut ssh = AppState::new();
+    ssh.network_config.ssh_enabled = true;
+    assert!(!ssh.apply_is_empty());
+
+    let mut printing = AppState::new();
+    printing.services_config.printing = true;
+    assert!(!printing.apply_is_empty());
+}
+
+#[test]
+fn hostname_only_is_not_empty_apply() {
     let mut state = AppState::new();
-    state.network_config.ssh_enabled = true;
-    state.services_config.printing = true;
-    assert!(state.apply_is_empty());
+    state.set_hostname("desk");
+    assert!(!state.apply_is_empty());
+}
+
+#[test]
+fn dns_only_is_not_empty_apply() {
+    let mut state = AppState::new();
+    state.set_dns_servers(vec!["1.1.1.1".into()]);
+    assert!(!state.apply_is_empty());
+}
+
+#[test]
+fn user_groups_only_is_not_empty_apply() {
+    let mut state = AppState::new();
+    state.add_user_group("wheel");
+    assert!(!state.apply_is_empty());
 }
 
 #[test]

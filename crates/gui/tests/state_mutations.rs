@@ -99,6 +99,31 @@ fn tcp_ports_split_parse_and_toggle() {
 }
 
 #[test]
+fn custom_udp_replace_keeps_presets_and_drops_prefixes() {
+    let mut state = AppState::new();
+    state.set_udp_port(53, true);
+    state.set_udp_port(443, true);
+    state
+        .parse_and_set_custom_udp_ports("9")
+        .expect("prefix port");
+    state
+        .parse_and_set_custom_udp_ports("90")
+        .expect("prefix port");
+    state
+        .parse_and_set_custom_udp_ports("9090")
+        .expect("custom port");
+    assert_eq!(state.network_config.allowed_udp_ports, vec![53, 443, 9090]);
+
+    state
+        .parse_and_set_custom_udp_ports("123, 9091")
+        .expect("preset in extras ignored");
+    assert_eq!(state.network_config.allowed_udp_ports, vec![53, 443, 9091]);
+
+    assert!(state.parse_and_set_custom_udp_ports("abc").is_err());
+    assert_eq!(state.network_config.allowed_udp_ports, vec![53, 443, 9091]);
+}
+
+#[test]
 fn custom_tcp_replace_keeps_presets_and_drops_prefixes() {
     let mut state = AppState::new();
     state.set_tcp_port(22, true);

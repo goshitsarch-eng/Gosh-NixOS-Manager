@@ -268,11 +268,11 @@ pub struct NetworkConfig {
     /// Enable Tailscale VPN
     #[serde(default)]
     pub tailscale_enabled: bool,
-    /// Enable WireGuard
+    /// Enable WireGuard (`networking.wireguard.enable`)
     #[serde(default)]
     pub wireguard_enabled: bool,
     /// WireGuard listen port (default 51820)
-    #[serde(default = "default_wireguard_port")]
+    #[serde(default = "default_wireguard_listen_port")]
     pub wireguard_listen_port: u16,
 }
 
@@ -288,7 +288,7 @@ fn default_root_login() -> String {
     "no".to_string()
 }
 
-fn default_wireguard_port() -> u16 {
+fn default_wireguard_listen_port() -> u16 {
     51820
 }
 
@@ -299,7 +299,7 @@ fn default_switch() -> String {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            firewall_enabled: default_true(),
+            firewall_enabled: true,
             allowed_tcp_ports: Vec::new(),
             allowed_udp_ports: Vec::new(),
             ssh_enabled: false,
@@ -309,7 +309,7 @@ impl Default for NetworkConfig {
             fail2ban_enabled: false,
             tailscale_enabled: false,
             wireguard_enabled: false,
-            wireguard_listen_port: default_wireguard_port(),
+            wireguard_listen_port: default_wireguard_listen_port(),
         }
     }
 }
@@ -649,6 +649,24 @@ mod tests {
             }
             other => panic!("expected Generate, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn network_config_default_has_no_settings() {
+        let net = NetworkConfig::default();
+        assert!(net.firewall_enabled);
+        assert!(!net.wireguard_enabled);
+        assert_eq!(net.wireguard_listen_port, 51820);
+        assert!(!net.has_settings());
+    }
+
+    #[test]
+    fn old_network_json_without_wireguard_deserializes() {
+        let net: NetworkConfig = serde_json::from_str(r#"{"firewall_enabled":true}"#)
+            .expect("legacy NetworkConfig JSON should deserialize");
+        assert!(!net.wireguard_enabled);
+        assert_eq!(net.wireguard_listen_port, 51820);
+        assert!(!net.has_settings());
     }
 
     #[test]

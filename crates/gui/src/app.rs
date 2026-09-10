@@ -10,7 +10,7 @@ use crate::message::{
 use crate::state::AppState;
 use common::actions::{default_bundles, default_profiles, CpuArch};
 use common::config::SystemInfo;
-use common::ipc::{DiskUsageInfo, Generation, HelperRequest};
+use common::ipc::{DiskUsageInfo, Generation, HelperRequest, RebuildType};
 use cosmic::app::{context_drawer, Core, Task};
 use cosmic::iced::event::{self, Event};
 use cosmic::iced::keyboard::{key::Named, Key};
@@ -132,6 +132,8 @@ pub struct AppModel {
     pub(crate) package_input: String,
     pub(crate) dns_input: String,
     pub(crate) custom_tcp_input: String,
+    pub(crate) custom_udp_input: String,
+    pub(crate) rebuild_type: RebuildType,
     pub(crate) profile_preview: String,
     pub(crate) apply_preview: String,
     pub(crate) apply_log: String,
@@ -218,6 +220,8 @@ impl AppModel {
         self.dns_input = self.state.dns_servers.join(", ");
         self.custom_tcp_input =
             crate::state::custom_tcp_input_from_ports(&self.state.network_config.allowed_tcp_ports);
+        self.custom_udp_input =
+            crate::state::custom_udp_input_from_ports(&self.state.network_config.allowed_udp_ports);
     }
 
     #[must_use]
@@ -300,12 +304,12 @@ impl Application for AppModel {
             .name(crate::fl!("app-title"))
             .icon(widget::icon::from_svg_bytes(APP_ICON))
             .version(env!("CARGO_PKG_VERSION"))
-            .author("NixOS Toolkit Contributors")
-            .comments("A declarative NixOS system management tool. Built with libcosmic, iced, Rust, Nix.")
+            .author(crate::fl!("about-author"))
+            .comments(crate::fl!("about-comments"))
             .links([
                 (crate::fl!("repository"), REPOSITORY.to_string()),
                 (
-                    "Issues".to_string(),
+                    crate::fl!("issues"),
                     "https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/issues".to_string(),
                 ),
             ])
@@ -364,6 +368,8 @@ impl Application for AppModel {
             package_input: String::new(),
             dns_input: String::new(),
             custom_tcp_input: String::new(),
+            custom_udp_input: String::new(),
+            rebuild_type: RebuildType::Switch,
             profile_preview: String::new(),
             apply_preview: String::new(),
             apply_log: String::new(),
@@ -383,7 +389,7 @@ impl Application for AppModel {
         if helper_missing {
             app.banner = Some(Banner {
                 kind: BannerKind::Warning,
-                text: helper_missing_message().to_string(),
+                text: crate::fl!("helper-missing-banner"),
             });
         }
         app.refresh_banner();
@@ -440,59 +446,80 @@ impl Application for AppModel {
                 destructive,
             } => {
                 let primary = if *destructive {
-                    widget::button::destructive("Apply").on_press(Message::ConfirmApply)
+                    widget::button::destructive(crate::fl!("dialog-apply"))
+                        .on_press(Message::ConfirmApply)
                 } else {
-                    widget::button::suggested("Apply").on_press(Message::ConfirmApply)
+                    widget::button::suggested(crate::fl!("dialog-apply"))
+                        .on_press(Message::ConfirmApply)
                 };
                 widget::dialog()
                     .title(heading.as_str())
                     .body(body.as_str())
                     .primary_action(primary)
                     .secondary_action(
-                        widget::button::standard("Cancel").on_press(Message::CancelApply),
+                        widget::button::standard(crate::fl!("dialog-cancel"))
+                            .on_press(Message::CancelApply),
                     )
                     .into()
             }
-            Dialog::ConfirmRollback { generation } => widget::dialog()
-                .title(format!("Switch to Generation {generation}?"))
-                .body("This rebuilds and activates the selected generation.")
-                .primary_action(widget::button::suggested("Switch Now").on_press(
-                    Message::ConfirmRollback {
-                        generation: *generation,
-                        mode: RollbackMode::SwitchNow,
-                    },
-                ))
-                .secondary_action(widget::button::standard("Set for Next Boot").on_press(
-                    Message::ConfirmRollback {
-                        generation: *generation,
-                        mode: RollbackMode::SetForNextBoot,
-                    },
-                ))
-                .tertiary_action(
-                    widget::button::standard("Cancel").on_press(Message::DismissDialog),
-                )
-                .into(),
-            Dialog::ConfirmDeleteGeneration { generation } => widget::dialog()
-                .title(format!("Delete Generation {generation}?"))
-                .body("This permanently deletes the selected generation.")
-                .primary_action(widget::button::destructive("Delete").on_press(
-                    Message::ConfirmDeleteGeneration {
-                        generation: *generation,
-                    },
-                ))
-                .secondary_action(
-                    widget::button::standard("Cancel").on_press(Message::DismissDialog),
-                )
-                .into(),
+            Dialog::ConfirmRollback { generation } => {
+                let generation_n: u32 = *generation;
+                widget::dialog()
+                    .title(crate::fl!(
+                        "dialog-rollback-title",
+                        generation = generation_n
+                    ))
+                    .body(crate::fl!("dialog-rollback-body"))
+                    .primary_action(
+                        widget::button::suggested(crate::fl!("dialog-switch-now")).on_press(
+                            Message::ConfirmRollback {
+                                generation: *generation,
+                                mode: RollbackMode::SwitchNow,
+                            },
+                        ),
+                    )
+                    .secondary_action(
+                        widget::button::standard(crate::fl!("dialog-set-for-next-boot")).on_press(
+                            Message::ConfirmRollback {
+                                generation: *generation,
+                                mode: RollbackMode::SetForNextBoot,
+                            },
+                        ),
+                    )
+                    .tertiary_action(
+                        widget::button::standard(crate::fl!("dialog-cancel"))
+                            .on_press(Message::DismissDialog),
+                    )
+                    .into()
+            }
+            Dialog::ConfirmDeleteGeneration { generation } => {
+                let generation_n: u32 = *generation;
+                widget::dialog()
+                    .title(crate::fl!("dialog-delete-title", generation = generation_n))
+                    .body(crate::fl!("dialog-delete-body"))
+                    .primary_action(
+                        widget::button::destructive(crate::fl!("dialog-delete")).on_press(
+                            Message::ConfirmDeleteGeneration {
+                                generation: *generation,
+                            },
+                        ),
+                    )
+                    .secondary_action(
+                        widget::button::standard(crate::fl!("dialog-cancel"))
+                            .on_press(Message::DismissDialog),
+                    )
+                    .into()
+            }
             Dialog::ConfirmMaintenance { id, name, warning } => widget::dialog()
-                .title(format!("Run {name}?"))
+                .title(crate::fl!("dialog-maintenance-title", name = name.as_str()))
                 .body(warning.as_str())
                 .primary_action(
-                    widget::button::destructive("Run Anyway")
+                    widget::button::destructive(crate::fl!("dialog-run-anyway"))
                         .on_press(Message::ConfirmMaintenance { id: id.clone() }),
                 )
                 .secondary_action(
-                    widget::button::standard("Cancel").on_press(Message::DismissDialog),
+                    widget::button::standard(crate::fl!("dialog-cancel"))
+                        .on_press(Message::DismissDialog),
                 )
                 .into(),
         })

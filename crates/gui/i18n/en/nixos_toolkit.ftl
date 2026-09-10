@@ -294,3 +294,87 @@ apply-failed = ✗ Failed
 apply-log = Build Log
 apply-log-desc = Output from nixos-rebuild
 apply-log-placeholder = # Output from nixos-rebuild
+
+port-dns = DNS (53)
+port-ntp = NTP (123)
+port-https-quic = HTTPS/QUIC (443)
+port-wireguard = WireGuard (51820)
+network-quick-udp = Quick Open UDP Ports
+network-quick-udp-desc = Common UDP service ports
+network-custom-udp = Additional UDP Ports
+network-custom-udp-placeholder = 5353, 51821
+network-wireguard = WireGuard
+network-wireguard-desc = Enable WireGuard VPN
+network-wireguard-port = Listen Port
+network-wireguard-port-desc = UDP port WireGuard listens on
+network-wireguard-info = After enabling
+network-wireguard-info-desc = This enables networking.wireguard.enable and opens the listen UDP port. Peers and interface addresses still belong in your NixOS configuration.
+
+apply-rebuild-type = Rebuild Mode
+apply-rebuild-type-desc = Choose how nixos-rebuild applies this configuration
+rebuild-switch = Switch (activate now)
+rebuild-boot = Boot (activate on reboot)
+rebuild-test = Test (temporary activation)
+rebuild-build = Build only
+
+apply-empty-heading = Apply Empty Configuration?
+apply-empty-body = WARNING: You have no configuration selected. Applying this will run nixos-rebuild { $rebuild } and may remove ALL software previously installed through this tool. If you previously had profiles, bundles, packages, or system settings managed through this tool, they will be REMOVED. Are you sure you want to continue?
+apply-packages-heading = Apply Configuration?
+apply-packages-body = Note: No desktop profile or bundles are selected. This will run nixos-rebuild { $rebuild } with only your custom packages. Make sure you have reviewed the preview above.
+apply-normal-heading = Apply Configuration?
+apply-normal-body = This will run nixos-rebuild { $rebuild } with your selected configuration. Make sure you have reviewed the preview above.
+apply-log-starting = Starting nixos-rebuild { $rebuild }...
+apply-helper-failed = Failed to start helper: { $error }
+apply-manual-hint = To apply changes manually:
+apply-manual-command = 1. Run: sudo nixos-rebuild { $rebuild }
+
+about-author = NixOS Toolkit Contributors
+about-comments = A declarative NixOS system management tool. Built with libcosmic, iced, Rust, Nix.
+issues = Issues
+dialog-apply = Apply
+dialog-cancel = Cancel
+dialog-switch-now = Switch Now
+dialog-set-for-next-boot = Set for Next Boot
+dialog-delete = Delete
+dialog-run-anyway = Run Anyway
+dialog-rollback-title = Switch to Generation { $generation }?
+dialog-rollback-body = This rebuilds and activates the selected generation.
+dialog-delete-title = Delete Generation { $generation }?
+dialog-delete-body = This permanently deletes the selected generation.
+dialog-maintenance-title = Run { $name }?
+
+toast-integration-verified = Integration verified! You're ready to use the toolkit.
+toast-integration-missing = Integration not detected. Please add the import and run 'nixos-rebuild switch'.
+toast-integration-unknown = Could not verify integration. Please check manually.
+toast-clipboard-failed = Failed to copy to clipboard
+toast-snippet-copied = Snippet copied to clipboard
+toast-added-package = Added: { $package }
+toast-added-packages = Added { $count } packages
+toast-already-added = Already added: { $packages }
+toast-in-bundle = '{ $package }' is already in '{ $bundle }' bundle
+toast-maintenance-ok = Maintenance completed
+toast-maintenance-failed = Maintenance failed
+toast-unknown-maintenance = Unknown maintenance action: { $id }
+
+error-username-invalid = Username contains invalid characters
+error-hostname-invalid = Hostname contains invalid characters
+error-hostname-too-long = Hostname too long (max 63 characters)
+error-dns-invalid = invalid IPv4 address: { $address }
+error-port-invalid = invalid { $proto } port: { $port }
+
+log-helper-closed = helper stdout closed
+log-details = Details: { $details }
+log-error = Error: { $message }{ $detail }
+log-stderr = Stderr:
+log-switch-ok = Switch successful!
+log-switch-next-boot = The selected generation will be activated on next boot.
+log-generation-deleted = Generation { $number } deleted.
+log-generation-deleted-generic = Generation deleted.
+log-loading-generations = Loading generations...
+log-switching-generation = Switching to generation { $generation }...
+log-deleting-generation = Deleting generation { $generation }...
+log-rollback-refresh = Cannot rollback: refresh the generation list first.
+log-rollback-first = Cannot rollback: already at the first generation.
+log-rollback-unknown = Cannot rollback: current generation unknown.
+
+helper-missing-banner = Privileged helper not found. You can preview configuration and save local preferences. Apply, generations, and maintenance require nixos-toolkit-helper on the host (NixOS Toolkit system module) and will ask for authentication.

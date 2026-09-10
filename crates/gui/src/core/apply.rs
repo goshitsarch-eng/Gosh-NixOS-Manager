@@ -2,7 +2,6 @@
 
 use crate::app::{AppModel, Banner, BannerKind, Busy, HelperStatus};
 use crate::core::packages::{classify_new_packages, parse_package_input};
-use crate::helper::session::helper_missing_message;
 use crate::integration::{classic_integration_snippet, flake_integration_snippet};
 use crate::message::{
     ContextPage, Dialog, HelperEvent, HelperOp, Intent, Message, Page, RollbackMode,
@@ -17,21 +16,6 @@ const TOAST_MS: u64 = 3000;
 const IN_BUNDLE_TOAST_MS: u64 = 4000;
 
 const SSH_ROOT_LOGIN: [&str; 3] = ["no", "prohibit-password", "yes"];
-
-const APPLY_EMPTY_HEADING: &str = "Apply Empty Configuration?";
-const APPLY_EMPTY_BODY: &str = "WARNING: You have no profile, bundles, or packages selected.\n\n\
-     Applying this will remove ALL managed software from your system.\n\n\
-     If you previously had bundles or packages installed through this tool, \
-     they will be REMOVED.\n\n\
-     Are you sure you want to continue?";
-const APPLY_PACKAGES_HEADING: &str = "Apply Configuration?";
-const APPLY_PACKAGES_BODY: &str = "Note: No desktop profile or bundles are selected.\n\n\
-     This will run 'nixos-rebuild switch' with only your custom packages.\n\n\
-     Make sure you have reviewed the preview above.";
-const APPLY_NORMAL_HEADING: &str = "Apply Configuration?";
-const APPLY_NORMAL_BODY: &str =
-    "This will run 'nixos-rebuild switch' with your selected configuration.\n\n\
-     Make sure you have reviewed the preview above.";
 
 impl AppModel {
     /// Reducer. No iced/libcosmic widget types. Exhaustive over [`Message`].
@@ -58,13 +42,13 @@ impl AppModel {
                     self.verify_pending = false;
                     let text = match self.system_info.integration_status {
                         IntegrationStatus::Integrated => {
-                            "Integration verified! You're ready to use the toolkit.".into()
+                            crate::fl!("toast-integration-verified")
                         }
                         IntegrationStatus::NotIntegrated => {
-                            "Integration not detected. Please add the import and run 'nixos-rebuild switch'.".into()
+                            crate::fl!("toast-integration-missing")
                         }
                         IntegrationStatus::Unknown => {
-                            "Could not verify integration. Please check manually.".into()
+                            crate::fl!("toast-integration-unknown")
                         }
                     };
                     vec![Intent::ShowToast {
@@ -89,7 +73,7 @@ impl AppModel {
                     Vec::new()
                 } else {
                     vec![Intent::ShowToast {
-                        text: "Failed to copy to clipboard".into(),
+                        text: crate::fl!("toast-clipboard-failed"),
                         timeout_ms: TOAST_MS,
                     }]
                 }
@@ -103,7 +87,7 @@ impl AppModel {
                 vec![
                     Intent::CopyClipboard(snippet),
                     Intent::ShowToast {
-                        text: "Snippet copied to clipboard".into(),
+                        text: crate::fl!("toast-snippet-copied"),
                         timeout_ms: TOAST_MS,
                     },
                 ]
@@ -185,9 +169,11 @@ impl AppModel {
                 let mut intents = Vec::new();
                 if !added.is_empty() {
                     let text = if added.len() == 1 {
-                        format!("Added: {}", added[0])
+                        let package = added[0].clone();
+                        crate::fl!("toast-added-package", package = package)
                     } else {
-                        format!("Added {} packages", added.len())
+                        let count = added.len() as u32;
+                        crate::fl!("toast-added-packages", count = count)
                     };
                     intents.push(Intent::ShowToast {
                         text,
@@ -195,14 +181,17 @@ impl AppModel {
                     });
                 }
                 if !duplicates.is_empty() {
+                    let packages = duplicates.join(", ");
                     intents.push(Intent::ShowToast {
-                        text: format!("Already added: {}", duplicates.join(", ")),
+                        text: crate::fl!("toast-already-added", packages = packages),
                         timeout_ms: TOAST_MS,
                     });
                 }
                 for (pkg, bundle) in &in_bundle {
+                    let package = pkg.clone();
+                    let bundle = bundle.clone();
                     intents.push(Intent::ShowToast {
-                        text: format!("'{pkg}' is already in '{bundle}' bundle"),
+                        text: crate::fl!("toast-in-bundle", package = package, bundle = bundle),
                         timeout_ms: IN_BUNDLE_TOAST_MS,
                     });
                 }
@@ -255,8 +244,7 @@ impl AppModel {
                     return Vec::new();
                 }
                 if !crate::app::is_valid_username(&trimmed) {
-                    self.field_errors.username =
-                        Some("Username contains invalid characters".into());
+                    self.field_errors.username = Some(crate::fl!("error-username-invalid"));
                     return Vec::new();
                 }
                 self.field_errors.username = None;
@@ -354,6 +342,17 @@ impl AppModel {
                 self.custom_tcp_input = raw;
                 Vec::new()
             }
+            Message::ToggleUdpPort { port, enabled } => {
+                self.state.set_udp_port(port, enabled);
+                Vec::new()
+            }
+            Message::CustomUdpPortsChanged(raw) => {
+                if let Err(err) = self.state.parse_and_set_custom_udp_ports(&raw) {
+                    tracing::debug!(err, "invalid custom UDP ports");
+                }
+                self.custom_udp_input = raw;
+                Vec::new()
+            }
             Message::SetSshEnabled(enabled) => {
                 self.state.network_config.ssh_enabled = enabled;
                 self.state.has_changes = true;
@@ -385,6 +384,37 @@ impl AppModel {
                 self.state.has_changes = true;
                 Vec::new()
             }
+            Message::SetWireguardEnabled(enabled) => {
+                self.state.network_config.wireguard_enabled = enabled;
+                if enabled {
+                    let port = self.state.wireguard_listen_port();
+                    self.state.network_config.wireguard_listen_port = port;
+                    // Open the listen UDP port; leave it if the user later disables WireGuard.
+                    self.state.set_udp_port(port, true);
+                    self.custom_udp_input = crate::state::custom_udp_input_from_ports(
+                        &self.state.network_config.allowed_udp_ports,
+                    );
+                }
+                self.state.has_changes = true;
+                Vec::new()
+            }
+            Message::SetWireguardListenPort(port) => {
+                let port = if port == 0 {
+                    crate::state::DEFAULT_WIREGUARD_LISTEN_PORT
+                } else {
+                    port
+                };
+                self.state.network_config.wireguard_listen_port = port;
+                if self.state.network_config.wireguard_enabled {
+                    // Open the new listen port; do not remove a previously auto-added port.
+                    self.state.set_udp_port(port, true);
+                    self.custom_udp_input = crate::state::custom_udp_input_from_ports(
+                        &self.state.network_config.allowed_udp_ports,
+                    );
+                }
+                self.state.has_changes = true;
+                Vec::new()
+            }
 
             Message::ToggleService { id, enabled } => {
                 self.state.set_service(&id, enabled);
@@ -405,13 +435,27 @@ impl AppModel {
             }
             Message::ConfirmApply => {
                 self.dialog = None;
-                self.start_rebuild(RebuildType::Switch, true)
+                let rebuild = self.rebuild_type;
+                let then_write_state = matches!(
+                    rebuild,
+                    RebuildType::Switch
+                        | RebuildType::Boot
+                        | RebuildType::Test
+                        | RebuildType::Build
+                );
+                self.start_rebuild(rebuild, then_write_state)
             }
             Message::CancelApply => {
                 self.dialog = None;
                 Vec::new()
             }
             Message::RequestDryRun => self.start_rebuild(RebuildType::DryBuild, false),
+            Message::SetRebuildType(rebuild) => {
+                if !matches!(rebuild, RebuildType::DryBuild) {
+                    self.rebuild_type = rebuild;
+                }
+                Vec::new()
+            }
             Message::ApplyFinished { success, message } => {
                 self.busy = Busy::Idle;
                 if success {
@@ -472,18 +516,22 @@ impl AppModel {
                 self.helper = HelperStatus::Idle;
                 self.busy = Busy::Idle;
                 if matches!(op, HelperOp::ReadState) {
-                    self.state_load_warning =
-                        Some("Could not load saved state - using defaults".into());
+                    self.state_load_warning = Some(crate::fl!("banner-state-spawn"));
                 }
                 if error.contains("not available") || error.contains("not found") {
                     self.helper_missing = true;
                 }
                 if matches!(op, HelperOp::Apply { .. }) {
+                    self.apply_log.push_str(&format!(
+                        "{}\n",
+                        crate::fl!("apply-helper-failed", error = error.as_str())
+                    ));
                     self.apply_log
-                        .push_str(&format!("Failed to start helper: {error}\n"));
-                    self.apply_log.push_str("\nTo apply changes manually:\n");
-                    self.apply_log
-                        .push_str("1. Run: sudo nixos-rebuild switch\n");
+                        .push_str(&format!("\n{}\n", crate::fl!("apply-manual-hint")));
+                    self.apply_log.push_str(&format!(
+                        "{}\n",
+                        crate::fl!("apply-manual-command", rebuild = self.rebuild_type.as_arg())
+                    ));
                 }
                 self.refresh_banner();
                 vec![Intent::ShowToast {
@@ -501,11 +549,11 @@ impl AppModel {
                 let was_busy = self.busy;
                 self.busy = Busy::Idle;
                 if matches!(op, HelperOp::ReadState) {
-                    self.state_load_warning = Some("State read timeout".into());
+                    self.state_load_warning = Some(crate::fl!("banner-state-timeout"));
                     self.refresh_banner();
                     return Vec::new();
                 }
-                let detail = error.unwrap_or_else(|| "helper stdout closed".into());
+                let detail = error.unwrap_or_else(|| crate::fl!("log-helper-closed"));
                 match op {
                     HelperOp::Apply { .. } if was_busy != Busy::Idle => {
                         self.apply_log.push_str(&format!("\n{detail}\n"));
@@ -521,7 +569,7 @@ impl AppModel {
                 self.helper = HelperStatus::Idle;
                 self.busy = Busy::Idle;
                 if matches!(op, HelperOp::ReadState) {
-                    self.state_load_warning = Some("State read timeout".into());
+                    self.state_load_warning = Some(crate::fl!("banner-state-timeout"));
                     self.refresh_banner();
                 }
                 Vec::new()
@@ -548,28 +596,42 @@ impl AppModel {
                 if !matches!(op, HelperOp::Apply { .. }) {
                     self.busy = Busy::Idle;
                 }
-                let detail = details
-                    .as_deref()
-                    .map(|d| format!("\nDetails: {d}"))
-                    .unwrap_or_default();
+                let detail = details.as_deref().map_or_else(String::new, |d| {
+                    format!("\n{}", crate::fl!("log-details", details = d))
+                });
                 match &op {
                     HelperOp::ReadState => {
-                        self.state_load_warning = Some(format!("State read error: {message}"));
+                        self.state_load_warning = Some(crate::fl!(
+                            "banner-state-read-error",
+                            message = message.as_str()
+                        ));
                         self.refresh_banner();
                         Vec::new()
                     }
                     HelperOp::Apply { .. } => {
                         self.busy = Busy::Idle;
-                        self.apply_log
-                            .push_str(&format!("\nError: {message}{detail}\n"));
+                        self.apply_log.push_str(&format!(
+                            "\n{}\n",
+                            crate::fl!(
+                                "log-error",
+                                message = message.as_str(),
+                                detail = detail.as_str()
+                            )
+                        ));
                         vec![Intent::ShowToast {
                             text: message,
                             timeout_ms: TOAST_MS,
                         }]
                     }
                     HelperOp::RunMaintenance { .. } => {
-                        self.maintenance_log
-                            .push_str(&format!("\nError: {message}{detail}\n"));
+                        self.maintenance_log.push_str(&format!(
+                            "\n{}\n",
+                            crate::fl!(
+                                "log-error",
+                                message = message.as_str(),
+                                detail = detail.as_str()
+                            )
+                        ));
                         vec![Intent::ShowToast {
                             text: message,
                             timeout_ms: TOAST_MS,
@@ -578,8 +640,14 @@ impl AppModel {
                     HelperOp::Rollback { .. }
                     | HelperOp::DeleteGenerations { .. }
                     | HelperOp::ListGenerations => {
-                        self.generations_log
-                            .push_str(&format!("\nError: {message}{detail}\n"));
+                        self.generations_log.push_str(&format!(
+                            "\n{}\n",
+                            crate::fl!(
+                                "log-error",
+                                message = message.as_str(),
+                                detail = detail.as_str()
+                            )
+                        ));
                         vec![Intent::ShowToast {
                             text: message,
                             timeout_ms: TOAST_MS,
@@ -639,16 +707,17 @@ impl AppModel {
                     }
                 }
                 if !stderr.is_empty() {
-                    self.maintenance_log.push_str("\nStderr:\n");
+                    self.maintenance_log
+                        .push_str(&format!("\n{}\n", crate::fl!("log-stderr")));
                     self.maintenance_log.push_str(&stderr);
                     if !stderr.ends_with('\n') {
                         self.maintenance_log.push('\n');
                     }
                 }
                 let text = if success {
-                    "Maintenance completed".into()
+                    crate::fl!("toast-maintenance-ok")
                 } else {
-                    "Maintenance failed".into()
+                    crate::fl!("toast-maintenance-failed")
                 };
                 vec![Intent::ShowToast {
                     text,
@@ -659,11 +728,11 @@ impl AppModel {
                 self.helper = HelperStatus::Idle;
                 match op {
                     HelperOp::Rollback { generation, mode } => {
-                        self.generations_log.push_str("Switch successful!\n");
+                        self.generations_log
+                            .push_str(&format!("{}\n", crate::fl!("log-switch-ok")));
                         if mode == RollbackMode::SetForNextBoot {
-                            self.generations_log.push_str(
-                                "The selected generation will be activated on next boot.\n",
-                            );
+                            self.generations_log
+                                .push_str(&format!("{}\n", crate::fl!("log-switch-next-boot")));
                         }
                         let _ = generation;
                         self.busy = Busy::Idle;
@@ -671,10 +740,16 @@ impl AppModel {
                     }
                     HelperOp::DeleteGenerations { generations } => {
                         if let Some(number) = generations.first() {
-                            self.generations_log
-                                .push_str(&format!("Generation {number} deleted.\n"));
+                            let number: u32 = *number;
+                            self.generations_log.push_str(&format!(
+                                "{}\n",
+                                crate::fl!("log-generation-deleted", number = number)
+                            ));
                         } else {
-                            self.generations_log.push_str("Generation deleted.\n");
+                            self.generations_log.push_str(&format!(
+                                "{}\n",
+                                crate::fl!("log-generation-deleted-generic")
+                            ));
                         }
                         self.busy = Busy::Idle;
                         self.load_generations_intents()
@@ -715,25 +790,26 @@ impl AppModel {
     }
 
     fn apply_confirm_dialog(&self) -> Dialog {
+        let rebuild = self.rebuild_type.as_arg().to_string();
         let no_profile = self.state.selected_profile.is_none();
         let no_bundles = self.state.enabled_bundles.is_empty();
         let no_packages = self.state.custom_packages.is_empty();
         if self.state.apply_is_empty() {
             Dialog::ConfirmApply {
-                heading: APPLY_EMPTY_HEADING.into(),
-                body: APPLY_EMPTY_BODY.into(),
+                heading: crate::fl!("apply-empty-heading"),
+                body: crate::fl!("apply-empty-body", rebuild = rebuild.clone()),
                 destructive: true,
             }
         } else if no_profile && no_bundles && !no_packages {
             Dialog::ConfirmApply {
-                heading: APPLY_PACKAGES_HEADING.into(),
-                body: APPLY_PACKAGES_BODY.into(),
+                heading: crate::fl!("apply-packages-heading"),
+                body: crate::fl!("apply-packages-body", rebuild = rebuild),
                 destructive: false,
             }
         } else {
             Dialog::ConfirmApply {
-                heading: APPLY_NORMAL_HEADING.into(),
-                body: APPLY_NORMAL_BODY.into(),
+                heading: crate::fl!("apply-normal-heading"),
+                body: crate::fl!("apply-normal-body", rebuild = rebuild),
                 destructive: false,
             }
         }
@@ -774,11 +850,10 @@ impl AppModel {
         } else {
             Busy::Applying
         };
-        self.apply_log = if matches!(rebuild, RebuildType::DryBuild) {
-            "Starting nixos-rebuild dry-build...\n\n".into()
-        } else {
-            "Starting nixos-rebuild switch...\n\n".into()
-        };
+        self.apply_log = format!(
+            "{}\n\n",
+            crate::fl!("apply-log-starting", rebuild = rebuild.as_arg())
+        );
         let save = then_write_state.then(|| {
             let mut ipc = self.state.to_ipc_state();
             let hardware = self.hardware_for_nix();
@@ -802,7 +877,8 @@ impl AppModel {
             return Vec::new();
         }
         self.busy = Busy::LoadingGenerations;
-        self.generations_log.push_str("Loading generations...\n");
+        self.generations_log
+            .push_str(&format!("{}\n", crate::fl!("log-loading-generations")));
         vec![Intent::SpawnHelper {
             op: HelperOp::ListGenerations,
             request: HelperRequest::ListGenerations,
@@ -829,8 +905,10 @@ impl AppModel {
             RollbackMode::SetForNextBoot => "boot",
         };
         self.busy = Busy::RollingBack;
-        self.generations_log
-            .push_str(&format!("Switching to generation {generation}...\n"));
+        self.generations_log.push_str(&format!(
+            "{}\n",
+            crate::fl!("log-switching-generation", generation = generation)
+        ));
         vec![Intent::SpawnHelper {
             op: HelperOp::Rollback { generation, mode },
             request: HelperRequest::RollbackGeneration {
@@ -845,8 +923,10 @@ impl AppModel {
             return Vec::new();
         }
         self.busy = Busy::DeletingGeneration;
-        self.generations_log
-            .push_str(&format!("Deleting generation {generation}...\n"));
+        self.generations_log.push_str(&format!(
+            "{}\n",
+            crate::fl!("log-deleting-generation", generation = generation)
+        ));
         vec![Intent::SpawnHelper {
             op: HelperOp::DeleteGenerations {
                 generations: vec![generation],
@@ -872,17 +952,17 @@ impl AppModel {
             Some(generation) => self.apply(Message::RequestRollback { generation }),
             None if self.current_generation.is_some() && self.generations.is_empty() => {
                 self.generations_log
-                    .push_str("Cannot rollback: refresh the generation list first.\n");
+                    .push_str(&format!("{}\n", crate::fl!("log-rollback-refresh")));
                 Vec::new()
             }
             None if self.current_generation.is_some() => {
                 self.generations_log
-                    .push_str("Cannot rollback: already at the first generation.\n");
+                    .push_str(&format!("{}\n", crate::fl!("log-rollback-first")));
                 Vec::new()
             }
             None => {
                 self.generations_log
-                    .push_str("Cannot rollback: current generation unknown.\n");
+                    .push_str(&format!("{}\n", crate::fl!("log-rollback-unknown")));
                 Vec::new()
             }
         }
@@ -897,7 +977,7 @@ impl AppModel {
             .find(|action| action.id == id)
         else {
             return vec![Intent::ShowToast {
-                text: format!("Unknown maintenance action: {id}"),
+                text: crate::fl!("toast-unknown-maintenance", id = id.as_str()),
                 timeout_ms: TOAST_MS,
             }];
         };
@@ -922,7 +1002,7 @@ impl AppModel {
             .find(|action| action.id == id)
         else {
             return vec![Intent::ShowToast {
-                text: format!("Unknown maintenance action: {id}"),
+                text: crate::fl!("toast-unknown-maintenance", id = id),
                 timeout_ms: TOAST_MS,
             }];
         };
@@ -944,14 +1024,14 @@ impl AppModel {
         if !self.system_info.is_nixos && !self.flags.skip_host_probes {
             self.banner = Some(Banner {
                 kind: BannerKind::Error,
-                text: "Not running on NixOS".into(),
+                text: crate::fl!("banner-not-nixos"),
             });
             return;
         }
         if self.helper_missing {
             self.banner = Some(Banner {
                 kind: BannerKind::Warning,
-                text: helper_missing_message().to_string(),
+                text: crate::fl!("helper-missing-banner"),
             });
             return;
         }
@@ -969,11 +1049,11 @@ impl AppModel {
         self.banner = match self.system_info.integration_status {
             IntegrationStatus::Integrated => Some(Banner {
                 kind: BannerKind::Success,
-                text: "Integrated - Ready to apply changes".into(),
+                text: crate::fl!("banner-integrated"),
             }),
             IntegrationStatus::NotIntegrated => Some(Banner {
                 kind: BannerKind::Warning,
-                text: "Setup required - See Getting Started".into(),
+                text: crate::fl!("banner-setup-required"),
             }),
             IntegrationStatus::Unknown => None,
         };
@@ -990,10 +1070,10 @@ fn hostname_charset_error(hostname: &str) -> Option<String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-')
     {
-        return Some("Hostname contains invalid characters".into());
+        return Some(crate::fl!("error-hostname-invalid"));
     }
     if hostname.len() > 63 {
-        return Some("Hostname too long (max 63 characters)".into());
+        return Some(crate::fl!("error-hostname-too-long"));
     }
     None
 }
@@ -1095,12 +1175,16 @@ mod tests {
                 | Message::SetFirewallEnabled(_)
                 | Message::ToggleTcpPort { .. }
                 | Message::CustomTcpPortsChanged(_)
+                | Message::ToggleUdpPort { .. }
+                | Message::CustomUdpPortsChanged(_)
                 | Message::SetSshEnabled(_)
                 | Message::SetSshPort(_)
                 | Message::SetSshPasswordAuth(_)
                 | Message::SetSshRootLogin(_)
                 | Message::SetFail2banEnabled(_)
                 | Message::SetTailscaleEnabled(_)
+                | Message::SetWireguardEnabled(_)
+                | Message::SetWireguardListenPort(_)
                 | Message::ToggleService { .. }
                 | Message::RefreshPreview
                 | Message::PreviewReady(_)
@@ -1108,6 +1192,7 @@ mod tests {
                 | Message::ConfirmApply
                 | Message::CancelApply
                 | Message::RequestDryRun
+                | Message::SetRebuildType(_)
                 | Message::ApplyFinished { .. }
                 | Message::LoadGenerations
                 | Message::GenerationsLoaded(_)
@@ -1184,12 +1269,19 @@ mod tests {
                 enabled: true,
             },
             Message::CustomTcpPortsChanged(String::new()),
+            Message::ToggleUdpPort {
+                port: 53,
+                enabled: true,
+            },
+            Message::CustomUdpPortsChanged(String::new()),
             Message::SetSshEnabled(false),
             Message::SetSshPort(22),
             Message::SetSshPasswordAuth(false),
             Message::SetSshRootLogin(0),
             Message::SetFail2banEnabled(false),
             Message::SetTailscaleEnabled(false),
+            Message::SetWireguardEnabled(false),
+            Message::SetWireguardListenPort(51820),
             Message::ToggleService {
                 id: String::new(),
                 enabled: false,
@@ -1200,6 +1292,7 @@ mod tests {
             Message::ConfirmApply,
             Message::CancelApply,
             Message::RequestDryRun,
+            Message::SetRebuildType(RebuildType::Switch),
             Message::ApplyFinished {
                 success: true,
                 message: String::new(),
@@ -1345,6 +1438,14 @@ mod tests {
         assert_eq!(app.custom_tcp_input, "9090");
         assert_eq!(app.state.network_config.allowed_tcp_ports, vec![22, 9090]);
 
+        app.apply(Message::ToggleUdpPort {
+            port: 53,
+            enabled: true,
+        });
+        app.apply(Message::CustomUdpPortsChanged("9091".into()));
+        assert_eq!(app.custom_udp_input, "9091");
+        assert_eq!(app.state.network_config.allowed_udp_ports, vec![53, 9091]);
+
         app.apply(Message::ToggleService {
             id: "printing".into(),
             enabled: true,
@@ -1358,7 +1459,6 @@ mod tests {
     #[test]
     fn request_apply_empty_is_destructive_confirm() {
         let mut app = test_app_with_helper();
-        app.state.network_config.ssh_enabled = true;
         let intents = app.apply(Message::RequestApply);
         assert!(intents.is_empty());
         match &app.dialog {
@@ -1372,6 +1472,21 @@ mod tests {
     }
 
     #[test]
+    fn request_apply_network_only_is_not_empty() {
+        let mut app = test_app_with_helper();
+        app.state.network_config.ssh_enabled = true;
+        app.apply(Message::RequestApply);
+        match &app.dialog {
+            Some(Dialog::ConfirmApply {
+                destructive: false,
+                heading,
+                ..
+            }) => assert!(!heading.contains("Empty")),
+            other => panic!("expected non-empty ConfirmApply, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn request_apply_hardware_only_is_not_empty() {
         let mut app = test_app_with_helper();
         app.state.hardware_config.nvidia_driver = Some(0);
@@ -1381,7 +1496,7 @@ mod tests {
                 destructive: false,
                 heading,
                 ..
-            }) => assert_eq!(heading, "Apply Configuration?"),
+            }) => assert_eq!(*heading, crate::fl!("apply-normal-heading")),
             other => panic!("expected non-empty ConfirmApply, got {other:?}"),
         }
     }
@@ -1412,7 +1527,7 @@ mod tests {
                 heading,
                 body,
             }) => {
-                assert_eq!(heading, APPLY_PACKAGES_HEADING);
+                assert_eq!(*heading, crate::fl!("apply-packages-heading"));
                 assert!(body.contains("only your custom packages"));
             }
             other => panic!("expected packages-only ConfirmApply, got {other:?}"),
@@ -2044,6 +2159,7 @@ mod tests {
             dns_servers: vec!["1.1.1.1".into()],
             network_config: NetworkConfig {
                 allowed_tcp_ports: vec![22, 9090],
+                allowed_udp_ports: vec![53, 9091],
                 ..NetworkConfig::default()
             },
             ..IpcAppState::default()
@@ -2054,6 +2170,98 @@ mod tests {
         }));
         assert_eq!(app.dns_input, "1.1.1.1");
         assert_eq!(app.custom_tcp_input, "9090");
+        assert_eq!(app.custom_udp_input, "9091");
         assert!(app.state.username.is_none());
+    }
+
+    #[test]
+    fn custom_udp_replace_does_not_accumulate_prefixes() {
+        let mut app = test_app();
+        app.apply(Message::ToggleUdpPort {
+            port: 53,
+            enabled: true,
+        });
+        app.apply(Message::CustomUdpPortsChanged("9".into()));
+        app.apply(Message::CustomUdpPortsChanged("90".into()));
+        app.apply(Message::CustomUdpPortsChanged("909".into()));
+        app.apply(Message::CustomUdpPortsChanged("9090".into()));
+        assert_eq!(app.custom_udp_input, "9090");
+        assert_eq!(app.state.network_config.allowed_udp_ports, vec![53, 9090]);
+
+        app.apply(Message::CustomUdpPortsChanged("9090, abc".into()));
+        assert_eq!(app.custom_udp_input, "9090, abc");
+        assert_eq!(app.state.network_config.allowed_udp_ports, vec![53, 9090]);
+
+        app.apply(Message::CustomUdpPortsChanged(String::new()));
+        assert!(app.custom_udp_input.is_empty());
+        assert_eq!(app.state.network_config.allowed_udp_ports, vec![53]);
+    }
+
+    #[test]
+    fn enabling_wireguard_opens_listen_udp_port() {
+        let mut app = test_app();
+        app.apply(Message::SetWireguardEnabled(true));
+        assert!(app.state.network_config.wireguard_enabled);
+        assert_eq!(app.state.network_config.wireguard_listen_port, 51820);
+        assert_eq!(app.state.network_config.allowed_udp_ports, vec![51820]);
+
+        app.apply(Message::SetWireguardListenPort(51821));
+        assert_eq!(app.state.network_config.wireguard_listen_port, 51821);
+        assert_eq!(
+            app.state.network_config.allowed_udp_ports,
+            vec![51820, 51821]
+        );
+
+        app.apply(Message::SetWireguardEnabled(false));
+        assert!(!app.state.network_config.wireguard_enabled);
+        assert_eq!(
+            app.state.network_config.allowed_udp_ports,
+            vec![51820, 51821]
+        );
+    }
+
+    #[test]
+    fn set_rebuild_type_confirm_apply_sends_boot_test_and_build() {
+        for rebuild in [RebuildType::Boot, RebuildType::Test, RebuildType::Build] {
+            let mut app = test_app_with_helper();
+            app.apply(Message::SetRebuildType(rebuild));
+            assert_eq!(app.rebuild_type, rebuild);
+            app.apply(Message::RequestApply);
+            match &app.dialog {
+                Some(Dialog::ConfirmApply {
+                    body,
+                    destructive: true,
+                    ..
+                }) => {
+                    assert!(
+                        body.contains(&format!("nixos-rebuild {}", rebuild.as_arg())),
+                        "body={body}"
+                    );
+                    assert!(!body.contains("nixos-rebuild switch"));
+                }
+                other => panic!("expected empty ConfirmApply, got {other:?}"),
+            }
+            let intents = app.apply(Message::ConfirmApply);
+            match spawn_helper(&intents) {
+                Some(Intent::SpawnHelper { op, request }) => {
+                    match op {
+                        HelperOp::Apply {
+                            rebuild: sent,
+                            then_write_state: true,
+                            ..
+                        } => assert_eq!(*sent, rebuild),
+                        other => panic!("expected Apply {rebuild:?} write-state, got {other:?}"),
+                    }
+                    match request {
+                        HelperRequest::Apply { rebuild_type, .. } => {
+                            assert_eq!(*rebuild_type, rebuild);
+                        }
+                        other => panic!("expected Apply request, got {other:?}"),
+                    }
+                }
+                other => panic!("expected SpawnHelper, got {other:?}"),
+            }
+            assert!(app.apply_log.contains(rebuild.as_arg()));
+        }
     }
 }

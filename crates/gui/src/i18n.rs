@@ -30,6 +30,7 @@ pub static LANGUAGE_LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
     loader
         .load_fallback_language(&Localizations)
         .expect("Error while loading fallback language");
+    loader.set_use_isolating(false);
     loader
 });
 

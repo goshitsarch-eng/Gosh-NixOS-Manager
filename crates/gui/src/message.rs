@@ -89,6 +89,11 @@ pub enum Message {
         enabled: bool,
     },
     CustomTcpPortsChanged(String),
+    ToggleUdpPort {
+        port: u16,
+        enabled: bool,
+    },
+    CustomUdpPortsChanged(String),
     SetSshEnabled(bool),
     SetSshPort(u16),
     SetSshPasswordAuth(bool),
@@ -96,6 +101,8 @@ pub enum Message {
     SetSshRootLogin(u8),
     SetFail2banEnabled(bool),
     SetTailscaleEnabled(bool),
+    SetWireguardEnabled(bool),
+    SetWireguardListenPort(u16),
 
     // ── Services ──────────────────────────────────────────────────────────
     ToggleService {
@@ -110,6 +117,7 @@ pub enum Message {
     ConfirmApply,
     CancelApply,
     RequestDryRun,
+    SetRebuildType(RebuildType),
     ApplyFinished {
         success: bool,
         message: String,
@@ -259,8 +267,8 @@ pub enum HelperOp {
     EnsureDirectories,
     Validate,
     Generate,
-    /// `then_write_state` is true for Switch; false for DryBuild.
-    /// `save` is written on the same session after a successful Apply.
+    /// `then_write_state` is true for Switch/Boot/Test/Build (files persist);
+    /// false for DryBuild. `save` is written on the same session after a successful Apply.
     Apply {
         rebuild: RebuildType,
         then_write_state: bool,

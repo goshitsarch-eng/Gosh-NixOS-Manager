@@ -12,6 +12,12 @@ use std::collections::{HashMap, HashSet};
 /// TCP ports owned by the network chips, not the custom-ports field.
 pub const PRESET_TCP_PORTS: [u16; 4] = [22, 80, 443, 8080];
 
+/// UDP ports owned by the network chips, not the custom-ports field.
+pub const PRESET_UDP_PORTS: [u16; 4] = [53, 123, 443, 51820];
+
+/// Default WireGuard listen port (`networking.wireguard.enable`).
+pub const DEFAULT_WIREGUARD_LISTEN_PORT: u16 = 51820;
+
 /// Current application state (GUI model).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppState {
@@ -147,7 +153,7 @@ impl AppState {
                 continue;
             }
             if !is_ipv4(s) {
-                return Err(format!("invalid IPv4 address: {s}"));
+                return Err(crate::fl!("error-dns-invalid", address = s));
             }
             if !servers.contains(&s.to_string()) {
                 servers.push(s.to_string());
@@ -260,50 +266,44 @@ impl AppState {
 
     /// Replace custom TCP extras. Preset chips stay; parsed extras replace the rest.
     pub fn parse_and_set_custom_tcp_ports(&mut self, raw: &str) -> Result<(), String> {
-        let mut extras = Vec::new();
-        for part in raw.split([',', ' ', '\n']) {
-            let s = part.trim();
-            if s.is_empty() {
-                continue;
-            }
-            let port: u16 = s.parse().map_err(|_| format!("invalid TCP port: {s}"))?;
-            if port == 0 {
-                return Err(format!("invalid TCP port: {s}"));
-            }
-            if PRESET_TCP_PORTS.contains(&port) {
-                continue;
-            }
-            if !extras.contains(&port) {
-                extras.push(port);
-            }
-        }
-        let mut ports: Vec<u16> = self
-            .network_config
-            .allowed_tcp_ports
-            .iter()
-            .copied()
-            .filter(|port| PRESET_TCP_PORTS.contains(port))
-            .collect();
-        for port in extras {
-            if !ports.contains(&port) {
-                ports.push(port);
-            }
-        }
-        self.network_config.allowed_tcp_ports = ports;
+        self.network_config.allowed_tcp_ports = merge_custom_ports(
+            &self.network_config.allowed_tcp_ports,
+            parse_custom_ports(raw, "TCP")?,
+            &PRESET_TCP_PORTS,
+        );
+        self.has_changes = true;
+        Ok(())
+    }
+
+    /// Replace custom UDP extras. Preset chips stay; parsed extras replace the rest.
+    pub fn parse_and_set_custom_udp_ports(&mut self, raw: &str) -> Result<(), String> {
+        self.network_config.allowed_udp_ports = merge_custom_ports(
+            &self.network_config.allowed_udp_ports,
+            parse_custom_ports(raw, "UDP")?,
+            &PRESET_UDP_PORTS,
+        );
         self.has_changes = true;
         Ok(())
     }
 
     pub fn set_tcp_port(&mut self, port: u16, enabled: bool) {
-        let ports = &mut self.network_config.allowed_tcp_ports;
-        if enabled {
-            if !ports.contains(&port) {
-                ports.push(port);
-            }
-        } else {
-            ports.retain(|p| *p != port);
-        }
+        set_listed_port(&mut self.network_config.allowed_tcp_ports, port, enabled);
         self.has_changes = true;
+    }
+
+    pub fn set_udp_port(&mut self, port: u16, enabled: bool) {
+        set_listed_port(&mut self.network_config.allowed_udp_ports, port, enabled);
+        self.has_changes = true;
+    }
+
+    /// Treat a missing/zero listen port as the WireGuard default.
+    #[must_use]
+    pub fn wireguard_listen_port(&self) -> u16 {
+        if self.network_config.wireguard_listen_port == 0 {
+            DEFAULT_WIREGUARD_LISTEN_PORT
+        } else {
+            self.network_config.wireguard_listen_port
+        }
     }
 
     pub fn set_services_config(&mut self, config: ServicesConfig) {
@@ -408,12 +408,17 @@ impl AppState {
             .with_bluetooth_or(self.bluetooth_enabled)
     }
 
-    /// GTK empty-apply check (profile + bundles + packages) plus non-default hardware (C3/N5).
+    /// True when there is nothing to write to the managed Nix tree.
     #[must_use]
     pub fn apply_is_empty(&self) -> bool {
         self.selected_profile.is_none()
             && self.enabled_bundles.is_empty()
             && self.custom_packages.is_empty()
+            && self.hostname.as_ref().is_none_or(|h| h.is_empty())
+            && self.dns_servers.is_empty()
+            && self.user_groups.is_empty()
+            && !self.network_config.has_settings()
+            && !self.services_config.has_settings()
             && !self.effective_hardware().has_settings()
     }
 
@@ -545,10 +550,22 @@ impl AppState {
             if self.network_config.tailscale_enabled {
                 net_parts.push("Tailscale".to_string());
             }
+            if self.network_config.wireguard_enabled {
+                net_parts.push(format!(
+                    "WireGuard on port {}",
+                    self.wireguard_listen_port()
+                ));
+            }
             if !self.network_config.allowed_tcp_ports.is_empty() {
                 net_parts.push(format!(
                     "TCP ports: {:?}",
                     self.network_config.allowed_tcp_ports
+                ));
+            }
+            if !self.network_config.allowed_udp_ports.is_empty() {
+                net_parts.push(format!(
+                    "UDP ports: {:?}",
+                    self.network_config.allowed_udp_ports
                 ));
             }
             if !net_parts.is_empty() {
@@ -569,15 +586,74 @@ impl AppState {
     }
 }
 
-/// Comma-separated extra TCP ports (excludes the preset chips).
+/// Comma-separated extra ports (excludes `presets`).
 #[must_use]
-pub fn custom_tcp_input_from_ports(ports: &[u16]) -> String {
+pub fn custom_port_input_from_ports(ports: &[u16], presets: &[u16]) -> String {
     ports
         .iter()
-        .filter(|port| !PRESET_TCP_PORTS.contains(port))
+        .filter(|port| !presets.contains(port))
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Comma-separated extra TCP ports (excludes the preset chips).
+#[must_use]
+pub fn custom_tcp_input_from_ports(ports: &[u16]) -> String {
+    custom_port_input_from_ports(ports, &PRESET_TCP_PORTS)
+}
+
+/// Comma-separated extra UDP ports (excludes the preset chips).
+#[must_use]
+pub fn custom_udp_input_from_ports(ports: &[u16]) -> String {
+    custom_port_input_from_ports(ports, &PRESET_UDP_PORTS)
+}
+
+fn parse_custom_ports(raw: &str, proto: &str) -> Result<Vec<u16>, String> {
+    let mut extras = Vec::new();
+    for part in raw.split([',', ' ', '\n']) {
+        let s = part.trim();
+        if s.is_empty() {
+            continue;
+        }
+        let port: u16 = s
+            .parse()
+            .map_err(|_| crate::fl!("error-port-invalid", proto = proto, port = s))?;
+        if port == 0 {
+            return Err(crate::fl!("error-port-invalid", proto = proto, port = s));
+        }
+        if !extras.contains(&port) {
+            extras.push(port);
+        }
+    }
+    Ok(extras)
+}
+
+fn merge_custom_ports(existing: &[u16], extras: Vec<u16>, presets: &[u16]) -> Vec<u16> {
+    let mut ports: Vec<u16> = existing
+        .iter()
+        .copied()
+        .filter(|port| presets.contains(port))
+        .collect();
+    for port in extras {
+        if presets.contains(&port) {
+            continue;
+        }
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+    ports
+}
+
+fn set_listed_port(ports: &mut Vec<u16>, port: u16, enabled: bool) {
+    if enabled {
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+    } else {
+        ports.retain(|p| *p != port);
+    }
 }
 
 fn is_ipv4(s: &str) -> bool {
@@ -639,10 +715,31 @@ mod tests {
     fn apply_is_empty_counts_non_default_hardware() {
         let mut state = AppState::new();
         assert!(state.apply_is_empty());
-        state.network_config.ssh_enabled = true;
-        assert!(state.apply_is_empty());
         state.set_bluetooth_enabled(true);
         assert!(!state.apply_is_empty());
+    }
+
+    #[test]
+    fn apply_is_empty_counts_network_services_hostname_dns_and_groups() {
+        let mut network = AppState::new();
+        network.network_config.ssh_enabled = true;
+        assert!(!network.apply_is_empty());
+
+        let mut services = AppState::new();
+        services.services_config.printing = true;
+        assert!(!services.apply_is_empty());
+
+        let mut hostname = AppState::new();
+        hostname.set_hostname("desk");
+        assert!(!hostname.apply_is_empty());
+
+        let mut dns = AppState::new();
+        dns.set_dns_servers(vec!["1.1.1.1".into()]);
+        assert!(!dns.apply_is_empty());
+
+        let mut groups = AppState::new();
+        groups.add_user_group("wheel");
+        assert!(!groups.apply_is_empty());
     }
 
     #[test]

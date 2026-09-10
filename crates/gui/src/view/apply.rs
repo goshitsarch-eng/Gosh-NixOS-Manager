@@ -2,6 +2,7 @@
 
 use crate::app::{AppModel, Busy};
 use crate::message::Message;
+use common::ipc::RebuildType;
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{self, settings};
 use cosmic::{theme, Element};
@@ -36,6 +37,19 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
     if buttons_enabled {
         dry_run = dry_run.on_press(Message::RequestDryRun);
     }
+
+    let rebuild_options = vec![
+        crate::fl!("rebuild-switch"),
+        crate::fl!("rebuild-boot"),
+        crate::fl!("rebuild-test"),
+        crate::fl!("rebuild-build"),
+    ];
+    let rebuild_idx = match app.rebuild_type {
+        RebuildType::Boot => 1,
+        RebuildType::Test => 2,
+        RebuildType::Build => 3,
+        RebuildType::Switch | RebuildType::DryBuild => 0,
+    };
 
     let mut actions = widget::row::with_capacity(4)
         .spacing(spacing.space_s)
@@ -79,6 +93,29 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
             .into(),
         widget::button::standard(crate::fl!("refresh-preview"))
             .on_press(Message::RefreshPreview)
+            .into(),
+        settings::section()
+            .header(super::section_header(
+                crate::fl!("apply-rebuild-type"),
+                Some(crate::fl!("apply-rebuild-type-desc")),
+            ))
+            .add(
+                settings::item::builder(crate::fl!("apply-rebuild-type"))
+                    .description(crate::fl!("apply-rebuild-type-desc"))
+                    .icon(super::icon("system-run-symbolic"))
+                    .control(widget::dropdown(
+                        rebuild_options,
+                        Some(rebuild_idx),
+                        |index| {
+                            Message::SetRebuildType(match index {
+                                1 => RebuildType::Boot,
+                                2 => RebuildType::Test,
+                                3 => RebuildType::Build,
+                                _ => RebuildType::Switch,
+                            })
+                        },
+                    )),
+            )
             .into(),
         actions.into(),
         settings::section()
