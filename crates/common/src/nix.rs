@@ -965,6 +965,9 @@ fn attr_needs_unfree(attr: &str) -> bool {
             | "slack"
             | "zoom-us"
             | "virtualbox"
+            | "vscode"
+            | "obsidian"
+            | "onlyoffice-desktopeditors"
     )
 }
 

@@ -583,16 +583,12 @@ fn reconstruct_state_from_nix() -> AppState {
 
     if let Ok(content) = fs::read_to_string(paths::NETWORK_NIX) {
         state.network_config = parse_network_snippet(&content);
-        if content.contains("networking.wireguard") {
-            tracing::info!(
-                "network.nix contains networking.wireguard; AppState has no wireguard field"
-            );
-        }
         tracing::info!(
-            "Reconstructed network (firewall={}, ssh={}, tailscale={})",
+            "Reconstructed network (firewall={}, ssh={}, tailscale={}, wireguard={})",
             state.network_config.firewall_enabled,
             state.network_config.ssh_enabled,
-            state.network_config.tailscale_enabled
+            state.network_config.tailscale_enabled,
+            state.network_config.wireguard_enabled
         );
     }
 
@@ -976,6 +972,12 @@ fn parse_network_snippet(content: &str) -> NetworkConfig {
             }
             if lhs.ends_with("services.tailscale.enable") && val {
                 cfg.tailscale_enabled = true;
+            }
+            if (lhs.ends_with("networking.wireguard.enable")
+                || (context == "networking.wireguard" && lhs == "enable"))
+                && val
+            {
+                cfg.wireguard_enabled = true;
             }
         }
     }
@@ -1681,7 +1683,7 @@ mod tests {
         assert_eq!(parsed.ssh_root_login, "prohibit-password");
         assert!(parsed.fail2ban_enabled);
         assert!(parsed.tailscale_enabled);
-        assert!(nix.contains("networking.wireguard"));
+        assert!(parsed.wireguard_enabled);
     }
 
     #[test]
