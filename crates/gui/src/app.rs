@@ -130,6 +130,8 @@ pub struct AppModel {
     pub(crate) helper_missing: bool,
     pub(crate) state_load_warning: Option<String>,
     pub(crate) package_input: String,
+    pub(crate) dns_input: String,
+    pub(crate) custom_tcp_input: String,
     pub(crate) profile_preview: String,
     pub(crate) apply_preview: String,
     pub(crate) apply_log: String,
@@ -199,6 +201,23 @@ impl AppModel {
                 break;
             }
         }
+    }
+
+    pub(crate) fn startup_intents(&mut self) -> Vec<Intent> {
+        let mut intents = vec![
+            Intent::SetWindowTitle(self.window_title()),
+            Intent::ApplyTheme,
+            Intent::DetectSystem,
+            Intent::DetectGpu,
+        ];
+        if !self.flags.skip_privileged_on_init && self.flags.spawn.helper_available {
+            self.busy = Busy::LoadingState;
+            intents.push(Intent::SpawnHelper {
+                op: HelperOp::ReadState,
+                request: HelperRequest::ReadState,
+            });
+        }
+        intents
     }
 }
 
@@ -296,6 +315,8 @@ impl Application for AppModel {
             helper_missing,
             state_load_warning: None,
             package_input: String::new(),
+            dns_input: String::new(),
+            custom_tcp_input: String::new(),
             profile_preview: String::new(),
             apply_preview: String::new(),
             apply_log: String::new(),
@@ -318,18 +339,7 @@ impl Application for AppModel {
         }
         app.refresh_banner();
 
-        let mut intents = vec![
-            Intent::SetWindowTitle(app.window_title()),
-            Intent::ApplyTheme,
-        ];
-        if !app.flags.skip_privileged_on_init && app.flags.spawn.helper_available {
-            app.busy = Busy::LoadingState;
-            intents.push(Intent::SpawnHelper {
-                op: HelperOp::ReadState,
-                request: HelperRequest::ReadState,
-            });
-        }
-
+        let intents = app.startup_intents();
         let task = app.intents_to_task(intents);
         (app, task)
     }
@@ -520,9 +530,11 @@ impl AppModel {
                     }));
                 }
                 Intent::DetectGpu => {
-                    tasks.push(cosmic::task::future(async {
-                        Message::GpuDetected(crate::integration::detect_gpu())
-                    }));
+                    if !self.flags.skip_host_probes {
+                        tasks.push(cosmic::task::future(async {
+                            Message::GpuDetected(crate::integration::detect_gpu())
+                        }));
+                    }
                 }
                 Intent::LocalPreview => {
                     let preview = generate_local_preview(self);

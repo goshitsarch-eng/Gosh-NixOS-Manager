@@ -1,9 +1,10 @@
 //! System detection and integration checking (unprivileged, no GTK).
 
+use crate::helper::spawn::in_flatpak;
 use common::{ConfigMode, IntegrationStatus, SystemInfo};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 /// Detect system configuration and integration status.
 #[must_use]
@@ -20,28 +21,27 @@ pub fn detect_system() -> SystemInfo {
 }
 
 fn is_nixos() -> bool {
-    Path::new("/etc/NIXOS").exists()
+    host_path_exists("/etc/NIXOS")
 }
 
 fn get_nixos_version() -> Option<String> {
-    fs::read_to_string("/etc/os-release")
-        .ok()
-        .and_then(|content| {
-            content
-                .lines()
-                .find(|l| l.starts_with("VERSION_ID="))
-                .map(|l| {
-                    l.trim_start_matches("VERSION_ID=")
-                        .trim_matches('"')
-                        .to_string()
-                })
-        })
+    // Read the host os-release via spawn inside Flatpak; do not bind-mount it.
+    host_read_to_string("/etc/os-release").and_then(|content| {
+        content
+            .lines()
+            .find(|l| l.starts_with("VERSION_ID="))
+            .map(|l| {
+                l.trim_start_matches("VERSION_ID=")
+                    .trim_matches('"')
+                    .to_string()
+            })
+    })
 }
 
 fn detect_config_mode() -> ConfigMode {
-    if Path::new("/etc/nixos/flake.nix").exists() {
+    if host_path_exists("/etc/nixos/flake.nix") {
         ConfigMode::Flake
-    } else if Path::new("/etc/nixos/configuration.nix").exists() {
+    } else if host_path_exists("/etc/nixos/configuration.nix") {
         ConfigMode::Classic
     } else {
         ConfigMode::Unknown
@@ -51,23 +51,22 @@ fn detect_config_mode() -> ConfigMode {
 fn find_config_path() -> Option<std::path::PathBuf> {
     let candidates = ["/etc/nixos/flake.nix", "/etc/nixos/configuration.nix"];
     for path in candidates {
-        let p = Path::new(path);
-        if p.exists() {
-            return Some(p.to_path_buf());
+        if host_path_exists(path) {
+            return Some(Path::new(path).to_path_buf());
         }
     }
     None
 }
 
 fn detect_integration() -> IntegrationStatus {
-    if let Ok(content) = fs::read_to_string("/etc/nixos/configuration.nix") {
+    if let Some(content) = host_read_to_string("/etc/nixos/configuration.nix") {
         if content.contains("nixos-toolkit") || content.contains("./nixos-toolkit") {
             return IntegrationStatus::Integrated;
         }
     }
 
-    if Path::new("/etc/nixos/nixos-toolkit/state/selected.nix").exists() {
-        if let Ok(content) = fs::read_to_string("/etc/nixos/configuration.nix") {
+    if host_path_exists("/etc/nixos/nixos-toolkit/state/selected.nix") {
+        if let Some(content) = host_read_to_string("/etc/nixos/configuration.nix") {
             if content.contains("nixos-toolkit") {
                 return IntegrationStatus::Integrated;
             }
@@ -75,13 +74,13 @@ fn detect_integration() -> IntegrationStatus {
         return IntegrationStatus::NotIntegrated;
     }
 
-    if let Ok(content) = fs::read_to_string("/etc/nixos/flake.nix") {
+    if let Some(content) = host_read_to_string("/etc/nixos/flake.nix") {
         if content.contains("nixos-toolkit") {
             return IntegrationStatus::Integrated;
         }
     }
 
-    if Path::new("/etc/nixos/nixos-toolkit").exists() {
+    if host_path_exists("/etc/nixos/nixos-toolkit") {
         return IntegrationStatus::NotIntegrated;
     }
 
@@ -91,18 +90,19 @@ fn detect_integration() -> IntegrationStatus {
 /// Current hostname from `/etc/hostname` or the `hostname` command.
 #[must_use]
 pub fn get_hostname() -> Option<String> {
-    if let Ok(hostname) = fs::read_to_string("/etc/hostname") {
+    if let Some(hostname) = host_read_to_string("/etc/hostname") {
         let hostname = hostname.trim().to_string();
         if !hostname.is_empty() {
             return Some(hostname);
         }
     }
 
-    Command::new("hostname").output().ok().and_then(|output| {
+    host_command_output(&["hostname"]).and_then(|output| {
         if output.status.success() {
             String::from_utf8(output.stdout)
                 .ok()
                 .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
         } else {
             None
         }
@@ -111,6 +111,51 @@ pub fn get_hostname() -> Option<String> {
 
 fn get_current_desktop() -> Option<String> {
     std::env::var("XDG_CURRENT_DESKTOP").ok()
+}
+
+/// True when `path` exists on the host (via `flatpak-spawn --host` in a sandbox).
+#[must_use]
+pub(crate) fn host_path_exists(path: &str) -> bool {
+    if in_flatpak() {
+        Command::new("flatpak-spawn")
+            .args(["--host", "--", "test", "-e", path])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    } else {
+        Path::new(path).exists()
+    }
+}
+
+/// Read a host file as UTF-8 (via `flatpak-spawn --host -- cat` in a sandbox).
+#[must_use]
+pub(crate) fn host_read_to_string(path: &str) -> Option<String> {
+    if in_flatpak() {
+        let output = Command::new("flatpak-spawn")
+            .args(["--host", "--", "cat", path])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8(output.stdout).ok()
+    } else {
+        fs::read_to_string(path).ok()
+    }
+}
+
+fn host_command_output(args: &[&str]) -> Option<Output> {
+    if in_flatpak() {
+        Command::new("flatpak-spawn")
+            .arg("--host")
+            .arg("--")
+            .args(args)
+            .output()
+            .ok()
+    } else {
+        let (program, rest) = args.split_first()?;
+        Command::new(program).args(rest).output().ok()
+    }
 }
 
 /// Generate integration snippet for classic configuration.
@@ -173,33 +218,93 @@ pub fn can_write_managed_dir() -> bool {
     }
 }
 
-/// Detect GPU via `lspci`. Falls back to a placeholder when unavailable (Flatpak parity).
+fn lspci_command() -> Command {
+    if in_flatpak() {
+        let mut cmd = Command::new("flatpak-spawn");
+        cmd.args(["--host", "--", "lspci"]);
+        cmd
+    } else {
+        Command::new("lspci")
+    }
+}
+
+/// Parse `lspci` stdout. NVIDIA wins over other VGA/3D/display devices.
 #[must_use]
-pub fn detect_gpu() -> String {
-    let output = Command::new("lspci").output().ok();
-    if let Some(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let lower = line.to_lowercase();
-            if lower.contains("vga") || lower.contains("3d") || lower.contains("display") {
-                if lower.contains("nvidia") {
-                    return format!(
-                        "NVIDIA: {}",
-                        line.split(':').next_back().unwrap_or("Unknown").trim()
-                    );
-                } else if lower.contains("amd") || lower.contains("radeon") {
-                    return format!(
-                        "AMD: {}",
-                        line.split(':').next_back().unwrap_or("Unknown").trim()
-                    );
-                } else if lower.contains("intel") {
-                    return format!(
-                        "Intel: {}",
-                        line.split(':').next_back().unwrap_or("Unknown").trim()
-                    );
-                }
-            }
+pub(crate) fn gpu_from_lspci(stdout: &str) -> String {
+    let mut fallback = None;
+    for line in stdout.lines() {
+        let lower = line.to_lowercase();
+        if !(lower.contains("vga") || lower.contains("3d") || lower.contains("display")) {
+            continue;
+        }
+        let name = line.split(':').next_back().unwrap_or("Unknown").trim();
+        if lower.contains("nvidia") {
+            return format!("NVIDIA: {name}");
+        }
+        if fallback.is_some() {
+            continue;
+        }
+        if lower.contains("amd") || lower.contains("radeon") {
+            fallback = Some(format!("AMD: {name}"));
+        } else if lower.contains("intel") {
+            fallback = Some(format!("Intel: {name}"));
         }
     }
-    "Unknown GPU (lspci not available)".to_string()
+    fallback.unwrap_or_else(|| "Unknown GPU (lspci not available)".to_string())
+}
+
+/// Detect GPU via `lspci`. Host-spawns inside Flatpak.
+#[must_use]
+pub fn detect_gpu() -> String {
+    match lspci_command().output() {
+        Ok(output) if output.status.success() => {
+            gpu_from_lspci(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => "Unknown GPU (lspci not available)".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_path_helpers_use_local_fs_outside_flatpak() {
+        if in_flatpak() {
+            return;
+        }
+        let path = std::env::temp_dir().join(format!(
+            "nixos-toolkit-host-read-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "toolkit-host-probe\n").expect("write temp host probe file");
+        let path_str = path.to_str().expect("utf-8 temp path");
+        assert!(host_path_exists(path_str));
+        assert_eq!(
+            host_read_to_string(path_str).as_deref(),
+            Some("toolkit-host-probe\n")
+        );
+        assert!(!host_path_exists("/no/such/nixos-toolkit-host-path"));
+        assert!(host_read_to_string("/no/such/nixos-toolkit-host-path").is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn gpu_from_lspci_prefers_nvidia_on_hybrid() {
+        let sample = "\
+00:02.0 VGA compatible controller: Intel Corporation Arrow Lake-H [Intel Graphics]
+01:00.0 VGA compatible controller: NVIDIA Corporation GB205M [GeForce RTX 5070 Ti Mobile] (rev a1)
+";
+        let gpu = gpu_from_lspci(sample);
+        assert!(gpu.to_ascii_lowercase().contains("nvidia"));
+        assert!(gpu.contains("GeForce RTX 5070"));
+    }
+
+    #[test]
+    fn gpu_from_lspci_unknown_without_vga() {
+        assert_eq!(
+            gpu_from_lspci("00:1f.3 Audio device: Intel Corporation\n"),
+            "Unknown GPU (lspci not available)"
+        );
+    }
 }

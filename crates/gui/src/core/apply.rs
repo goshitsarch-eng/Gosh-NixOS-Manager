@@ -49,7 +49,7 @@ impl AppModel {
             }
             Message::LaunchUrl(url) => vec![Intent::OpenUrl(url)],
             Message::Quit => vec![Intent::Exit],
-            Message::RefreshSystem => vec![Intent::DetectSystem],
+            Message::RefreshSystem => vec![Intent::DetectSystem, Intent::DetectGpu],
             Message::SystemDetected(info) => {
                 self.system_info = info;
                 self.refresh_banner();
@@ -236,6 +236,7 @@ impl AppModel {
                 } else {
                     self.field_errors.dns = None;
                 }
+                self.dns_input = raw;
                 Vec::new()
             }
             Message::UsernameChanged(username) => {
@@ -323,6 +324,7 @@ impl AppModel {
                 if let Err(err) = self.state.parse_and_add_tcp_ports(&raw) {
                     tracing::debug!(err, "invalid custom TCP ports");
                 }
+                self.custom_tcp_input = raw;
                 Vec::new()
             }
             Message::SetSshEnabled(enabled) => {
@@ -677,6 +679,7 @@ impl AppModel {
             Page::Apply => intents.push(Intent::LocalPreview),
             Page::Generations => intents.extend(self.load_generations_intents()),
             Page::Maintenance => intents.extend(self.load_disk_usage_intents()),
+            Page::Hardware if self.gpu_vendor.is_none() => intents.push(Intent::DetectGpu),
             _ => {}
         }
         intents
@@ -1391,7 +1394,7 @@ mod tests {
     #[test]
     fn nvidia_gpu_apply_defaults_unwritten_driver_to_stable() {
         let mut app = test_app();
-        app.gpu_vendor = Some("NVIDIA GeForce RTX 3060".into());
+        app.apply(Message::GpuDetected("NVIDIA GeForce RTX 3060".into()));
         assert!(app.state.hardware_config.nvidia_driver.is_none());
         assert_eq!(app.hardware_for_nix().nvidia_driver, Some(0));
         assert!(app.hardware_for_nix().nvidia_modesetting);
@@ -1412,7 +1415,7 @@ mod tests {
     #[test]
     fn nvidia_gpu_apply_keeps_explicit_driver() {
         let mut app = test_app();
-        app.gpu_vendor = Some("nvidia".into());
+        app.apply(Message::GpuDetected("nvidia".into()));
         app.state.hardware_config.nvidia_driver = Some(2);
         assert_eq!(app.hardware_for_nix().nvidia_driver, Some(2));
         let intents = app.apply(Message::RequestDryRun);
@@ -1430,7 +1433,7 @@ mod tests {
     #[test]
     fn non_nvidia_gpu_apply_leaves_driver_none() {
         let mut app = test_app();
-        app.gpu_vendor = Some("Intel Corporation".into());
+        app.apply(Message::GpuDetected("Intel Corporation".into()));
         assert!(app.hardware_for_nix().nvidia_driver.is_none());
         let intents = app.apply(Message::RequestDryRun);
         match spawn_helper(&intents) {
@@ -1740,5 +1743,53 @@ mod tests {
             intent,
             Intent::ShowToast { text, .. } if text == "Maintenance completed"
         )));
+    }
+
+    #[test]
+    fn init_queues_detect_system_and_gpu_without_helper() {
+        let mut app = test_app();
+        let intents = app.startup_intents();
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::DetectSystem)));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::DetectGpu)));
+        assert!(spawn_helper(&intents).is_none());
+    }
+
+    #[test]
+    fn gpu_detected_populates_vendor() {
+        let mut app = test_app();
+        assert!(app.gpu_vendor.is_none());
+        app.apply(Message::GpuDetected("NVIDIA: GeForce RTX 3060".into()));
+        assert_eq!(app.gpu_vendor.as_deref(), Some("NVIDIA: GeForce RTX 3060"));
+    }
+
+    #[test]
+    fn refresh_system_detects_system_and_gpu_without_helper() {
+        let mut app = test_app();
+        let intents = app.apply(Message::RefreshSystem);
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::DetectSystem)));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::DetectGpu)));
+        assert!(spawn_helper(&intents).is_none());
+    }
+
+    #[test]
+    fn nav_hardware_queues_detect_gpu_once() {
+        let mut app = test_app();
+        let intents = app.apply(Message::NavSelect(Page::Hardware));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::DetectGpu)));
+        app.apply(Message::GpuDetected("Intel: UHD".into()));
+        let intents = app.apply(Message::NavSelect(Page::Hardware));
+        assert!(!intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::DetectGpu)));
     }
 }
