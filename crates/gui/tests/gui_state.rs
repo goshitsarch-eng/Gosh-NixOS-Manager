@@ -3,16 +3,12 @@
 //! Exhaustive `Message` match lives in `crates/gui/src/core/apply.rs` and is not
 //! duplicated here. `AppModel::apply` is exercised in that module because
 //! `dialog` is `pub(crate)` and there is no display-free `AppModel::test_model()`.
+//!
+//! Empty-apply is profile + bundles + custom packages, plus non-default
+//! hardware after C3/N5. Network/services still do not count. PackagesOnly vs
+//! Normal is not distinct.
 
 use nixos_toolkit_gui::{AppState, Dialog, Flags};
-
-/// Current architecture empty-apply predicate (profile + bundles + custom packages).
-/// Network/services/hardware do not count; PackagesOnly vs Normal is not distinct.
-fn apply_is_empty(state: &AppState) -> bool {
-    state.selected_profile.is_none()
-        && state.enabled_bundles.is_empty()
-        && state.custom_packages.is_empty()
-}
 
 #[test]
 fn flags_for_tests_skip_privileged_init() {
@@ -24,7 +20,7 @@ fn flags_for_tests_skip_privileged_init() {
 
 #[test]
 fn empty_state_is_empty_apply() {
-    assert!(apply_is_empty(&AppState::new()));
+    assert!(AppState::new().apply_is_empty());
 }
 
 #[test]
@@ -32,23 +28,33 @@ fn network_or_services_only_still_count_as_empty_apply() {
     let mut state = AppState::new();
     state.network_config.ssh_enabled = true;
     state.services_config.printing = true;
-    state.set_bluetooth_enabled(true);
-    assert!(apply_is_empty(&state));
+    assert!(state.apply_is_empty());
+}
+
+#[test]
+fn non_default_hardware_is_not_empty_apply() {
+    let mut with_nvidia = AppState::new();
+    with_nvidia.hardware_config.nvidia_driver = Some(0);
+    assert!(!with_nvidia.apply_is_empty());
+
+    let mut with_bluetooth = AppState::new();
+    with_bluetooth.set_bluetooth_enabled(true);
+    assert!(!with_bluetooth.apply_is_empty());
 }
 
 #[test]
 fn profile_bundles_or_packages_are_not_empty_apply() {
     let mut with_profile = AppState::new();
     with_profile.select_profile("gnome");
-    assert!(!apply_is_empty(&with_profile));
+    assert!(!with_profile.apply_is_empty());
 
     let mut with_bundle = AppState::new();
     with_bundle.enable_bundle("devtools");
-    assert!(!apply_is_empty(&with_bundle));
+    assert!(!with_bundle.apply_is_empty());
 
     let mut with_pkg = AppState::new();
     with_pkg.add_custom_package("htop");
-    assert!(!apply_is_empty(&with_pkg));
+    assert!(!with_pkg.apply_is_empty());
 }
 
 #[test]
@@ -57,8 +63,8 @@ fn packages_only_is_not_distinct_from_normal_in_current_bool() {
     packages_only.add_custom_package("htop");
     let mut normal = AppState::new();
     normal.select_profile("gnome");
-    assert_eq!(apply_is_empty(&packages_only), apply_is_empty(&normal));
-    assert!(!apply_is_empty(&packages_only));
+    assert_eq!(packages_only.apply_is_empty(), normal.apply_is_empty());
+    assert!(!packages_only.apply_is_empty());
 }
 
 #[test]
