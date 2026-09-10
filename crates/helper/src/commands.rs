@@ -4,7 +4,9 @@ use crate::nix_gen;
 use crate::rebuild;
 use common::actions::{default_bundles, default_profiles};
 use common::config::{paths, ConfigMode, IntegrationStatus, SystemInfo};
-use common::ipc::{AppState, Generation, HelperResponse, LogLevel, NetworkConfig, RebuildType, ServicesConfig};
+use common::ipc::{
+    AppState, Generation, HelperResponse, LogLevel, NetworkConfig, RebuildType, ServicesConfig,
+};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -21,11 +23,10 @@ fn send_log(level: LogLevel, message: String) {
 
 /// Check if we have the required permissions
 pub fn check_permissions() -> HelperResponse {
-    let can_read_config = Path::new("/etc/nixos").exists()
-        && fs::read_dir("/etc/nixos").is_ok();
+    let can_read_config = Path::new("/etc/nixos").exists() && fs::read_dir("/etc/nixos").is_ok();
 
-    let can_write_managed = check_write_permission(paths::MANAGED_DIR)
-        || check_write_permission("/etc/nixos");
+    let can_write_managed =
+        check_write_permission(paths::MANAGED_DIR) || check_write_permission("/etc/nixos");
 
     let can_run_rebuild = which("nixos-rebuild").is_some();
 
@@ -41,7 +42,6 @@ fn check_write_permission(path: &str) -> bool {
     if p.exists() {
         // Try to open for writing
         fs::OpenOptions::new()
-            .write(true)
             .append(true)
             .open(p.join(".write_test"))
             .map(|_| {
@@ -84,7 +84,11 @@ pub fn get_system_info() -> HelperResponse {
             content
                 .lines()
                 .find(|l| l.starts_with("VERSION_ID="))
-                .map(|l| l.trim_start_matches("VERSION_ID=").trim_matches('"').to_string())
+                .map(|l| {
+                    l.trim_start_matches("VERSION_ID=")
+                        .trim_matches('"')
+                        .to_string()
+                })
         });
 
     let config_mode = if Path::new("/etc/nixos/flake.nix").exists() {
@@ -198,6 +202,7 @@ pub fn validate(
 }
 
 /// Generate configuration files
+#[allow(clippy::too_many_arguments)]
 pub fn generate(
     selected_profile: Option<String>,
     enabled_bundles: Vec<String>,
@@ -220,8 +225,20 @@ pub fn generate(
     }
 
     // Generate files
-    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &dns_servers, &user_groups, username.as_deref(), bluetooth_enabled, &custom_packages, &network_config, &services_config, dry_run)
-    {
+    match nix_gen::generate_all_files(
+        &selected_profile,
+        &enabled_bundles,
+        &bundle_packages,
+        hostname.as_deref(),
+        &dns_servers,
+        &user_groups,
+        username.as_deref(),
+        bluetooth_enabled,
+        &custom_packages,
+        &network_config,
+        &services_config,
+        dry_run,
+    ) {
         Ok(files) => {
             // Generate preview
             let preview = files
@@ -240,6 +257,7 @@ pub fn generate(
 }
 
 /// Apply configuration
+#[allow(clippy::too_many_arguments)]
 pub fn apply(
     selected_profile: Option<String>,
     enabled_bundles: Vec<String>,
@@ -260,14 +278,29 @@ pub fn apply(
     }
 
     // Generate files (not dry run)
-    match nix_gen::generate_all_files(&selected_profile, &enabled_bundles, &bundle_packages, hostname.as_deref(), &dns_servers, &user_groups, username.as_deref(), bluetooth_enabled, &custom_packages, &network_config, &services_config, false)
-    {
+    match nix_gen::generate_all_files(
+        &selected_profile,
+        &enabled_bundles,
+        &bundle_packages,
+        hostname.as_deref(),
+        &dns_servers,
+        &user_groups,
+        username.as_deref(),
+        bluetooth_enabled,
+        &custom_packages,
+        &network_config,
+        &services_config,
+        false,
+    ) {
         Ok(files) => {
             // Log each file that was written
             for f in &files {
                 send_log(LogLevel::Info, format!("Wrote: {}", f.path));
             }
-            send_log(LogLevel::Info, format!("Generated {} configuration files", files.len()));
+            send_log(
+                LogLevel::Info,
+                format!("Generated {} configuration files", files.len()),
+            );
         }
         Err(e) => {
             return HelperResponse::Error {
@@ -384,7 +417,10 @@ fn reconstruct_state_from_nix() -> AppState {
             // Extract bundles from imports like "../bundles/gaming.nix"
             if line.contains("../bundles/") && line.ends_with(".nix") {
                 if let Some(bundle_part) = line.split("../bundles/").nth(1) {
-                    let bundle_id = bundle_part.trim_end_matches(".nix").trim_matches('"').trim();
+                    let bundle_id = bundle_part
+                        .trim_end_matches(".nix")
+                        .trim_matches('"')
+                        .trim();
                     if !bundle_id.is_empty() {
                         state.enabled_bundles.push(bundle_id.to_string());
                         tracing::info!("Reconstructed bundle: {}", bundle_id);
@@ -412,7 +448,11 @@ fn reconstruct_state_from_nix() -> AppState {
             }
 
             // Extract package names (skip comments and empty lines)
-            if in_packages_block && !line.is_empty() && !line.starts_with('#') && !line.starts_with('[') {
+            if in_packages_block
+                && !line.is_empty()
+                && !line.starts_with('#')
+                && !line.starts_with('[')
+            {
                 let pkg = line.trim_end_matches(';').trim();
                 if !pkg.is_empty() && pkg != "with pkgs;" {
                     state.custom_packages.push(pkg.to_string());
@@ -434,7 +474,10 @@ fn reconstruct_state_from_nix() -> AppState {
         }
     }
 
-    if state.selected_profile.is_some() || !state.enabled_bundles.is_empty() || !state.custom_packages.is_empty() {
+    if state.selected_profile.is_some()
+        || !state.enabled_bundles.is_empty()
+        || !state.custom_packages.is_empty()
+    {
         tracing::info!("Successfully reconstructed state from existing Nix files");
     }
 
@@ -503,7 +546,7 @@ pub fn list_generations() -> HelperResponse {
             }
 
             // Sort by generation number descending
-            generations.sort_by(|a, b| b.number.cmp(&a.number));
+            generations.sort_by_key(|a| std::cmp::Reverse(a.number));
 
             HelperResponse::Generations(generations)
         }
@@ -562,9 +605,10 @@ pub fn rollback_generation(generation: u32) -> HelperResponse {
     match switch_output {
         Ok(output) if output.status.success() => {
             // Activate the generation
-            let activate_output = Command::new("/nix/var/nix/profiles/system/bin/switch-to-configuration")
-                .arg("switch")
-                .output();
+            let activate_output =
+                Command::new("/nix/var/nix/profiles/system/bin/switch-to-configuration")
+                    .arg("switch")
+                    .output();
 
             match activate_output {
                 Ok(output) if output.status.success() => HelperResponse::Ok,
@@ -629,7 +673,10 @@ pub fn run_maintenance(command: String) -> HelperResponse {
     if !allowed_commands.contains(&command.as_str()) {
         return HelperResponse::Error {
             message: "Command not allowed".into(),
-            details: Some(format!("Only these commands are allowed: {:?}", allowed_commands)),
+            details: Some(format!(
+                "Only these commands are allowed: {:?}",
+                allowed_commands
+            )),
         };
     }
 
@@ -642,9 +689,7 @@ pub fn run_maintenance(command: String) -> HelperResponse {
         };
     }
 
-    let output = Command::new(parts[0])
-        .args(&parts[1..])
-        .output();
+    let output = Command::new(parts[0]).args(&parts[1..]).output();
 
     match output {
         Ok(output) => HelperResponse::MaintenanceOutput {
@@ -697,11 +742,15 @@ pub fn get_disk_usage() -> HelperResponse {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let err_msg = format!("nix-env failed: {}", stderr.trim());
-            error = error.map(|e| format!("{}; {}", e, err_msg)).or(Some(err_msg));
+            error = error
+                .map(|e| format!("{}; {}", e, err_msg))
+                .or(Some(err_msg));
         }
         Err(e) => {
             let err_msg = format!("Failed to run nix-env: {}", e);
-            error = error.map(|e| format!("{}; {}", e, err_msg)).or(Some(err_msg));
+            error = error
+                .map(|e| format!("{}; {}", e, err_msg))
+                .or(Some(err_msg));
         }
     }
 

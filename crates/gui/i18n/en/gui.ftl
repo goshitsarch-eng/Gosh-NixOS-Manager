@@ -1,0 +1,30 @@
+app-title = NixOS Toolkit
+view = View
+about = About
+quit = Quit
+refresh = Refresh
+repository = Repository
+
+nav-onboarding = Getting Started
+nav-profiles = Desktop Profiles
+nav-bundles = Software Bundles
+nav-packages = Custom Packages
+nav-system = System Settings
+nav-hardware = Hardware
+nav-network = Network
+nav-services = Services
+nav-generations = Generations
+nav-maintenance = Maintenance
+nav-apply = Apply Changes
+
+page-onboarding = Getting Started
+page-profiles = Desktop Profiles
+page-bundles = Software Bundles
+page-packages = Custom Packages
+page-system = System Settings
+page-hardware = Hardware
+page-network = Network
+page-services = Services
+page-generations = Generations
+page-maintenance = Maintenance
+page-apply = Apply Changes

@@ -96,7 +96,20 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             network_config,
             services_config,
             dry_run,
-        } => commands::generate(selected_profile, enabled_bundles, bundle_packages, hostname, dns_servers, user_groups, username, bluetooth_enabled, custom_packages, network_config, services_config, dry_run),
+        } => commands::generate(
+            selected_profile,
+            enabled_bundles,
+            bundle_packages,
+            hostname,
+            dns_servers,
+            user_groups,
+            username,
+            bluetooth_enabled,
+            custom_packages,
+            network_config,
+            services_config,
+            dry_run,
+        ),
         HelperRequest::Apply {
             selected_profile,
             enabled_bundles,
@@ -110,13 +123,30 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             network_config,
             services_config,
             rebuild_type,
-        } => commands::apply(selected_profile, enabled_bundles, bundle_packages, hostname, dns_servers, user_groups, username, bluetooth_enabled, custom_packages, network_config, services_config, rebuild_type),
+        } => commands::apply(
+            selected_profile,
+            enabled_bundles,
+            bundle_packages,
+            hostname,
+            dns_servers,
+            user_groups,
+            username,
+            bluetooth_enabled,
+            custom_packages,
+            network_config,
+            services_config,
+            rebuild_type,
+        ),
         HelperRequest::EnsureDirectories => commands::ensure_directories(),
         HelperRequest::ReadState => commands::read_state(),
         HelperRequest::WriteState { state } => commands::write_state(state),
         HelperRequest::ListGenerations => commands::list_generations(),
-        HelperRequest::RollbackGeneration { generation } => commands::rollback_generation(generation),
-        HelperRequest::DeleteGenerations { generations } => commands::delete_generations(generations),
+        HelperRequest::RollbackGeneration { generation } => {
+            commands::rollback_generation(generation)
+        }
+        HelperRequest::DeleteGenerations { generations } => {
+            commands::delete_generations(generations)
+        }
         HelperRequest::RunMaintenance { command } => commands::run_maintenance(command),
         HelperRequest::GetDiskUsage => commands::get_disk_usage(),
     }

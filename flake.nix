@@ -1,5 +1,5 @@
 {
-  description = "NixOS Toolkit - A GTK4/libadwaita GUI for declarative NixOS management";
+  description = "NixOS Toolkit - A libcosmic GUI for declarative NixOS management";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -29,61 +29,81 @@
           overlays = [ (import rust-overlay) ];
         };
 
-        # Rust toolchain - stable with rust-src for IDE support
+        # Rust toolchain - stable with rust-src for IDE support (rust-version 1.93+)
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
         };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        # Source filtering - include Rust files and templates
+        # Source filtering - include Rust files, templates, i18n, and data
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
             (craneLib.filterCargoSources path type)
             || (builtins.match ".*\\.nix$" path != null)
             || (builtins.match ".*/nix/templates/.*" path != null)
-            || (builtins.match ".*/data/.*" path != null);
+            || (builtins.match ".*/data/.*" path != null)
+            || (builtins.match ".*\\.ftl$" path != null)
+            || (builtins.match ".*/i18n/.*" path != null)
+            || (builtins.match ".*i18n.toml$" path != null);
         };
 
-        # Common build arguments
-        commonArgs = {
+        guiNativeInputs = with pkgs; [
+          pkg-config
+          makeWrapper
+        ];
+
+        guiBuildInputs = with pkgs; [
+          openssl
+          libxkbcommon
+          wayland
+          expat
+          fontconfig
+          freetype
+          mesa
+          libGL
+          xorg.libX11
+          xorg.libXcursor
+          xorg.libXrandr
+          xorg.libXi
+          xorg.libXext
+        ];
+
+        helperNativeInputs = with pkgs; [
+          pkg-config
+          makeWrapper
+        ];
+
+        helperBuildInputs = with pkgs; [
+          openssl
+        ];
+
+        guiArgs = {
           inherit src;
           strictDeps = true;
           pname = "nixos-toolkit";
           version = "0.1.0";
-
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-            wrapGAppsHook4
-            glib
-          ];
-
-          buildInputs = with pkgs; [
-            # GTK4 and libadwaita
-            gtk4
-            libadwaita
-            glib
-            gdk-pixbuf
-            graphene
-            pango
-            cairo
-
-            # GSettings
-            gsettings-desktop-schemas
-            dconf
-
-            # System
-            openssl
-
-            # Clipboard
-            wl-clipboard
-            xclip
-          ];
+          nativeBuildInputs = guiNativeInputs;
+          buildInputs = guiBuildInputs;
         };
 
-        # Build dependencies only (for caching)
-        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        helperArgs = {
+          inherit src;
+          strictDeps = true;
+          pname = "nixos-toolkit-helper";
+          version = "0.1.0";
+          nativeBuildInputs = helperNativeInputs;
+          buildInputs = helperBuildInputs;
+        };
+
+        guiCargoArtifacts = craneLib.buildDepsOnly (guiArgs // {
+          cargoExtraArgs = "-p gui";
+        });
+
+        helperCargoArtifacts = craneLib.buildDepsOnly (helperArgs // {
+          cargoExtraArgs = "-p helper";
+        });
 
         # Template files derivation
         templateFiles = pkgs.runCommand "nixos-toolkit-templates" { } ''
@@ -93,16 +113,13 @@
           cp -r ${./nix/templates/state}/* $out/share/nixos-toolkit/templates/state/ 2>/dev/null || true
         '';
 
-        # GUI application
-        nixos-toolkit-gui = craneLib.buildPackage (commonArgs // {
-          inherit cargoArtifacts;
+        # GUI application (libcosmic; no GTK / wrapGAppsHook4)
+        nixos-toolkit-gui = craneLib.buildPackage (guiArgs // {
+          cargoArtifacts = guiCargoArtifacts;
           pname = "nixos-toolkit";
           cargoExtraArgs = "-p gui";
 
           postInstall = ''
-            # Rename binary
-            mv $out/bin/gui $out/bin/nixos-toolkit
-
             # Install desktop file
             install -Dm644 ${./data/nixos-toolkit.desktop} $out/share/applications/nixos-toolkit.desktop || true
 
@@ -114,11 +131,9 @@
           '';
 
           preFixup = ''
-            gappsWrapperArgs+=(
-              --set NIXOS_TOOLKIT_TEMPLATES_DIR "$out/share/nixos-toolkit/templates"
+            wrapProgram $out/bin/nixos-toolkit \
+              --set NIXOS_TOOLKIT_TEMPLATES_DIR "$out/share/nixos-toolkit/templates" \
               --set NIXOS_TOOLKIT_HELPER "${nixos-toolkit-helper}/bin/nixos-toolkit-helper"
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.wl-clipboard pkgs.xclip ]}
-            )
           '';
 
           meta = with pkgs.lib; {
@@ -131,12 +146,10 @@
         });
 
         # Helper binary (privileged operations)
-        nixos-toolkit-helper = craneLib.buildPackage (commonArgs // {
-          inherit cargoArtifacts;
+        nixos-toolkit-helper = craneLib.buildPackage (helperArgs // {
+          cargoArtifacts = helperCargoArtifacts;
           pname = "nixos-toolkit-helper";
           cargoExtraArgs = "-p helper";
-
-          nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
           postInstall = ''
             # Install polkit policy
@@ -164,8 +177,8 @@
         checks = {
           inherit nixos-toolkit-gui nixos-toolkit-helper;
 
-          clippy = craneLib.cargoClippy (commonArgs // {
-            inherit cargoArtifacts;
+          clippy = craneLib.cargoClippy (guiArgs // {
+            cargoArtifacts = guiCargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
           });
 
@@ -204,29 +217,24 @@
           checks = self.checks.${system};
 
           packages = with pkgs; [
-            # Rust tools
             rust-analyzer
             cargo-watch
             cargo-edit
             cargo-expand
-
-            # GTK development
-            gtk4.dev
-            libadwaita.dev
-            gobject-introspection
-
-            # Nix tools
+            pkg-config
+            libxkbcommon
+            wayland
+            expat
+            fontconfig
+            freetype
+            mesa
             nil
             nixpkgs-fmt
-
-            # Debug
             gdb
           ];
 
           shellHook = ''
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
-            export GSETTINGS_SCHEMA_DIR="${pkgs.glib.getSchemaPath pkgs.gtk4}"
-            export GIO_EXTRA_MODULES="${pkgs.dconf.lib}/lib/gio/modules"
             export NIXOS_TOOLKIT_TEMPLATES_DIR="$PWD/nix/templates"
             echo "NixOS Toolkit Development Environment"
             echo "Run: cargo run -p gui"

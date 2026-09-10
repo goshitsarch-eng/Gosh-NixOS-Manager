@@ -1,11 +1,12 @@
-//! System detection and integration checking
+//! System detection and integration checking (unprivileged, no GTK).
 
 use common::{ConfigMode, IntegrationStatus, SystemInfo};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-/// Detect system configuration and integration status
+/// Detect system configuration and integration status.
+#[must_use]
 pub fn detect_system() -> SystemInfo {
     SystemInfo {
         is_nixos: is_nixos(),
@@ -18,12 +19,10 @@ pub fn detect_system() -> SystemInfo {
     }
 }
 
-/// Check if this is a NixOS system
 fn is_nixos() -> bool {
     Path::new("/etc/NIXOS").exists()
 }
 
-/// Get NixOS version from /etc/os-release
 fn get_nixos_version() -> Option<String> {
     fs::read_to_string("/etc/os-release")
         .ok()
@@ -31,11 +30,14 @@ fn get_nixos_version() -> Option<String> {
             content
                 .lines()
                 .find(|l| l.starts_with("VERSION_ID="))
-                .map(|l| l.trim_start_matches("VERSION_ID=").trim_matches('"').to_string())
+                .map(|l| {
+                    l.trim_start_matches("VERSION_ID=")
+                        .trim_matches('"')
+                        .to_string()
+                })
         })
 }
 
-/// Detect whether using classic or flake configuration
 fn detect_config_mode() -> ConfigMode {
     if Path::new("/etc/nixos/flake.nix").exists() {
         ConfigMode::Flake
@@ -46,52 +48,39 @@ fn detect_config_mode() -> ConfigMode {
     }
 }
 
-/// Find the main configuration file path
 fn find_config_path() -> Option<std::path::PathBuf> {
-    let candidates = [
-        "/etc/nixos/flake.nix",
-        "/etc/nixos/configuration.nix",
-    ];
-
+    let candidates = ["/etc/nixos/flake.nix", "/etc/nixos/configuration.nix"];
     for path in candidates {
         let p = Path::new(path);
         if p.exists() {
             return Some(p.to_path_buf());
         }
     }
-
     None
 }
 
-/// Check if the nixos-toolkit module is imported
 fn detect_integration() -> IntegrationStatus {
-    // Check classic configuration.nix
     if let Ok(content) = fs::read_to_string("/etc/nixos/configuration.nix") {
         if content.contains("nixos-toolkit") || content.contains("./nixos-toolkit") {
             return IntegrationStatus::Integrated;
         }
     }
 
-    // Check if the managed directory exists with selected.nix
     if Path::new("/etc/nixos/nixos-toolkit/state/selected.nix").exists() {
-        // Directory exists, but we need to verify the import
         if let Ok(content) = fs::read_to_string("/etc/nixos/configuration.nix") {
             if content.contains("nixos-toolkit") {
                 return IntegrationStatus::Integrated;
             }
         }
-        // Directory exists but import not found
         return IntegrationStatus::NotIntegrated;
     }
 
-    // Check for flake-based integration
     if let Ok(content) = fs::read_to_string("/etc/nixos/flake.nix") {
         if content.contains("nixos-toolkit") {
             return IntegrationStatus::Integrated;
         }
     }
 
-    // Check if our managed directory exists at all
     if Path::new("/etc/nixos/nixos-toolkit").exists() {
         return IntegrationStatus::NotIntegrated;
     }
@@ -99,9 +88,9 @@ fn detect_integration() -> IntegrationStatus {
     IntegrationStatus::NotIntegrated
 }
 
-/// Get the current hostname
-fn get_hostname() -> Option<String> {
-    // Try /etc/hostname first
+/// Current hostname from `/etc/hostname` or the `hostname` command.
+#[must_use]
+pub fn get_hostname() -> Option<String> {
     if let Ok(hostname) = fs::read_to_string("/etc/hostname") {
         let hostname = hostname.trim().to_string();
         if !hostname.is_empty() {
@@ -109,27 +98,23 @@ fn get_hostname() -> Option<String> {
         }
     }
 
-    // Fall back to hostname command
-    Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                String::from_utf8(output.stdout)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-            } else {
-                None
-            }
-        })
+    Command::new("hostname").output().ok().and_then(|output| {
+        if output.status.success() {
+            String::from_utf8(output.stdout)
+                .ok()
+                .map(|s| s.trim().to_string())
+        } else {
+            None
+        }
+    })
 }
 
-/// Get the current desktop environment
 fn get_current_desktop() -> Option<String> {
     std::env::var("XDG_CURRENT_DESKTOP").ok()
 }
 
-/// Generate integration snippet for classic configuration
+/// Generate integration snippet for classic configuration.
+#[must_use]
 pub fn classic_integration_snippet() -> String {
     r#"# Step 1: Create the toolkit directory (run once):
 sudo mkdir -p /etc/nixos/nixos-toolkit/state
@@ -148,10 +133,11 @@ EOF
 
 # Step 4: Rebuild your system:
 sudo nixos-rebuild switch"#
-    .to_string()
+        .to_string()
 }
 
-/// Generate integration snippet for flake configuration
+/// Generate integration snippet for flake configuration.
+#[must_use]
 pub fn flake_integration_snippet() -> String {
     r#"# Step 1: Create the toolkit directory (run once):
 sudo mkdir -p /etc/nixos/nixos-toolkit/state
@@ -169,21 +155,51 @@ EOF
 
 # Step 4: Rebuild your system:
 sudo nixos-rebuild switch --flake .#"#
-    .to_string()
+        .to_string()
 }
 
-/// Check if we can write to the managed directory
+/// Check if we can write to the managed directory.
+#[must_use]
 pub fn can_write_managed_dir() -> bool {
     let dir = Path::new("/etc/nixos/nixos-toolkit");
     if dir.exists() {
-        // Check if writable
         fs::metadata(dir)
             .map(|m| !m.permissions().readonly())
             .unwrap_or(false)
     } else {
-        // Check if parent is writable
         fs::metadata("/etc/nixos")
             .map(|m| !m.permissions().readonly())
             .unwrap_or(false)
     }
+}
+
+/// Detect GPU via `lspci`. Falls back to a placeholder when unavailable (Flatpak parity).
+#[must_use]
+pub fn detect_gpu() -> String {
+    let output = Command::new("lspci").output().ok();
+    if let Some(output) = output {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let lower = line.to_lowercase();
+            if lower.contains("vga") || lower.contains("3d") || lower.contains("display") {
+                if lower.contains("nvidia") {
+                    return format!(
+                        "NVIDIA: {}",
+                        line.split(':').next_back().unwrap_or("Unknown").trim()
+                    );
+                } else if lower.contains("amd") || lower.contains("radeon") {
+                    return format!(
+                        "AMD: {}",
+                        line.split(':').next_back().unwrap_or("Unknown").trim()
+                    );
+                } else if lower.contains("intel") {
+                    return format!(
+                        "Intel: {}",
+                        line.split(':').next_back().unwrap_or("Unknown").trim()
+                    );
+                }
+            }
+        }
+    }
+    "Unknown GPU (lspci not available)".to_string()
 }

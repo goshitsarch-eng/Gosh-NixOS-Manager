@@ -3,12 +3,17 @@
 use common::actions::{default_bundles, default_profiles};
 use common::config::paths;
 use common::ipc::{GeneratedFile, NetworkConfig, ServicesConfig};
-use common::nix::{generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix, generate_hostname_nix, generate_selected_nix_full, generate_services_nix, generate_user_groups_nix, read_template, NixGenOptions};
+use common::nix::{
+    generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix, generate_hostname_nix,
+    generate_selected_nix_full, generate_services_nix, generate_user_groups_nix, read_template,
+    NixGenOptions,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 /// Generate all configuration files
+#[allow(clippy::too_many_arguments)]
 pub fn generate_all_files(
     selected_profile: &Option<String>,
     enabled_bundles: &[String],
@@ -158,11 +163,12 @@ pub fn generate_all_files(
 
         // Get the packages to use for this bundle
         // If bundle_packages has an entry, use that (user customized); otherwise use all packages
-        let packages_to_use: Vec<String> = if let Some(custom_packages) = bundle_packages.get(&bundle.id) {
-            custom_packages.clone()
-        } else {
-            bundle.packages.iter().map(|p| p.id.clone()).collect()
-        };
+        let packages_to_use: Vec<String> =
+            if let Some(custom_packages) = bundle_packages.get(&bundle.id) {
+                custom_packages.clone()
+            } else {
+                bundle.packages.iter().map(|p| p.id.clone()).collect()
+            };
 
         // If user has customized packages, always generate a custom template
         // This ensures the generated Nix file reflects the user's package selection
@@ -214,12 +220,14 @@ pub fn generate_all_files(
         let mut network_content = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
 
         // Firewall configuration - generate directly
-        let tcp_str = network_config.allowed_tcp_ports
+        let tcp_str = network_config
+            .allowed_tcp_ports
             .iter()
             .map(|p| p.to_string())
             .collect::<Vec<_>>()
             .join(" ");
-        let udp_str = network_config.allowed_udp_ports
+        let udp_str = network_config
+            .allowed_udp_ports
             .iter()
             .map(|p| p.to_string())
             .collect::<Vec<_>>()
@@ -304,7 +312,10 @@ fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
     // Verify the write succeeded by reading back
     let written = fs::read_to_string(path)?;
     if written != content {
-        anyhow::bail!("Write verification failed for {}: content mismatch", path.display());
+        anyhow::bail!(
+            "Write verification failed for {}: content mismatch",
+            path.display()
+        );
     }
 
     tracing::info!("Wrote and verified {}", path.display());

@@ -146,7 +146,8 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
         if options.bundles.is_empty() {
             "None".to_string()
         } else {
-            options.bundles
+            options
+                .bundles
                 .iter()
                 .map(|b| b.name.as_str())
                 .collect::<Vec<_>>()
@@ -162,13 +163,21 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
         } else {
             options.user_groups.join(", ")
         },
-        if options.bluetooth_enabled { "Enabled" } else { "Disabled" },
+        if options.bluetooth_enabled {
+            "Enabled"
+        } else {
+            "Disabled"
+        },
         if options.custom_packages.is_empty() {
             "None".to_string()
         } else {
             options.custom_packages.join(", ")
         },
-        if options.network_config.has_settings() { "Configured" } else { "Default" },
+        if options.network_config.has_settings() {
+            "Configured"
+        } else {
+            "Default"
+        },
         if options.services_config.has_settings() {
             options.services_config.enabled_services().join(", ")
         } else {
@@ -363,14 +372,16 @@ pub fn generate_ssh_nix(
     );
 
     if fail2ban {
-        config.push_str(r#"
+        config.push_str(
+            r#"
   services.fail2ban = {
     enable = true;
     jails.sshd = {
       enabled = true;
     };
   };
-"#);
+"#,
+        );
     }
 
     config.push_str("}\n");
@@ -405,7 +416,8 @@ pub fn generate_hardware_nix(
 
     // Audio section
     if audio_pipewire {
-        sections.push(r#"  # PipeWire Audio
+        sections.push(
+            r#"  # PipeWire Audio
   services.pipewire = {
     enable = true;
     alsa.enable = true;
@@ -413,22 +425,28 @@ pub fn generate_hardware_nix(
     pulse.enable = true;
     jack.enable = true;
   };
-  security.rtkit.enable = true;"#.to_string());
+  security.rtkit.enable = true;"#
+                .to_string(),
+        );
     }
 
     // Bluetooth section
     if bluetooth_enabled {
-        sections.push(r#"  # Bluetooth
+        sections.push(
+            r#"  # Bluetooth
   hardware.bluetooth = {
     enable = true;
     powerOnBoot = true;
   };
-  services.blueman.enable = true;"#.to_string());
+  services.blueman.enable = true;"#
+                .to_string(),
+        );
     }
 
     // Power management
     if tlp_enabled {
-        sections.push(r#"  # TLP Power Management
+        sections.push(
+            r#"  # TLP Power Management
   services.tlp = {
     enable = true;
     settings = {
@@ -436,12 +454,17 @@ pub fn generate_hardware_nix(
       CPU_SCALING_GOVERNOR_ON_BAT = "powersave";
     };
   };
-  services.power-profiles-daemon.enable = false;"#.to_string());
+  services.power-profiles-daemon.enable = false;"#
+                .to_string(),
+        );
     }
 
     if thermald_enabled {
-        sections.push(r#"  # Thermal Management
-  services.thermald.enable = true;"#.to_string());
+        sections.push(
+            r#"  # Thermal Management
+  services.thermald.enable = true;"#
+                .to_string(),
+        );
     }
 
     format!(
@@ -464,67 +487,111 @@ pub fn generate_services_nix(services: &[&str]) -> String {
 
     for service in services {
         let section = match *service {
-            "printing" => r#"  # Printing
+            "printing" => {
+                r#"  # Printing
   services.printing.enable = true;
   services.avahi.enable = true;
-  services.avahi.nssmdns4 = true;"#,
-            "avahi" => r#"  # Avahi/mDNS
+  services.avahi.nssmdns4 = true;"#
+            }
+            "avahi" => {
+                r#"  # Avahi/mDNS
   services.avahi = {
     enable = true;
     nssmdns4 = true;
     publish.enable = true;
-  };"#,
-            "fwupd" => r#"  # Firmware Updates
-  services.fwupd.enable = true;"#,
-            "upower" => r#"  # UPower
-  services.upower.enable = true;"#,
-            "networkmanager" => r#"  # NetworkManager
-  networking.networkmanager.enable = true;"#,
-            "resolved" => r#"  # systemd-resolved
-  services.resolved.enable = true;"#,
-            "rustdesk" => r#"  # RustDesk Remote Desktop
+  };"#
+            }
+            "fwupd" => {
+                r#"  # Firmware Updates
+  services.fwupd.enable = true;"#
+            }
+            "upower" => {
+                r#"  # UPower
+  services.upower.enable = true;"#
+            }
+            "networkmanager" => {
+                r#"  # NetworkManager
+  networking.networkmanager.enable = true;"#
+            }
+            "resolved" => {
+                r#"  # systemd-resolved
+  services.resolved.enable = true;"#
+            }
+            "rustdesk" => {
+                r#"  # RustDesk Remote Desktop
   services.rustdesk-server.enable = true;
-  environment.systemPackages = with pkgs; [ rustdesk ];"#,
-            "syncthing" => r#"  # Syncthing
-  services.syncthing.enable = true;"#,
-            "locate" => r#"  # Locate Database
+  environment.systemPackages = with pkgs; [ rustdesk ];"#
+            }
+            "syncthing" => {
+                r#"  # Syncthing
+  services.syncthing.enable = true;"#
+            }
+            "locate" => {
+                r#"  # Locate Database
   services.locate = {
     enable = true;
     package = pkgs.plocate;
     localuser = null;
-  };"#,
-            "flatpak" => r#"  # Flatpak
+  };"#
+            }
+            "flatpak" => {
+                r#"  # Flatpak
   services.flatpak.enable = true;
-  xdg.portal.enable = true;"#,
-            "gnome_keyring" => r#"  # GNOME Keyring
-  services.gnome.gnome-keyring.enable = true;"#,
-            "gnome_tweaks" => r#"  # GNOME Tweaks
-  environment.systemPackages = with pkgs; [ gnome-tweaks ];"#,
-            "dconf" => r#"  # dconf
-  programs.dconf.enable = true;"#,
-            "docker" => r#"  # Docker
-  virtualisation.docker.enable = true;"#,
-            "libvirtd" => r#"  # libvirtd
+  xdg.portal.enable = true;"#
+            }
+            "gnome_keyring" => {
+                r#"  # GNOME Keyring
+  services.gnome.gnome-keyring.enable = true;"#
+            }
+            "gnome_tweaks" => {
+                r#"  # GNOME Tweaks
+  environment.systemPackages = with pkgs; [ gnome-tweaks ];"#
+            }
+            "dconf" => {
+                r#"  # dconf
+  programs.dconf.enable = true;"#
+            }
+            "docker" => {
+                r#"  # Docker
+  virtualisation.docker.enable = true;"#
+            }
+            "libvirtd" => {
+                r#"  # libvirtd
   virtualisation.libvirtd.enable = true;
-  programs.virt-manager.enable = true;"#,
-            "postgresql" => r#"  # PostgreSQL
-  services.postgresql.enable = true;"#,
-            "redis" => r#"  # Redis
-  services.redis.servers."".enable = true;"#,
-            "earlyoom" => r#"  # Early OOM
-  services.earlyoom.enable = true;"#,
-            "auto_upgrade" => r#"  # Auto Upgrade
-  system.autoUpgrade.enable = true;"#,
-            "auto_gc" => r#"  # Automatic Garbage Collection
+  programs.virt-manager.enable = true;"#
+            }
+            "postgresql" => {
+                r#"  # PostgreSQL
+  services.postgresql.enable = true;"#
+            }
+            "redis" => {
+                r#"  # Redis
+  services.redis.servers."".enable = true;"#
+            }
+            "earlyoom" => {
+                r#"  # Early OOM
+  services.earlyoom.enable = true;"#
+            }
+            "auto_upgrade" => {
+                r#"  # Auto Upgrade
+  system.autoUpgrade.enable = true;"#
+            }
+            "auto_gc" => {
+                r#"  # Automatic Garbage Collection
   nix.gc = {
     automatic = true;
     dates = "weekly";
     options = "--delete-older-than 30d";
-  };"#,
-            "store_optimize" => r#"  # Store Optimization
-  nix.settings.auto-optimise-store = true;"#,
-            "tailscale" => r#"  # Tailscale VPN
-  services.tailscale.enable = true;"#,
+  };"#
+            }
+            "store_optimize" => {
+                r#"  # Store Optimization
+  nix.settings.auto-optimise-store = true;"#
+            }
+            "tailscale" => {
+                r#"  # Tailscale VPN
+  services.tailscale.enable = true;"#
+            }
             _ => continue,
         };
         sections.push(section.to_string());
@@ -549,9 +616,8 @@ pub fn read_template(template_path: &str) -> Result<String, NixGenError> {
     let templates_dir = paths::templates_dir();
     let full_path = templates_dir.join(template_path);
 
-    std::fs::read_to_string(&full_path).map_err(|e| {
-        NixGenError::ReadError(format!("{}: {}", full_path.display(), e))
-    })
+    std::fs::read_to_string(&full_path)
+        .map_err(|e| NixGenError::ReadError(format!("{}: {}", full_path.display(), e)))
 }
 
 /// Check if a template exists
@@ -616,12 +682,16 @@ pub fn generate_preview_full(options: &NixGenOptions) -> String {
         let mut network_preview = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
 
         // Show firewall settings - generate directly
-        let tcp_str = options.network_config.allowed_tcp_ports
+        let tcp_str = options
+            .network_config
+            .allowed_tcp_ports
             .iter()
             .map(|p| p.to_string())
             .collect::<Vec<_>>()
             .join(" ");
-        let udp_str = options.network_config.allowed_udp_ports
+        let udp_str = options
+            .network_config
+            .allowed_udp_ports
             .iter()
             .map(|p| p.to_string())
             .collect::<Vec<_>>()

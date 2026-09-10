@@ -32,8 +32,7 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
                 .map(|s| s.trim().to_string())
                 .unwrap_or_else(|_| "nixos".to_string());
 
-            cmd.arg("--flake")
-                .arg(format!("/etc/nixos#{}", hostname));
+            cmd.arg("--flake").arg(format!("/etc/nixos#{}", hostname));
         }
         ConfigMode::Classic | ConfigMode::Unknown => {
             // Classic mode uses default paths
@@ -44,8 +43,14 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    send_log(LogLevel::Info, format!("Running: nixos-rebuild {}", rebuild_arg));
-    send_log(LogLevel::Info, "Building system configuration...".to_string());
+    send_log(
+        LogLevel::Info,
+        format!("Running: nixos-rebuild {}", rebuild_arg),
+    );
+    send_log(
+        LogLevel::Info,
+        "Building system configuration...".to_string(),
+    );
 
     // Spawn the process
     let mut child = match cmd.spawn() {
@@ -70,7 +75,7 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
     let stdout_thread = thread::spawn(move || {
         if let Some(stdout) = stdout {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 let _ = tx_stdout.send((LogLevel::Info, line));
             }
         }
@@ -81,7 +86,7 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
     let stderr_thread = thread::spawn(move || {
         if let Some(stderr) = stderr {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 // Determine log level based on content
                 let level = if line.contains("error:") || line.contains("Error:") {
                     LogLevel::Error
@@ -116,10 +121,16 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
                 }
             } else {
                 let code = status.code().unwrap_or(-1);
-                send_log(LogLevel::Error, format!("Build failed with exit code {}", code));
+                send_log(
+                    LogLevel::Error,
+                    format!("Build failed with exit code {}", code),
+                );
                 HelperResponse::ApplyComplete {
                     success: false,
-                    message: format!("nixos-rebuild {} failed with exit code {}", rebuild_arg, code),
+                    message: format!(
+                        "nixos-rebuild {} failed with exit code {}",
+                        rebuild_arg, code
+                    ),
                 }
             }
         }

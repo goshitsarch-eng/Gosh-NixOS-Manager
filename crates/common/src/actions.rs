@@ -237,7 +237,9 @@ pub fn default_profiles() -> Vec<ProfileDef> {
         ProfileDef {
             id: "gnome".into(),
             name: "GNOME".into(),
-            description: "Modern, elegant desktop environment with a focus on simplicity and productivity".into(),
+            description:
+                "Modern, elegant desktop environment with a focus on simplicity and productivity"
+                    .into(),
             icon: "desktop-symbolic".into(),
             template: "profiles/gnome.nix".into(),
             display_manager: "gdm".into(),
@@ -257,7 +259,8 @@ pub fn default_profiles() -> Vec<ProfileDef> {
         ProfileDef {
             id: "xfce".into(),
             name: "XFCE".into(),
-            description: "Lightweight, fast desktop environment with traditional desktop experience".into(),
+            description:
+                "Lightweight, fast desktop environment with traditional desktop experience".into(),
             icon: "desktop-symbolic".into(),
             template: "profiles/xfce.nix".into(),
             display_manager: "lightdm".into(),
@@ -376,7 +379,8 @@ pub fn default_bundles() -> Vec<BundleDef> {
         BundleDef {
             id: "devtools".into(),
             name: "Development Tools".into(),
-            description: "Essential development tools: Git, editors, compilers, and containers".into(),
+            description: "Essential development tools: Git, editors, compilers, and containers"
+                .into(),
             icon: "applications-engineering-symbolic".into(),
             category: ActionCategory::Development,
             template: "bundles/devtools.nix".into(),
@@ -403,9 +407,7 @@ pub fn default_bundles() -> Vec<BundleDef> {
             icon: "applications-science-symbolic".into(),
             category: ActionCategory::Development,
             template: "bundles/ai-tools.nix".into(),
-            packages: vec![
-                PackageDef::new("ollama", "Ollama"),
-            ],
+            packages: vec![PackageDef::new("ollama", "Ollama")],
             arm_compat: ArmCompat::Partial,
             arm_note: Some("Some AI tools may have limited ARM support".into()),
         },
@@ -451,9 +453,7 @@ pub fn default_bundles() -> Vec<BundleDef> {
             icon: "computer-symbolic".into(),
             category: ActionCategory::Virtualization,
             template: "bundles/virtualbox.nix".into(),
-            packages: vec![
-                PackageDef::new("virtualbox", "VirtualBox"),
-            ],
+            packages: vec![PackageDef::new("virtualbox", "VirtualBox")],
             arm_compat: ArmCompat::None,
             arm_note: Some("VirtualBox is x86_64 only".into()),
         },
@@ -481,9 +481,7 @@ pub fn default_bundles() -> Vec<BundleDef> {
             icon: "package-x-generic-symbolic".into(),
             category: ActionCategory::System,
             template: "bundles/flatpak.nix".into(),
-            packages: vec![
-                PackageDef::new("flatpak", "Flatpak"),
-            ],
+            packages: vec![PackageDef::new("flatpak", "Flatpak")],
             arm_compat: ArmCompat::Full,
             arm_note: None,
         },

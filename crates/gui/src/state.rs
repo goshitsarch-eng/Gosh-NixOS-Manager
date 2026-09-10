@@ -1,58 +1,47 @@
-//! Application state management
+//! Application selection state. The only source of truth for what will be applied.
 
 use common::ipc::{AppState as IpcAppState, HardwareConfig, NetworkConfig, ServicesConfig};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-/// Current application state
+/// Current application state (GUI model).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppState {
-    /// Currently selected profile ID
     pub selected_profile: Option<String>,
-    /// Set of enabled bundle IDs
     pub enabled_bundles: HashSet<String>,
-    /// Per-bundle package selections: bundle_id -> enabled package names
-    pub bundle_packages: std::collections::HashMap<String, HashSet<String>>,
-    /// Custom hostname (if changed from current)
+    pub bundle_packages: HashMap<String, HashSet<String>>,
+    /// Bundle expander open/closed ids (not persisted).
+    #[serde(skip)]
+    pub expanded_bundles: HashSet<String>,
     pub hostname: Option<String>,
-    /// Custom DNS servers (e.g., ["1.1.1.1", "8.8.8.8"])
     pub dns_servers: Vec<String>,
-    /// User groups to add the user to (e.g., ["libvirtd", "docker"])
     pub user_groups: HashSet<String>,
-    /// Username for group membership
     pub username: Option<String>,
-    /// Bluetooth enabled
+    /// Kept in sync with `hardware_config.bluetooth_enabled`.
     pub bluetooth_enabled: bool,
-    /// Custom packages manually added by user (e.g., ["zed-editor", "htop"])
     pub custom_packages: HashSet<String>,
-    /// Network configuration (firewall, SSH, VPN)
     pub network_config: NetworkConfig,
-    /// Services configuration
     pub services_config: ServicesConfig,
-    /// Hardware configuration (GPU, audio, bluetooth, power)
     pub hardware_config: HardwareConfig,
-    /// Whether there are unsaved changes
     pub has_changes: bool,
 }
 
 impl AppState {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Select a profile (replaces any existing selection)
     pub fn select_profile(&mut self, profile_id: impl Into<String>) {
         self.selected_profile = Some(profile_id.into());
         self.has_changes = true;
     }
 
-    /// Clear profile selection
     pub fn clear_profile(&mut self) {
         self.selected_profile = None;
         self.has_changes = true;
     }
 
-    /// Toggle a bundle on/off
     pub fn toggle_bundle(&mut self, bundle_id: impl Into<String>) {
         let id = bundle_id.into();
         if self.enabled_bundles.contains(&id) {
@@ -63,37 +52,38 @@ impl AppState {
         self.has_changes = true;
     }
 
-    /// Enable a bundle
     pub fn enable_bundle(&mut self, bundle_id: impl Into<String>) {
         self.enabled_bundles.insert(bundle_id.into());
         self.has_changes = true;
     }
 
-    /// Disable a bundle
     pub fn disable_bundle(&mut self, bundle_id: &str) {
         self.enabled_bundles.remove(bundle_id);
         self.bundle_packages.remove(bundle_id);
         self.has_changes = true;
     }
 
-    /// Check if a bundle is enabled
+    #[must_use]
     pub fn is_bundle_enabled(&self, bundle_id: &str) -> bool {
         self.enabled_bundles.contains(bundle_id)
     }
 
-    /// Set the enabled packages for a bundle
     pub fn set_bundle_packages(&mut self, bundle_id: impl Into<String>, packages: HashSet<String>) {
         self.bundle_packages.insert(bundle_id.into(), packages);
         self.has_changes = true;
     }
 
-    /// Get the enabled packages for a bundle
+    #[must_use]
     pub fn get_bundle_packages(&self, bundle_id: &str) -> Option<&HashSet<String>> {
         self.bundle_packages.get(bundle_id)
     }
 
-    /// Toggle a package within a bundle on/off
-    pub fn toggle_bundle_package(&mut self, bundle_id: &str, package: impl Into<String>, enabled: bool) {
+    pub fn toggle_bundle_package(
+        &mut self,
+        bundle_id: &str,
+        package: impl Into<String>,
+        enabled: bool,
+    ) {
         let pkg = package.into();
         if let Some(packages) = self.bundle_packages.get_mut(bundle_id) {
             if enabled {
@@ -105,20 +95,26 @@ impl AppState {
         }
     }
 
-    /// Set custom hostname
+    pub fn set_bundle_expanded(&mut self, bundle_id: impl Into<String>, expanded: bool) {
+        let id = bundle_id.into();
+        if expanded {
+            self.expanded_bundles.insert(id);
+        } else {
+            self.expanded_bundles.remove(&id);
+        }
+    }
+
     pub fn set_hostname(&mut self, hostname: impl Into<String>) {
         let h = hostname.into();
         self.hostname = if h.is_empty() { None } else { Some(h) };
         self.has_changes = true;
     }
 
-    /// Set DNS servers
     pub fn set_dns_servers(&mut self, servers: Vec<String>) {
         self.dns_servers = servers.into_iter().filter(|s| !s.is_empty()).collect();
         self.has_changes = true;
     }
 
-    /// Add a DNS server
     pub fn add_dns_server(&mut self, server: impl Into<String>) {
         let s = server.into();
         if !s.is_empty() && !self.dns_servers.contains(&s) {
@@ -127,7 +123,6 @@ impl AppState {
         }
     }
 
-    /// Clear DNS servers
     pub fn clear_dns_servers(&mut self) {
         if !self.dns_servers.is_empty() {
             self.dns_servers.clear();
@@ -135,7 +130,25 @@ impl AppState {
         }
     }
 
-    /// Toggle a user group on/off
+    /// Parse comma-separated IPv4 addresses and store them.
+    pub fn parse_and_set_dns(&mut self, raw: &str) -> Result<(), String> {
+        let mut servers = Vec::new();
+        for part in raw.split([',', '\n']) {
+            let s = part.trim();
+            if s.is_empty() {
+                continue;
+            }
+            if !is_ipv4(s) {
+                return Err(format!("invalid IPv4 address: {s}"));
+            }
+            if !servers.contains(&s.to_string()) {
+                servers.push(s.to_string());
+            }
+        }
+        self.set_dns_servers(servers);
+        Ok(())
+    }
+
     pub fn toggle_user_group(&mut self, group: impl Into<String>) {
         let g = group.into();
         if self.user_groups.contains(&g) {
@@ -146,37 +159,49 @@ impl AppState {
         self.has_changes = true;
     }
 
-    /// Add user to a group
+    pub fn set_user_group(&mut self, group: impl Into<String>, enabled: bool) {
+        let g = group.into();
+        if enabled {
+            self.user_groups.insert(g);
+        } else {
+            self.user_groups.remove(&g);
+        }
+        self.has_changes = true;
+    }
+
     pub fn add_user_group(&mut self, group: impl Into<String>) {
         self.user_groups.insert(group.into());
         self.has_changes = true;
     }
 
-    /// Remove user from a group
     pub fn remove_user_group(&mut self, group: &str) {
         self.user_groups.remove(group);
         self.has_changes = true;
     }
 
-    /// Check if user is in a group
+    #[must_use]
     pub fn is_in_group(&self, group: &str) -> bool {
         self.user_groups.contains(group)
     }
 
-    /// Set the username for group membership
     pub fn set_username(&mut self, username: impl Into<String>) {
         let u = username.into();
         self.username = if u.is_empty() { None } else { Some(u) };
         self.has_changes = true;
     }
 
-    /// Set Bluetooth enabled state
+    /// Writes both the sibling bool and `hardware_config.bluetooth_enabled`.
     pub fn set_bluetooth_enabled(&mut self, enabled: bool) {
         self.bluetooth_enabled = enabled;
+        self.hardware_config.bluetooth_enabled = enabled;
         self.has_changes = true;
     }
 
-    /// Add a custom package
+    /// Copy `hardware_config.bluetooth_enabled` onto the sibling field.
+    pub fn sync_bluetooth_from_hardware(&mut self) {
+        self.bluetooth_enabled = self.hardware_config.bluetooth_enabled;
+    }
+
     pub fn add_custom_package(&mut self, package: impl Into<String>) {
         let pkg = package.into();
         if !pkg.is_empty() {
@@ -185,41 +210,98 @@ impl AppState {
         }
     }
 
-    /// Remove a custom package
     pub fn remove_custom_package(&mut self, package: &str) {
         self.custom_packages.remove(package);
         self.has_changes = true;
     }
 
-    /// Check if a custom package is installed
+    #[must_use]
     pub fn has_custom_package(&self, package: &str) -> bool {
         self.custom_packages.contains(package)
     }
 
-    /// Mark changes as applied
     pub fn mark_applied(&mut self) {
         self.has_changes = false;
     }
 
-    /// Set network configuration
     pub fn set_network_config(&mut self, config: NetworkConfig) {
         self.network_config = config;
         self.has_changes = true;
     }
 
-    /// Set services configuration
+    /// Parse comma-separated TCP ports and merge them into `allowed_tcp_ports`.
+    pub fn parse_and_add_tcp_ports(&mut self, raw: &str) -> Result<(), String> {
+        let mut ports = self.network_config.allowed_tcp_ports.clone();
+        for part in raw.split([',', ' ', '\n']) {
+            let s = part.trim();
+            if s.is_empty() {
+                continue;
+            }
+            let port: u16 = s.parse().map_err(|_| format!("invalid TCP port: {s}"))?;
+            if port == 0 {
+                return Err(format!("invalid TCP port: {s}"));
+            }
+            if !ports.contains(&port) {
+                ports.push(port);
+            }
+        }
+        self.network_config.allowed_tcp_ports = ports;
+        self.has_changes = true;
+        Ok(())
+    }
+
+    pub fn set_tcp_port(&mut self, port: u16, enabled: bool) {
+        let ports = &mut self.network_config.allowed_tcp_ports;
+        if enabled {
+            if !ports.contains(&port) {
+                ports.push(port);
+            }
+        } else {
+            ports.retain(|p| *p != port);
+        }
+        self.has_changes = true;
+    }
+
     pub fn set_services_config(&mut self, config: ServicesConfig) {
         self.services_config = config;
         self.has_changes = true;
     }
 
-    /// Set hardware configuration
-    pub fn set_hardware_config(&mut self, config: HardwareConfig) {
-        self.hardware_config = config;
+    pub fn set_service(&mut self, id: &str, enabled: bool) {
+        match id {
+            "printing" => self.services_config.printing = enabled,
+            "avahi" => self.services_config.avahi = enabled,
+            "fwupd" => self.services_config.fwupd = enabled,
+            "upower" => self.services_config.upower = enabled,
+            "networkmanager" => self.services_config.networkmanager = enabled,
+            "resolved" => self.services_config.resolved = enabled,
+            "rustdesk" => self.services_config.rustdesk = enabled,
+            "syncthing" => self.services_config.syncthing = enabled,
+            "locate" => self.services_config.locate = enabled,
+            "flatpak" => self.services_config.flatpak = enabled,
+            "gnome_keyring" => self.services_config.gnome_keyring = enabled,
+            "gnome_tweaks" => self.services_config.gnome_tweaks = enabled,
+            "dconf" => self.services_config.dconf = enabled,
+            "docker" => self.services_config.docker = enabled,
+            "libvirtd" => self.services_config.libvirtd = enabled,
+            "postgresql" => self.services_config.postgresql = enabled,
+            "redis" => self.services_config.redis = enabled,
+            "earlyoom" => self.services_config.earlyoom = enabled,
+            "auto_upgrade" => self.services_config.auto_upgrade = enabled,
+            "auto_gc" => self.services_config.auto_gc = enabled,
+            "store_optimize" => self.services_config.store_optimize = enabled,
+            _ => tracing::debug!(id, "unknown service id"),
+        }
         self.has_changes = true;
     }
 
-    /// Convert to IPC state format
+    pub fn set_hardware_config(&mut self, config: HardwareConfig) {
+        self.hardware_config = config;
+        self.sync_bluetooth_from_hardware();
+        self.has_changes = true;
+    }
+
+    #[must_use]
     pub fn to_ipc_state(&self) -> IpcAppState {
         IpcAppState {
             selected_profile: self.selected_profile.clone(),
@@ -242,8 +324,16 @@ impl AppState {
         }
     }
 
-    /// Create from IPC state format
+    /// Create from IPC state. Prefers `hardware_config.bluetooth_enabled` if the sibling diverges.
+    #[must_use]
     pub fn from_ipc_state(ipc: IpcAppState) -> Self {
+        let bluetooth_enabled = if ipc.hardware_config.bluetooth_enabled != ipc.bluetooth_enabled {
+            ipc.hardware_config.bluetooth_enabled
+        } else {
+            ipc.bluetooth_enabled || ipc.hardware_config.bluetooth_enabled
+        };
+        let mut hardware_config = ipc.hardware_config;
+        hardware_config.bluetooth_enabled = bluetooth_enabled;
         Self {
             selected_profile: ipc.selected_profile,
             enabled_bundles: ipc.enabled_bundles.into_iter().collect(),
@@ -252,25 +342,26 @@ impl AppState {
                 .into_iter()
                 .map(|(k, v)| (k, v.into_iter().collect()))
                 .collect(),
+            expanded_bundles: HashSet::new(),
             hostname: ipc.hostname,
             dns_servers: ipc.dns_servers,
             user_groups: ipc.user_groups.into_iter().collect(),
             username: ipc.username,
-            bluetooth_enabled: ipc.bluetooth_enabled,
+            bluetooth_enabled,
             custom_packages: ipc.custom_packages.into_iter().collect(),
             network_config: ipc.network_config,
             services_config: ipc.services_config,
-            hardware_config: ipc.hardware_config,
+            hardware_config,
             has_changes: false,
         }
     }
 
-    /// Get a summary of current selections
+    #[must_use]
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
 
         if let Some(ref profile) = self.selected_profile {
-            parts.push(format!("Profile: {}", profile));
+            parts.push(format!("Profile: {profile}"));
         }
 
         if !self.enabled_bundles.is_empty() {
@@ -279,7 +370,7 @@ impl AppState {
         }
 
         if let Some(ref hostname) = self.hostname {
-            parts.push(format!("Hostname: {}", hostname));
+            parts.push(format!("Hostname: {hostname}"));
         }
 
         if !self.dns_servers.is_empty() {
@@ -289,7 +380,7 @@ impl AppState {
         if !self.user_groups.is_empty() {
             let groups: Vec<_> = self.user_groups.iter().cloned().collect();
             if let Some(ref user) = self.username {
-                parts.push(format!("User {} in groups: {}", user, groups.join(", ")));
+                parts.push(format!("User {user} in groups: {}", groups.join(", ")));
             } else {
                 parts.push(format!("User groups: {}", groups.join(", ")));
             }
@@ -313,7 +404,10 @@ impl AppState {
                 net_parts.push("Tailscale".to_string());
             }
             if !self.network_config.allowed_tcp_ports.is_empty() {
-                net_parts.push(format!("TCP ports: {:?}", self.network_config.allowed_tcp_ports));
+                net_parts.push(format!(
+                    "TCP ports: {:?}",
+                    self.network_config.allowed_tcp_ports
+                ));
             }
             if !net_parts.is_empty() {
                 parts.push(format!("Network: {}", net_parts.join(", ")));
@@ -330,5 +424,59 @@ impl AppState {
         } else {
             parts.join("\n")
         }
+    }
+}
+
+fn is_ipv4(s: &str) -> bool {
+    let mut parts = s.split('.');
+    let mut count = 0;
+    for part in parts.by_ref() {
+        count += 1;
+        if count > 4 {
+            return false;
+        }
+        if part.is_empty() || part.len() > 3 {
+            return false;
+        }
+        if !part.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        if part.len() > 1 && part.starts_with('0') {
+            return false;
+        }
+        match part.parse::<u8>() {
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    count == 4
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::ipc::HardwareConfig;
+
+    #[test]
+    fn bluetooth_mirror_prefers_hardware_on_diverge() {
+        let ipc = IpcAppState {
+            bluetooth_enabled: false,
+            hardware_config: HardwareConfig {
+                bluetooth_enabled: true,
+                ..HardwareConfig::default()
+            },
+            ..IpcAppState::default()
+        };
+        let state = AppState::from_ipc_state(ipc);
+        assert!(state.bluetooth_enabled);
+        assert!(state.hardware_config.bluetooth_enabled);
+    }
+
+    #[test]
+    fn set_bluetooth_writes_both() {
+        let mut state = AppState::new();
+        state.set_bluetooth_enabled(true);
+        assert!(state.bluetooth_enabled);
+        assert!(state.hardware_config.bluetooth_enabled);
     }
 }

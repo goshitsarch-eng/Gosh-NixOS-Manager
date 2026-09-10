@@ -117,12 +117,16 @@ impl RebuildType {
 /// Response from helper to GUI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
+#[allow(clippy::large_enum_variant)]
 pub enum HelperResponse {
     /// Simple success
     Ok,
 
     /// Operation failed
-    Error { message: String, details: Option<String> },
+    Error {
+        message: String,
+        details: Option<String>,
+    },
 
     /// Permissions check result
     Permissions {
@@ -160,7 +164,11 @@ pub enum HelperResponse {
     Generations(Vec<Generation>),
 
     /// Maintenance command output
-    MaintenanceOutput { stdout: String, stderr: String, success: bool },
+    MaintenanceOutput {
+        stdout: String,
+        stderr: String,
+        success: bool,
+    },
 
     /// Disk usage information
     DiskUsage(DiskUsageInfo),
@@ -327,27 +335,69 @@ impl ServicesConfig {
     /// Get list of enabled service IDs
     pub fn enabled_services(&self) -> Vec<&'static str> {
         let mut services = Vec::new();
-        if self.printing { services.push("printing"); }
-        if self.avahi { services.push("avahi"); }
-        if self.fwupd { services.push("fwupd"); }
-        if self.upower { services.push("upower"); }
-        if self.networkmanager { services.push("networkmanager"); }
-        if self.resolved { services.push("resolved"); }
-        if self.rustdesk { services.push("rustdesk"); }
-        if self.syncthing { services.push("syncthing"); }
-        if self.locate { services.push("locate"); }
-        if self.flatpak { services.push("flatpak"); }
-        if self.gnome_keyring { services.push("gnome_keyring"); }
-        if self.gnome_tweaks { services.push("gnome_tweaks"); }
-        if self.dconf { services.push("dconf"); }
-        if self.docker { services.push("docker"); }
-        if self.libvirtd { services.push("libvirtd"); }
-        if self.postgresql { services.push("postgresql"); }
-        if self.redis { services.push("redis"); }
-        if self.earlyoom { services.push("earlyoom"); }
-        if self.auto_upgrade { services.push("auto_upgrade"); }
-        if self.auto_gc { services.push("auto_gc"); }
-        if self.store_optimize { services.push("store_optimize"); }
+        if self.printing {
+            services.push("printing");
+        }
+        if self.avahi {
+            services.push("avahi");
+        }
+        if self.fwupd {
+            services.push("fwupd");
+        }
+        if self.upower {
+            services.push("upower");
+        }
+        if self.networkmanager {
+            services.push("networkmanager");
+        }
+        if self.resolved {
+            services.push("resolved");
+        }
+        if self.rustdesk {
+            services.push("rustdesk");
+        }
+        if self.syncthing {
+            services.push("syncthing");
+        }
+        if self.locate {
+            services.push("locate");
+        }
+        if self.flatpak {
+            services.push("flatpak");
+        }
+        if self.gnome_keyring {
+            services.push("gnome_keyring");
+        }
+        if self.gnome_tweaks {
+            services.push("gnome_tweaks");
+        }
+        if self.dconf {
+            services.push("dconf");
+        }
+        if self.docker {
+            services.push("docker");
+        }
+        if self.libvirtd {
+            services.push("libvirtd");
+        }
+        if self.postgresql {
+            services.push("postgresql");
+        }
+        if self.redis {
+            services.push("redis");
+        }
+        if self.earlyoom {
+            services.push("earlyoom");
+        }
+        if self.auto_upgrade {
+            services.push("auto_upgrade");
+        }
+        if self.auto_gc {
+            services.push("auto_gc");
+        }
+        if self.store_optimize {
+            services.push("store_optimize");
+        }
         services
     }
 
