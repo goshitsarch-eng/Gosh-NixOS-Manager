@@ -15,7 +15,6 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         .as_deref()
         .or(app.system_info.hostname.as_deref())
         .unwrap_or("nixos");
-    let dns = app.state.dns_servers.join(", ");
     let username = app.state.username.clone().unwrap_or_else(|| {
         std::env::var("USER").unwrap_or_else(|_| crate::fl!("system-username-default"))
     });
@@ -69,7 +68,7 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         dns_item = dns_item.description(error.to_owned());
     }
     let dns_row = dns_item.control(
-        widget::text_input(crate::fl!("system-dns-placeholder"), dns)
+        widget::text_input(crate::fl!("system-dns-placeholder"), app.dns_input.as_str())
             .on_input(Message::DnsServersChanged)
             .on_submit(Message::DnsServersChanged),
     );
@@ -98,15 +97,18 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
             .into(),
         settings::section()
             .title(crate::fl!("system-identity"))
-            .add(
-                settings::item::builder(crate::fl!("system-hostname"))
-                    .icon(super::icon("computer-symbolic"))
-                    .control(
-                        widget::text_input(crate::fl!("system-hostname-placeholder"), hostname)
-                            .on_input(Message::HostnameChanged)
-                            .on_submit(Message::HostnameChanged),
-                    ),
-            )
+            .add({
+                let mut hostname_item = settings::item::builder(crate::fl!("system-hostname"))
+                    .icon(super::icon("computer-symbolic"));
+                if let Some(error) = app.field_errors.hostname.as_deref() {
+                    hostname_item = hostname_item.description(error.to_owned());
+                }
+                hostname_item.control(
+                    widget::text_input(crate::fl!("system-hostname-placeholder"), hostname)
+                        .on_input(Message::HostnameChanged)
+                        .on_submit(Message::HostnameChanged),
+                )
+            })
             .add(super::info_item(
                 crate::fl!("system-hostname-note"),
                 crate::fl!("system-hostname-note-desc"),

@@ -38,14 +38,6 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         ));
     }
 
-    let custom_ports = net
-        .allowed_tcp_ports
-        .iter()
-        .filter(|port| !PRESET_PORTS.iter().any(|(preset, _)| preset == *port))
-        .map(u16::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-
     let root_idx = match net.ssh_root_login.as_str() {
         "prohibit-password" => 1,
         "yes" => 2,
@@ -88,7 +80,7 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
                     .control(
                         widget::text_input(
                             crate::fl!("network-custom-tcp-placeholder"),
-                            custom_ports,
+                            app.custom_tcp_input.as_str(),
                         )
                         .on_input(Message::CustomTcpPortsChanged)
                         .on_submit(Message::CustomTcpPortsChanged),
