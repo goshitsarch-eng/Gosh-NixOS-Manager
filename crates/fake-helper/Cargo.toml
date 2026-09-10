@@ -12,4 +12,5 @@ name = "fake-helper"
 path = "src/main.rs"
 
 [dependencies]
+common = { workspace = true }
 serde_json = { workspace = true }

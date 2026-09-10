@@ -2,6 +2,48 @@
 
 Short plans and DA notes for Phase 2. Newest first.
 
+## Task 2 — Packaging tests (landed)
+
+`crates/gui/tests/state_mutations.rs` covers AppState public methods: select/clear profile, bundle enable/disable (drops package set), bluetooth sibling mirror, TCP port split/parse, services, and NetworkConfig UDP vec IPC+JSON round-trip (no UDP widget).
+
+`crates/gui/tests/gui_state.rs` records the current bool-ish empty-apply predicate (profile + bundles + custom packages only). PackagesOnly vs Normal is not distinct yet.
+
+`AppModel::apply` ConfirmApply empty vs not, busy-ignore, and helper State/Log/ApplyComplete are tested next to `core/apply.rs` via `AppModel::init(Core::default(), Flags::for_tests())`. Exhaustive `Message` match is not duplicated. `core::packages` parser is public; unit coverage stays in `packages.rs`.
+
+`crates/fake-helper` depends on `common` and replies `State` / `ApplyComplete` / `Log` JSON with `#[serde(tag="type", content="payload")]` (script shorthands or raw tagged JSON).
+
+### Gap for architecture
+
+`crates/gui/tests/` cannot construct `AppModel` without `cosmic::Core` and `Application::init`. `dialog` / `busy` are `pub(crate)`. Need a display-free `AppModel::test_model()` so packaging integration tests can drive `apply()` without libcosmic and inspect dialogs.
+
+## Task 1b/1c DA sign-off
+
+**APPROVE** `8cf7536` (1b: `feat: add libcosmic page chrome and empty nav pages`) and `7917f21` (1c: `chore: add Flatpak manifest, cargo-sources, and verify scripts`)
+
+Reviewed those commit snapshots (HEAD = `7917f21`, tree clean). The listed 1b/1c checks pass. Spot-check: `cargo test -p gui --lib --offline` → **11 passed**; `cargo test -p fake-helper --offline` → **4 passed**. Did not re-run `scripts/verify.sh` or a full Flatpak/weston smoke.
+
+### 1b — `8cf7536`
+
+- **11 pages:** `view/mod.rs` `page()` matches every `Page` variant (Onboarding, Profiles, Bundles, Packages, System, Hardware, Network, Services, Generations, Maintenance, Apply). Each module is `view(...) -> Element<'_, Message>` with `title2` + `body` from Fluent (`titled_page` / onboarding column). No `_` arm.
+- **status_banner not dismissible:** `widget/status_banner.rs` is icon + body in a toned container. No close button, no `on_press`, no dismiss message. GTK parity comment is accurate. Global banner is optional in `view::root`; ARM copies on Bundles/Hardware are the same widget.
+- **no nested toaster:** `Application::view` (`app.rs`) is the only `widget::toaster`. `view::root` documents that and wraps banner + page in `settings::view_column` + scrollable only.
+- **FTL in sync:** `crates/gui/i18n/en/gui.ftl` and `nixos_toolkit.ftl` are byte-identical (`md5 8749cc1f72c702c144e52db8b9ac5f37`). Chrome, nav, page titles/descriptions, onboarding, and banner keys are present in both.
+- **views emit Message, not processes:** no `Command` / `Task` / `std::process` / `pkexec` / `spawn` under `view/` or `widget/`. Onboarding reads `app.system_info` and `crate::integration::{classic,flake}_integration_snippet` (string constants). ARM banners read `app.cpu_arch()`. Commit does not touch `app.rs` / `message.rs` / `state.rs`.
+
+### 1c — `7917f21`
+
+- **smoke sets skip-privileged:** `scripts/smoke-flatpak.sh` `flatpak run --env=NIXOS_TOOLKIT_SKIP_PRIVILEGED_INIT=1` (also `NIXOS_TOOLKIT_SKIP_HOST_PROBES=1`). `env_flag` treats `"1"` as true. `init` queues `ReadState` only when `!skip_privileged_on_init && helper_available`.
+- **no production skip:** `SKIP_PRIVILEGED_INIT` is not in finish-args, desktop, metainfo, or `flake.nix` wrap. Manifest comment says not to set it. `Flags::from_env` defaults false; `for_tests()` skip is test-only.
+- **templates env:** finish-args `--env=NIXOS_TOOLKIT_TEMPLATES_DIR=/app/share/nixos-toolkit/templates`; build copies `nix/templates` there (C9).
+- **cargo-sources committed:** `flatpak/cargo-sources.json` in `7917f21` (~451K, git+archive+inline; no git-tarball). Generator pin `1fc32195e3e60fe5c97f0af646dec7a99df5962b`; no `--git-tarballs`.
+- **fake-helper has no libcosmic:** `crates/fake-helper` depends on `serde_json` only (`Cargo.lock` matches). JSON-line echo (`{"type":"Ok"}` / `FAKE_HELPER_SCRIPT`).
+- **verify.sh exists:** executable; cargo build/clippy/test then `build-flatpak.sh` + `smoke-flatpak.sh`.
+- **pkexec not in smoke path:** skip-privileged prevents startup `ReadState`; empty pages have no apply/maintenance `on_press`; `RefreshSystem` is `Intent::DetectSystem` only; smoke greps logs for `pkexec|polkit`. Probe remains `flatpak-spawn --host -- test -x` (not pkexec). C9 still refuses pkexec when the host helper is missing.
+
+APP_ID is `io.github.goshitsarch_eng.NixosToolkit` on the crate, desktop, metainfo, and manifest. No GTK reintroduced in 1b/1c.
+
+Non-blocking (not 1b/1c blockers; already in the 1c landed notes): no Adwaita icontheme (PLAN 1c asked for it; symbolic nav/banner/refresh icons may be missing in the sandbox); GitHub `flatpak` job is `workflow_dispatch` only; `--filesystem=/etc/hostname:ro` may be rejected (`Path "/etc" is reserved`); banner sits inside the page scrollable (1b plan) rather than above it (`ux.md` §2.1). PLAN 1b menu/nav/header stay in 1a `app.rs` (correct ownership).
+
 ## Task 1c — Packaging (landed)
 
 Working Flatpak + verify scripts on Freedesktop 25.08:

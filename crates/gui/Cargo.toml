@@ -36,3 +36,6 @@ dirs = "6"
 open = "5.3"
 # iced_winit at the libcosmic pin needs UnboundedReceiver::try_recv (futures-channel >= 0.3.32)
 futures = "0.3.32"
+
+[dev-dependencies]
+serde_json = { workspace = true }
