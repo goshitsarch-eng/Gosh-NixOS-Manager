@@ -524,7 +524,8 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
   services.power-profiles-daemon.enable = false;"#
                 .to_string(),
         );
-    } else {
+    } else if hw.power_profile != 0 {
+        // Omit Balanced (0): GTK never emitted PPD, so bluetooth-only apply must not enable it.
         let profile = power_profile_name(hw.power_profile);
         sections.push(format!(
             r#"  # Power profile ({profile})
@@ -906,7 +907,7 @@ mod tests {
         assert!(nix.contains("# NVIDIA GPU (beta)"));
         assert!(nix.contains("nvidiaPackages.beta"));
         assert!(nix.contains("videoDrivers = [ \"nvidia\" ]"));
-        assert!(nix.contains("modesetting.enable = false;"));
+        assert!(nix.contains("modesetting.enable = true;"));
         assert!(nix.contains("powerManagement.enable = false;"));
         assert!(nix.contains("open = false;"));
     }
@@ -941,6 +942,17 @@ mod tests {
         let nix = generate_hardware_nix(&HardwareConfig::default());
         assert!(!nix.contains("videoDrivers"));
         assert!(!nix.contains("hardware.nvidia"));
+        assert!(!nix.contains("power-profiles-daemon"));
+    }
+
+    #[test]
+    fn nvidia_modesetting_false_is_honored() {
+        let nix = generate_hardware_nix(&hw(|c| {
+            c.nvidia_driver = Some(0);
+            c.nvidia_modesetting = false;
+        }));
+        assert!(nix.contains("modesetting.enable = false;"));
+        assert!(!nix.contains("modesetting.enable = true;"));
     }
 
     #[test]
@@ -988,6 +1000,7 @@ mod tests {
         assert!(nix.contains("hardware.bluetooth"));
         assert!(nix.contains("powerOnBoot = false;"));
         assert!(!nix.contains("powerOnBoot = true;"));
+        assert!(!nix.contains("power-profiles-daemon"));
     }
 
     #[test]
@@ -1009,20 +1022,43 @@ mod tests {
         assert!(nix.contains("services.power-profiles-daemon.enable = false;"));
         assert!(!nix.contains("powerprofilesctl"));
         assert!(!nix.contains("power-profiles-daemon.enable = true;"));
+
+        let tlp_balanced = generate_hardware_nix(&hw(|c| c.tlp_enabled = true));
+        assert!(tlp_balanced.contains("services.tlp"));
+        assert!(tlp_balanced.contains("services.power-profiles-daemon.enable = false;"));
+        assert!(!tlp_balanced.contains("power-profiles-daemon.enable = true;"));
     }
 
     #[test]
     fn power_profile_maps_when_tlp_off() {
         let balanced = generate_hardware_nix(&HardwareConfig::default());
-        assert!(balanced.contains("power-profiles-daemon.enable = true;"));
-        assert!(balanced.contains("powerprofilesctl set balanced"));
+        assert!(!balanced.contains("power-profiles-daemon"));
+        assert!(!balanced.contains("powerprofilesctl"));
 
         let performance = generate_hardware_nix(&hw(|c| c.power_profile = 1));
+        assert!(performance.contains("power-profiles-daemon.enable = true;"));
         assert!(performance.contains("powerprofilesctl set performance"));
         assert!(!performance.contains("services.tlp"));
 
         let saver = generate_hardware_nix(&hw(|c| c.power_profile = 2));
+        assert!(saver.contains("power-profiles-daemon.enable = true;"));
         assert!(saver.contains("powerprofilesctl set power-saver"));
+        assert!(!saver.contains("services.tlp"));
+    }
+
+    #[test]
+    fn bluetooth_audio_nvidia_only_omit_power_profiles_daemon() {
+        let bluetooth = generate_hardware_nix(&hw(|c| c.bluetooth_enabled = true));
+        assert!(bluetooth.contains("hardware.bluetooth"));
+        assert!(!bluetooth.contains("power-profiles-daemon"));
+
+        let pulse = generate_hardware_nix(&hw(|c| c.audio_server = 1));
+        assert!(pulse.contains("hardware.pulseaudio.enable = true;"));
+        assert!(!pulse.contains("power-profiles-daemon"));
+
+        let nvidia = generate_hardware_nix(&hw(|c| c.nvidia_driver = Some(0)));
+        assert!(nvidia.contains("videoDrivers"));
+        assert!(!nvidia.contains("power-profiles-daemon"));
     }
 
     #[test]

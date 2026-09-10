@@ -421,13 +421,13 @@ impl ServicesConfig {
 }
 
 /// Hardware configuration for GPU, audio, bluetooth, and power management
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HardwareConfig {
     /// NVIDIA driver selection: 0=Stable, 1=Beta, 2=Open, 3=Nouveau, None=not NVIDIA
     #[serde(default)]
     pub nvidia_driver: Option<u8>,
-    /// Enable kernel modesetting for NVIDIA
-    #[serde(default)]
+    /// Enable kernel modesetting for NVIDIA (GTK SwitchRow default was on)
+    #[serde(default = "default_true")]
     pub nvidia_modesetting: bool,
     /// Enable NVIDIA power management
     #[serde(default)]
@@ -456,6 +456,24 @@ pub struct HardwareConfig {
     /// Enable Intel Thermald
     #[serde(default)]
     pub thermald_enabled: bool,
+}
+
+impl Default for HardwareConfig {
+    fn default() -> Self {
+        Self {
+            nvidia_driver: None,
+            nvidia_modesetting: default_true(),
+            nvidia_powermanagement: false,
+            nvidia_open: false,
+            audio_server: 0,
+            audio_lowlatency: false,
+            bluetooth_enabled: false,
+            bluetooth_autopower: false,
+            power_profile: 0,
+            tlp_enabled: false,
+            thermald_enabled: false,
+        }
+    }
 }
 
 impl HardwareConfig {
@@ -603,6 +621,7 @@ mod tests {
     #[test]
     fn hardware_has_settings_tracks_non_default_fields() {
         assert!(!HardwareConfig::default().has_settings());
+        assert!(HardwareConfig::default().nvidia_modesetting);
         assert!(HardwareConfig {
             bluetooth_enabled: true,
             ..HardwareConfig::default()
@@ -618,6 +637,25 @@ mod tests {
             ..HardwareConfig::default()
         }
         .has_settings());
+    }
+
+    #[test]
+    fn nvidia_modesetting_defaults_true_and_explicit_false_round_trips() {
+        let missing: HardwareConfig =
+            serde_json::from_str("{}").expect("empty HardwareConfig JSON");
+        assert!(missing.nvidia_modesetting);
+        assert!(!missing.has_settings());
+
+        let explicit_false: HardwareConfig =
+            serde_json::from_str(r#"{"nvidia_modesetting":false}"#)
+                .expect("explicit false should deserialize");
+        assert!(!explicit_false.nvidia_modesetting);
+        assert!(explicit_false.has_settings());
+
+        let explicit_true: HardwareConfig = serde_json::from_str(r#"{"nvidia_modesetting":true}"#)
+            .expect("explicit true should deserialize");
+        assert!(explicit_true.nvidia_modesetting);
+        assert!(!explicit_true.has_settings());
     }
 
     #[test]

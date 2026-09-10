@@ -9,7 +9,7 @@ use crate::message::{
 };
 use common::actions::default_bundles;
 use common::config::{ConfigMode, IntegrationStatus};
-use common::ipc::{HelperRequest, HelperResponse, RebuildType};
+use common::ipc::{HardwareConfig, HelperRequest, HelperResponse, RebuildType};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -707,6 +707,31 @@ impl AppModel {
         }
     }
 
+    /// Hardware sent to Nix generation. Visible NVIDIA combo defaults to Stable.
+    pub(crate) fn hardware_for_nix(&self) -> HardwareConfig {
+        let mut hardware_config = self.state.effective_hardware();
+        if hardware_config.nvidia_driver.is_none()
+            && self
+                .gpu_vendor
+                .as_deref()
+                .is_some_and(|vendor| vendor.to_ascii_lowercase().contains("nvidia"))
+        {
+            hardware_config.nvidia_driver = Some(0);
+        }
+        hardware_config
+    }
+
+    fn to_apply_request(&self, rebuild: RebuildType) -> HelperRequest {
+        let mut request = self.state.to_apply_request(rebuild);
+        if let HelperRequest::Apply {
+            hardware_config, ..
+        } = &mut request
+        {
+            *hardware_config = self.hardware_for_nix();
+        }
+        request
+    }
+
     fn start_rebuild(&mut self, rebuild: RebuildType, then_write_state: bool) -> Vec<Intent> {
         if self.busy != Busy::Idle {
             return Vec::new();
@@ -722,7 +747,7 @@ impl AppModel {
             "Starting nixos-rebuild switch...\n\n".into()
         };
         let save = then_write_state.then(|| Box::new(self.state.to_ipc_state()));
-        let request = self.state.to_apply_request(rebuild);
+        let request = self.to_apply_request(rebuild);
         vec![Intent::SpawnHelper {
             op: HelperOp::Apply {
                 rebuild,
@@ -1359,6 +1384,62 @@ mod tests {
                     }
                 ));
             }
+            other => panic!("expected SpawnHelper, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nvidia_gpu_apply_defaults_unwritten_driver_to_stable() {
+        let mut app = test_app();
+        app.gpu_vendor = Some("NVIDIA GeForce RTX 3060".into());
+        assert!(app.state.hardware_config.nvidia_driver.is_none());
+        assert_eq!(app.hardware_for_nix().nvidia_driver, Some(0));
+        assert!(app.hardware_for_nix().nvidia_modesetting);
+
+        let intents = app.apply(Message::RequestDryRun);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper { request, .. }) => match request {
+                HelperRequest::Apply {
+                    hardware_config, ..
+                } => assert_eq!(hardware_config.nvidia_driver, Some(0)),
+                other => panic!("expected Apply, got {other:?}"),
+            },
+            other => panic!("expected SpawnHelper, got {other:?}"),
+        }
+        assert!(app.state.hardware_config.nvidia_driver.is_none());
+    }
+
+    #[test]
+    fn nvidia_gpu_apply_keeps_explicit_driver() {
+        let mut app = test_app();
+        app.gpu_vendor = Some("nvidia".into());
+        app.state.hardware_config.nvidia_driver = Some(2);
+        assert_eq!(app.hardware_for_nix().nvidia_driver, Some(2));
+        let intents = app.apply(Message::RequestDryRun);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper { request, .. }) => match request {
+                HelperRequest::Apply {
+                    hardware_config, ..
+                } => assert_eq!(hardware_config.nvidia_driver, Some(2)),
+                other => panic!("expected Apply, got {other:?}"),
+            },
+            other => panic!("expected SpawnHelper, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_nvidia_gpu_apply_leaves_driver_none() {
+        let mut app = test_app();
+        app.gpu_vendor = Some("Intel Corporation".into());
+        assert!(app.hardware_for_nix().nvidia_driver.is_none());
+        let intents = app.apply(Message::RequestDryRun);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper { request, .. }) => match request {
+                HelperRequest::Apply {
+                    hardware_config, ..
+                } => assert!(hardware_config.nvidia_driver.is_none()),
+                other => panic!("expected Apply, got {other:?}"),
+            },
             other => panic!("expected SpawnHelper, got {other:?}"),
         }
     }

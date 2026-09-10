@@ -525,7 +525,7 @@ impl AppModel {
                     }));
                 }
                 Intent::LocalPreview => {
-                    let preview = generate_local_preview(&self.state, &self.flags.templates_dir);
+                    let preview = generate_local_preview(self);
                     tasks.push(cosmic::task::message(Message::PreviewReady(preview)));
                 }
                 Intent::LocalProfilePreview { id } => {
@@ -588,11 +588,12 @@ impl AppModel {
     }
 }
 
-fn generate_local_preview(state: &AppState, templates_dir: &Path) -> String {
+fn generate_local_preview(app: &AppModel) -> String {
     let profiles = default_profiles();
     let bundles = default_bundles();
-    let options = state.to_nix_gen_options(&profiles, &bundles);
-    common::nix::generate_preview_full_from(&options, templates_dir)
+    let mut options = app.state.to_nix_gen_options(&profiles, &bundles);
+    options.hardware_config = app.hardware_for_nix();
+    common::nix::generate_preview_full_from(&options, &app.flags.templates_dir)
 }
 
 fn generate_profile_preview(id: &str, templates_dir: &Path) -> String {

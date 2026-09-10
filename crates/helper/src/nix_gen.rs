@@ -651,6 +651,9 @@ mod tests {
             .find(|f| f.path.contains("hardware.nix"))
             .expect("hardware.nix");
         assert!(hardware.content.contains("nvidiaPackages.stable"));
+        assert!(!hardware
+            .content
+            .contains("power-profiles-daemon.enable = true;"));
         let selected = files
             .iter()
             .find(|f| f.path.contains("selected.nix"))
@@ -666,6 +669,9 @@ mod tests {
             .find(|f| f.path.contains("hardware.nix"))
             .expect("hardware.nix");
         assert!(hardware.content.contains("hardware.bluetooth"));
+        assert!(!hardware
+            .content
+            .contains("power-profiles-daemon.enable = true;"));
     }
 
     #[test]
