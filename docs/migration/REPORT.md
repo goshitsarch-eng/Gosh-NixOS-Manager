@@ -61,7 +61,7 @@ Polkit action ids stay `org.nixos-toolkit.helper.*`. The policy is **not** insid
    - Integrate `./nixos-toolkit/state/selected.nix`.
    - Run the GUI (Flatpak or `cargo run -p gui --bin nixos-toolkit`), select a profile, Apply, confirm files under `/etc/nixos/nixos-toolkit/`, reboot/rollback if needed.
 2. **Apply logs appear after the helper chain**, not line-by-line while `nixos-rebuild` runs.
-3. **DNS/custom TCP fields** bind to parsed state; invalid partial input can snap back while typing (GTK EntryRow was similarly live).
+3. **DNS/custom TCP** use raw input buffers (`dns_input` / `custom_tcp_input`); DNS applies to state only when the whole string is valid.
 4. **List generations now authenticates** (one privileged path). GTK listed without a password.
 5. **Nav symbolic icons** may be missing in the Flatpak; page titles are always shown.
 6. **No Flathub publication** in this work. GitHub Flatpak job is `workflow_dispatch` only (too heavy for default CI). Cargo job always runs.
