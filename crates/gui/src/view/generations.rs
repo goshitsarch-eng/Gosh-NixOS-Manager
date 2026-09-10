@@ -13,6 +13,7 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
     let spacing = theme::spacing();
     let loading = app.busy == Busy::LoadingGenerations;
     let idle = app.busy == Busy::Idle;
+    let buttons_enabled = idle && !app.helper_missing;
 
     let mut refresh = widget::button::standard(crate::fl!("refresh"))
         .leading_icon(widget::icon::from_name("view-refresh-symbolic"));
@@ -21,7 +22,10 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
     }
     let mut rollback = widget::button::suggested(crate::fl!("rollback-previous"))
         .leading_icon(widget::icon::from_name("edit-undo-symbolic"));
-    if idle {
+    if app.helper_missing {
+        rollback = rollback.tooltip(crate::fl!("helper-missing-action"));
+    }
+    if buttons_enabled {
         rollback = rollback.on_press(Message::RollbackToPrevious);
     }
 
@@ -47,7 +51,11 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         ));
     } else {
         for generation in &app.generations {
-            list = list.add(generation_row(generation, idle));
+            list = list.add(generation_row(
+                generation,
+                buttons_enabled,
+                app.helper_missing,
+            ));
         }
     }
 
@@ -84,7 +92,8 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
 
 fn generation_row(
     generation: &Generation,
-    idle: bool,
+    buttons_enabled: bool,
+    helper_missing: bool,
 ) -> cosmic::widget::Row<'_, Message, cosmic::Theme> {
     let title = if generation.current {
         crate::fl!("generation-n-current", n = generation.number)
@@ -104,13 +113,23 @@ fn generation_row(
         item.control(widget::text::caption(crate::fl!("generation-current")))
     } else {
         let number = generation.number;
+        let switch_tooltip = if helper_missing {
+            crate::fl!("helper-missing-action")
+        } else {
+            crate::fl!("switch-generation")
+        };
+        let delete_tooltip = if helper_missing {
+            crate::fl!("helper-missing-action")
+        } else {
+            crate::fl!("delete-generation")
+        };
         let mut switch =
             widget::button::icon(widget::icon::from_name("system-switch-user-symbolic"))
-                .tooltip(crate::fl!("switch-generation"));
+                .tooltip(switch_tooltip);
         let mut delete = widget::button::icon(widget::icon::from_name("user-trash-symbolic"))
             .class(cosmic::theme::Button::Destructive)
-            .tooltip(crate::fl!("delete-generation"));
-        if idle {
+            .tooltip(delete_tooltip);
+        if buttons_enabled {
             switch = switch.on_press(Message::RequestRollback { generation: number });
             delete = delete.on_press(Message::RequestDeleteGeneration { generation: number });
         }

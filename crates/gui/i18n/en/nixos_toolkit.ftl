@@ -105,6 +105,7 @@ apply-changes-busy = Applying…
 dry-run = Dry Run
 dry-run-busy = Building…
 dry-run-tooltip = Build configuration without activating
+helper-missing-action = Privileged helper not found. Install nixos-toolkit-helper on the host.
 rollback-previous = Rollback to Previous
 remove-package = Remove package
 run-action = Run this action

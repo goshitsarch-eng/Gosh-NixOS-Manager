@@ -10,15 +10,21 @@ const LOG_HEIGHT: f32 = 200.0;
 
 pub fn view(app: &AppModel) -> Element<'_, Message> {
     let idle = app.busy == Busy::Idle;
+    let buttons_enabled = idle && !app.helper_missing;
     let calculating = app.busy == Busy::LoadingDisk;
 
     let mut actions = settings::section().title(crate::fl!("maintenance-actions"));
     for action in super::catalog_maintenance_actions() {
         let id = action.id.clone();
+        let run_tooltip = if app.helper_missing {
+            crate::fl!("helper-missing-action")
+        } else {
+            crate::fl!("run-action")
+        };
         let mut run =
             widget::button::icon(widget::icon::from_name("media-playback-start-symbolic"))
-                .tooltip(crate::fl!("run-action"));
-        if idle {
+                .tooltip(run_tooltip);
+        if buttons_enabled {
             run = run.on_press(Message::RequestMaintenance { id });
         }
         actions = actions.add(

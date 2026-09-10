@@ -12,7 +12,7 @@ const LOG_HEIGHT: f32 = 200.0;
 pub fn view(app: &AppModel) -> Element<'_, Message> {
     let spacing = theme::spacing();
     let apply_busy = matches!(app.busy, Busy::Applying | Busy::DryRun);
-    let buttons_enabled = app.busy == Busy::Idle;
+    let buttons_enabled = app.busy == Busy::Idle && !app.helper_missing;
 
     let apply_label = match app.busy {
         Busy::Applying => crate::fl!("apply-changes-busy"),
@@ -20,12 +20,19 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         _ => crate::fl!("apply-changes"),
     };
     let mut apply_button = widget::button::suggested(apply_label);
+    if app.helper_missing {
+        apply_button = apply_button.tooltip(crate::fl!("helper-missing-action"));
+    }
     if buttons_enabled {
         apply_button = apply_button.on_press(Message::RequestApply);
     }
 
-    let mut dry_run =
-        widget::button::standard(crate::fl!("dry-run")).tooltip(crate::fl!("dry-run-tooltip"));
+    let dry_run_tooltip = if app.helper_missing {
+        crate::fl!("helper-missing-action")
+    } else {
+        crate::fl!("dry-run-tooltip")
+    };
+    let mut dry_run = widget::button::standard(crate::fl!("dry-run")).tooltip(dry_run_tooltip);
     if buttons_enabled {
         dry_run = dry_run.on_press(Message::RequestDryRun);
     }
