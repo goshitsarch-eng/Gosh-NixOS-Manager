@@ -2,7 +2,7 @@
 
 use common::actions::{default_bundles, default_profiles};
 use common::config::paths;
-use common::ipc::{GeneratedFile, NetworkConfig, ServicesConfig};
+use common::ipc::{GeneratedFile, HardwareConfig, NetworkConfig, ServicesConfig};
 use common::nix::{
     generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix, generate_hostname_nix,
     generate_selected_nix_full, generate_services_nix, generate_user_groups_nix, read_template,
@@ -26,6 +26,7 @@ pub fn generate_all_files(
     custom_packages: &[String],
     network_config: &NetworkConfig,
     services_config: &ServicesConfig,
+    hardware_config: &HardwareConfig,
     dry_run: bool,
 ) -> anyhow::Result<Vec<GeneratedFile>> {
     let mut files = Vec::new();
@@ -44,6 +45,8 @@ pub fn generate_all_files(
         .filter(|b| enabled_bundles.contains(&b.id))
         .collect();
 
+    let hardware_config = hardware_config.clone().with_bluetooth_or(bluetooth_enabled);
+
     // Build options for Nix generation
     let options = NixGenOptions {
         profile,
@@ -53,10 +56,11 @@ pub fn generate_all_files(
         dns_servers: dns_servers.to_vec(),
         user_groups: user_groups.to_vec(),
         username,
-        bluetooth_enabled,
+        bluetooth_enabled: hardware_config.bluetooth_enabled,
         custom_packages: custom_packages.to_vec(),
         network_config: network_config.clone(),
         services_config: services_config.clone(),
+        hardware_config: hardware_config.clone(),
     };
 
     // Generate selected.nix
@@ -111,16 +115,9 @@ pub fn generate_all_files(
         }
     }
 
-    // Generate hardware.nix if Bluetooth is enabled
-    if bluetooth_enabled {
-        let hardware_content = generate_hardware_nix(
-            false, // nvidia_enabled - not implemented yet
-            false, // nvidia_open
-            false, // audio_pipewire
-            true,  // bluetooth_enabled
-            false, // tlp_enabled
-            false, // thermald_enabled
-        );
+    // Generate hardware.nix when any non-default hardware setting is set
+    if hardware_config.has_settings() {
+        let hardware_content = generate_hardware_nix(&hardware_config);
         files.push(GeneratedFile {
             path: paths::HARDWARE_NIX.to_string(),
             content: hardware_content.clone(),
@@ -616,4 +613,64 @@ fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
 "#,
         id, pkg_list
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::ipc::HardwareConfig;
+    use std::collections::HashMap;
+
+    fn dry_run(bluetooth: bool, hardware: &HardwareConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        generate_all_files(
+            &None,
+            &[],
+            &HashMap::new(),
+            None,
+            &[],
+            &[],
+            None,
+            bluetooth,
+            &[],
+            &NetworkConfig::default(),
+            &ServicesConfig::default(),
+            hardware,
+            true,
+        )
+    }
+
+    #[test]
+    fn dry_run_emits_hardware_nix_for_nvidia() {
+        let hw = HardwareConfig {
+            nvidia_driver: Some(0),
+            ..HardwareConfig::default()
+        };
+        let files = dry_run(false, &hw).unwrap();
+        let hardware = files
+            .iter()
+            .find(|f| f.path.contains("hardware.nix"))
+            .expect("hardware.nix");
+        assert!(hardware.content.contains("nvidiaPackages.stable"));
+        let selected = files
+            .iter()
+            .find(|f| f.path.contains("selected.nix"))
+            .expect("selected.nix");
+        assert!(selected.content.contains("./hardware.nix"));
+    }
+
+    #[test]
+    fn dry_run_ors_sibling_bluetooth() {
+        let files = dry_run(true, &HardwareConfig::default()).unwrap();
+        let hardware = files
+            .iter()
+            .find(|f| f.path.contains("hardware.nix"))
+            .expect("hardware.nix");
+        assert!(hardware.content.contains("hardware.bluetooth"));
+    }
+
+    #[test]
+    fn dry_run_skips_hardware_when_default() {
+        let files = dry_run(false, &HardwareConfig::default()).unwrap();
+        assert!(!files.iter().any(|f| f.path.contains("hardware.nix")));
+    }
 }

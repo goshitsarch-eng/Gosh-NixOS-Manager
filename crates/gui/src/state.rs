@@ -1,6 +1,11 @@
 //! Application selection state. The only source of truth for what will be applied.
 
-use common::ipc::{AppState as IpcAppState, HardwareConfig, NetworkConfig, ServicesConfig};
+use common::actions::{BundleDef, ProfileDef};
+use common::ipc::{
+    AppState as IpcAppState, HardwareConfig, HelperRequest, NetworkConfig, RebuildType,
+    ServicesConfig,
+};
+use common::nix::NixGenOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -356,6 +361,104 @@ impl AppState {
         }
     }
 
+    /// Hardware config with the sibling bluetooth flag OR-ed in.
+    #[must_use]
+    pub fn effective_hardware(&self) -> HardwareConfig {
+        self.hardware_config
+            .clone()
+            .with_bluetooth_or(self.bluetooth_enabled)
+    }
+
+    /// GTK empty-apply check (profile + bundles + packages) plus non-default hardware (C3/N5).
+    #[must_use]
+    pub fn apply_is_empty(&self) -> bool {
+        self.selected_profile.is_none()
+            && self.enabled_bundles.is_empty()
+            && self.custom_packages.is_empty()
+            && !self.effective_hardware().has_settings()
+    }
+
+    fn bundle_packages_for_ipc(&self) -> HashMap<String, Vec<String>> {
+        self.bundle_packages
+            .iter()
+            .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+            .collect()
+    }
+
+    /// Preview / generate payload. Includes `hardware_config`.
+    #[must_use]
+    pub fn to_nix_gen_options<'a>(
+        &'a self,
+        profiles: &'a [ProfileDef],
+        bundles: &'a [BundleDef],
+    ) -> NixGenOptions<'a> {
+        let profile = self
+            .selected_profile
+            .as_ref()
+            .and_then(|id| profiles.iter().find(|p| &p.id == id));
+        let enabled: Vec<_> = bundles
+            .iter()
+            .filter(|b| self.enabled_bundles.contains(&b.id))
+            .collect();
+        let hardware_config = self.effective_hardware();
+        NixGenOptions {
+            profile,
+            bundles: enabled,
+            bundle_packages: self.bundle_packages_for_ipc(),
+            hostname: self.hostname.as_deref(),
+            dns_servers: self.dns_servers.clone(),
+            user_groups: self.user_groups.iter().cloned().collect(),
+            username: self.username.as_deref(),
+            bluetooth_enabled: hardware_config.bluetooth_enabled,
+            custom_packages: self.custom_packages.iter().cloned().collect(),
+            network_config: self.network_config.clone(),
+            services_config: self.services_config.clone(),
+            hardware_config,
+        }
+    }
+
+    /// Apply IPC payload. Includes `hardware_config` and mirrors bluetooth.
+    #[must_use]
+    pub fn to_apply_request(&self, rebuild: RebuildType) -> HelperRequest {
+        let hardware_config = self.effective_hardware();
+        HelperRequest::Apply {
+            selected_profile: self.selected_profile.clone(),
+            enabled_bundles: self.enabled_bundles.iter().cloned().collect(),
+            bundle_packages: self.bundle_packages_for_ipc(),
+            hostname: self.hostname.clone(),
+            dns_servers: self.dns_servers.clone(),
+            user_groups: self.user_groups.iter().cloned().collect(),
+            username: self.username.clone(),
+            bluetooth_enabled: hardware_config.bluetooth_enabled,
+            custom_packages: self.custom_packages.iter().cloned().collect(),
+            network_config: self.network_config.clone(),
+            services_config: self.services_config.clone(),
+            hardware_config,
+            rebuild_type: rebuild,
+        }
+    }
+
+    /// Generate / dry-run IPC payload. Includes `hardware_config`.
+    #[must_use]
+    pub fn to_generate_request(&self, dry_run: bool) -> HelperRequest {
+        let hardware_config = self.effective_hardware();
+        HelperRequest::Generate {
+            selected_profile: self.selected_profile.clone(),
+            enabled_bundles: self.enabled_bundles.iter().cloned().collect(),
+            bundle_packages: self.bundle_packages_for_ipc(),
+            hostname: self.hostname.clone(),
+            dns_servers: self.dns_servers.clone(),
+            user_groups: self.user_groups.iter().cloned().collect(),
+            username: self.username.clone(),
+            bluetooth_enabled: hardware_config.bluetooth_enabled,
+            custom_packages: self.custom_packages.iter().cloned().collect(),
+            network_config: self.network_config.clone(),
+            services_config: self.services_config.clone(),
+            hardware_config,
+            dry_run,
+        }
+    }
+
     #[must_use]
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
@@ -455,7 +558,9 @@ fn is_ipv4(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::actions::{default_bundles, default_profiles};
     use common::ipc::HardwareConfig;
+    use common::nix::generate_preview_full;
 
     #[test]
     fn bluetooth_mirror_prefers_hardware_on_diverge() {
@@ -478,5 +583,68 @@ mod tests {
         state.set_bluetooth_enabled(true);
         assert!(state.bluetooth_enabled);
         assert!(state.hardware_config.bluetooth_enabled);
+    }
+
+    #[test]
+    fn apply_is_empty_counts_non_default_hardware() {
+        let mut state = AppState::new();
+        assert!(state.apply_is_empty());
+        state.network_config.ssh_enabled = true;
+        assert!(state.apply_is_empty());
+        state.set_bluetooth_enabled(true);
+        assert!(!state.apply_is_empty());
+    }
+
+    #[test]
+    fn to_apply_request_includes_hardware_config() {
+        let mut state = AppState::new();
+        state.hardware_config.nvidia_driver = Some(0);
+        state.hardware_config.nvidia_modesetting = true;
+        state.set_bluetooth_enabled(true);
+        match state.to_apply_request(RebuildType::Switch) {
+            HelperRequest::Apply {
+                hardware_config,
+                bluetooth_enabled,
+                rebuild_type,
+                ..
+            } => {
+                assert_eq!(hardware_config.nvidia_driver, Some(0));
+                assert!(hardware_config.nvidia_modesetting);
+                assert!(hardware_config.bluetooth_enabled);
+                assert!(bluetooth_enabled);
+                assert_eq!(rebuild_type, RebuildType::Switch);
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_generate_request_includes_hardware_config() {
+        let mut state = AppState::new();
+        state.hardware_config.audio_server = 1;
+        match state.to_generate_request(true) {
+            HelperRequest::Generate {
+                hardware_config,
+                dry_run,
+                ..
+            } => {
+                assert_eq!(hardware_config.audio_server, 1);
+                assert!(dry_run);
+            }
+            other => panic!("expected Generate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preview_payload_includes_hardware_nix() {
+        let mut state = AppState::new();
+        state.hardware_config.nvidia_driver = Some(2);
+        let profiles = default_profiles();
+        let bundles = default_bundles();
+        let options = state.to_nix_gen_options(&profiles, &bundles);
+        assert_eq!(options.hardware_config.nvidia_driver, Some(2));
+        let preview = generate_preview_full(&options);
+        assert!(preview.contains("hardware.nix"));
+        assert!(preview.contains("nvidia-open"));
     }
 }

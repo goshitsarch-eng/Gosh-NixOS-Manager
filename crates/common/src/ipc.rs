@@ -33,6 +33,8 @@ pub enum HelperRequest {
         custom_packages: Vec<String>,
         network_config: NetworkConfig,
         services_config: ServicesConfig,
+        #[serde(default)]
+        hardware_config: HardwareConfig,
         dry_run: bool,
     },
 
@@ -49,6 +51,8 @@ pub enum HelperRequest {
         custom_packages: Vec<String>,
         network_config: NetworkConfig,
         services_config: ServicesConfig,
+        #[serde(default)]
+        hardware_config: HardwareConfig,
         rebuild_type: RebuildType,
     },
 
@@ -408,7 +412,7 @@ impl ServicesConfig {
 }
 
 /// Hardware configuration for GPU, audio, bluetooth, and power management
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HardwareConfig {
     /// NVIDIA driver selection: 0=Stable, 1=Beta, 2=Open, 3=Nouveau, None=not NVIDIA
     #[serde(default)]
@@ -443,6 +447,21 @@ pub struct HardwareConfig {
     /// Enable Intel Thermald
     #[serde(default)]
     pub thermald_enabled: bool,
+}
+
+impl HardwareConfig {
+    /// True when any field differs from the struct default.
+    #[must_use]
+    pub fn has_settings(&self) -> bool {
+        self != &Self::default()
+    }
+
+    /// OR the sibling `bluetooth_enabled` flag onto this config.
+    #[must_use]
+    pub fn with_bluetooth_or(mut self, bluetooth_enabled: bool) -> Self {
+        self.bluetooth_enabled = self.bluetooth_enabled || bluetooth_enabled;
+        self
+    }
 }
 
 /// Persisted application state
@@ -480,4 +499,126 @@ pub struct AppState {
     /// Hardware configuration (GPU, audio, bluetooth, power)
     #[serde(default)]
     pub hardware_config: HardwareConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GTK-era Apply JSON has no `hardware_config` field.
+    const OLD_APPLY_JSON: &str = r#"{
+        "type": "Apply",
+        "payload": {
+            "selected_profile": "gnome",
+            "enabled_bundles": [],
+            "bundle_packages": {},
+            "hostname": null,
+            "dns_servers": [],
+            "user_groups": [],
+            "username": null,
+            "bluetooth_enabled": true,
+            "custom_packages": [],
+            "network_config": {
+                "firewall_enabled": true,
+                "allowed_tcp_ports": [],
+                "allowed_udp_ports": [],
+                "ssh_enabled": false,
+                "ssh_port": 22,
+                "ssh_password_auth": false,
+                "ssh_root_login": "no",
+                "fail2ban_enabled": false,
+                "tailscale_enabled": false
+            },
+            "services_config": {},
+            "rebuild_type": "Switch"
+        }
+    }"#;
+
+    const OLD_GENERATE_JSON: &str = r#"{
+        "type": "Generate",
+        "payload": {
+            "selected_profile": null,
+            "enabled_bundles": [],
+            "bundle_packages": {},
+            "hostname": null,
+            "dns_servers": [],
+            "user_groups": [],
+            "username": null,
+            "bluetooth_enabled": false,
+            "custom_packages": [],
+            "network_config": {},
+            "services_config": {},
+            "dry_run": true
+        }
+    }"#;
+
+    #[test]
+    fn old_apply_json_without_hardware_config_deserializes() {
+        let request: HelperRequest =
+            serde_json::from_str(OLD_APPLY_JSON).expect("old Apply JSON should deserialize");
+        match request {
+            HelperRequest::Apply {
+                bluetooth_enabled,
+                hardware_config,
+                selected_profile,
+                rebuild_type,
+                ..
+            } => {
+                assert!(bluetooth_enabled);
+                assert_eq!(hardware_config, HardwareConfig::default());
+                assert!(!hardware_config.has_settings());
+                assert_eq!(selected_profile.as_deref(), Some("gnome"));
+                assert_eq!(rebuild_type, RebuildType::Switch);
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn old_generate_json_without_hardware_config_deserializes() {
+        let request: HelperRequest =
+            serde_json::from_str(OLD_GENERATE_JSON).expect("old Generate JSON should deserialize");
+        match request {
+            HelperRequest::Generate {
+                hardware_config,
+                dry_run,
+                ..
+            } => {
+                assert_eq!(hardware_config, HardwareConfig::default());
+                assert!(dry_run);
+            }
+            other => panic!("expected Generate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hardware_has_settings_tracks_non_default_fields() {
+        assert!(!HardwareConfig::default().has_settings());
+        assert!(HardwareConfig {
+            bluetooth_enabled: true,
+            ..HardwareConfig::default()
+        }
+        .has_settings());
+        assert!(HardwareConfig {
+            nvidia_driver: Some(0),
+            ..HardwareConfig::default()
+        }
+        .has_settings());
+        assert!(HardwareConfig {
+            audio_server: 1,
+            ..HardwareConfig::default()
+        }
+        .has_settings());
+    }
+
+    #[test]
+    fn with_bluetooth_or_merges_sibling() {
+        let hw = HardwareConfig::default().with_bluetooth_or(true);
+        assert!(hw.bluetooth_enabled);
+        let already = HardwareConfig {
+            bluetooth_enabled: true,
+            ..HardwareConfig::default()
+        };
+        assert!(already.with_bluetooth_or(false).bluetooth_enabled);
+    }
 }

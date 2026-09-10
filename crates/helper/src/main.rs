@@ -95,6 +95,7 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             custom_packages,
             network_config,
             services_config,
+            hardware_config,
             dry_run,
         } => commands::generate(
             selected_profile,
@@ -108,6 +109,7 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             custom_packages,
             network_config,
             services_config,
+            hardware_config,
             dry_run,
         ),
         HelperRequest::Apply {
@@ -122,6 +124,7 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             custom_packages,
             network_config,
             services_config,
+            hardware_config,
             rebuild_type,
         } => commands::apply(
             selected_profile,
@@ -135,6 +138,7 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             custom_packages,
             network_config,
             services_config,
+            hardware_config,
             rebuild_type,
         ),
         HelperRequest::EnsureDirectories => commands::ensure_directories(),

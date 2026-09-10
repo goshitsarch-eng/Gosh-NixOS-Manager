@@ -5,7 +5,8 @@ use crate::rebuild;
 use common::actions::{default_bundles, default_profiles};
 use common::config::{paths, ConfigMode, IntegrationStatus, SystemInfo};
 use common::ipc::{
-    AppState, Generation, HelperResponse, LogLevel, NetworkConfig, RebuildType, ServicesConfig,
+    AppState, Generation, HardwareConfig, HelperResponse, LogLevel, NetworkConfig, RebuildType,
+    ServicesConfig,
 };
 use std::fs;
 use std::io::Write;
@@ -215,6 +216,7 @@ pub fn generate(
     custom_packages: Vec<String>,
     network_config: NetworkConfig,
     services_config: ServicesConfig,
+    hardware_config: HardwareConfig,
     dry_run: bool,
 ) -> HelperResponse {
     // First ensure directories exist
@@ -237,6 +239,7 @@ pub fn generate(
         &custom_packages,
         &network_config,
         &services_config,
+        &hardware_config,
         dry_run,
     ) {
         Ok(files) => {
@@ -270,6 +273,7 @@ pub fn apply(
     custom_packages: Vec<String>,
     network_config: NetworkConfig,
     services_config: ServicesConfig,
+    hardware_config: HardwareConfig,
     rebuild_type: RebuildType,
 ) -> HelperResponse {
     // Ensure directories exist before generating files
@@ -290,6 +294,7 @@ pub fn apply(
         &custom_packages,
         &network_config,
         &services_config,
+        &hardware_config,
         false,
     ) {
         Ok(files) => {

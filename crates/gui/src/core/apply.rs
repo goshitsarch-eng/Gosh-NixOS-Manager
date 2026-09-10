@@ -334,9 +334,7 @@ impl AppModel {
                 if self.busy != Busy::Idle {
                     return Vec::new();
                 }
-                let empty = self.state.selected_profile.is_none()
-                    && self.state.enabled_bundles.is_empty()
-                    && self.state.custom_packages.is_empty();
+                let empty = self.state.apply_is_empty();
                 self.dialog = Some(if empty {
                     Dialog::ConfirmApply {
                         heading: "Apply Empty Configuration?".into(),
@@ -906,6 +904,21 @@ mod tests {
                 ..
             }) => assert!(heading.contains("Empty")),
             other => panic!("expected empty ConfirmApply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_apply_hardware_only_is_not_empty() {
+        let mut app = test_app();
+        app.state.hardware_config.nvidia_driver = Some(0);
+        app.apply(Message::RequestApply);
+        match &app.dialog {
+            Some(Dialog::ConfirmApply {
+                destructive: false,
+                heading,
+                ..
+            }) => assert_eq!(heading, "Apply Configuration?"),
+            other => panic!("expected non-empty ConfirmApply, got {other:?}"),
         }
     }
 
