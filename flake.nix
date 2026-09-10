@@ -258,13 +258,19 @@
               default = self.packages.${pkgs.system}.default;
               description = "The nixos-toolkit package to use";
             };
+
+            helperPackage = lib.mkOption {
+              type = lib.types.package;
+              default = self.packages.${pkgs.system}.helper;
+              description = "The nixos-toolkit-helper package to use";
+            };
           };
 
           config = lib.mkIf cfg.enable {
             security.polkit.enable = true;
             environment.systemPackages = [
               cfg.package
-              self.packages.${pkgs.system}.helper
+              cfg.helperPackage
             ];
           };
         };

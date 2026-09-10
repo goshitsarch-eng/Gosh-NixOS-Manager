@@ -60,6 +60,22 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-targets -- --nocapture
 
+  # Lightweight flake checks only (fmt + audit). Do not run `nix flake check`:
+  # that also builds gui, helper, and clippy and is too heavy for every PR.
+  flake:
+    name: flake
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: flake fmt
+        run: nix build .#checks.x86_64-linux.fmt
+
+      - name: flake audit
+        run: nix build .#checks.x86_64-linux.audit
+
   # Full Flatpak + weston smoke is the local `scripts/verify.sh` gate.
   # GitHub-hosted runners are tight on disk/time for Freedesktop 25.08 + libcosmic.
   # Enable via workflow_dispatch when a runner with cached runtimes is available.
