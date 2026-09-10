@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-NixOS Toolkit - A GTK4/libadwaita GUI for declarative NixOS system management. Users select desktop profiles, software bundles, and system settings through a graphical interface, and the tool generates appropriate Nix configuration files.
+NixOS Toolkit - A libcosmic GUI for declarative NixOS system management. Users select desktop profiles, software bundles, and system settings through a graphical interface, and the tool generates appropriate Nix configuration files.
 
 ## Build & Development Commands
 
@@ -42,7 +42,7 @@ nix run github:goshitsarch-eng/Gosh-NixOS-Manager
 ```
 crates/
 ├── common/     # Shared types: actions.rs (profile/bundle defs), ipc.rs (JSON protocol), config.rs, nix.rs
-├── gui/        # GTK4/libadwaita application - pages/ contains all UI screens
+├── gui/        # libcosmic application - view/ contains all UI screens
 └── helper/     # Privileged operations binary - runs via pkexec
 ```
 
@@ -56,7 +56,7 @@ crates/
 
 - `crates/common/src/actions.rs` - Define profiles (13 desktop environments) and bundles (15 software collections) here
 - `crates/common/src/ipc.rs` - IPC message types (`HelperRequest`, `HelperResponse`, `AppState`)
-- `crates/gui/src/pages/*.rs` - UI pages for each feature (profiles, bundles, hardware, network, etc.)
+- `crates/gui/src/view/*.rs` - UI pages for each feature (profiles, bundles, hardware, network, etc.)
 - `crates/helper/src/commands.rs` - Request handlers (12 commands)
 - `crates/helper/src/nix_gen.rs` - Nix file generation logic
 - `nix/templates/profiles/` - Nix templates for desktop environments

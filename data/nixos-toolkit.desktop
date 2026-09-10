@@ -8,5 +8,5 @@ Terminal=false
 Type=Application
 Categories=System;Settings;
 Keywords=nix;nixos;system;configuration;settings;
-StartupWMClass=nixos-toolkit
+StartupWMClass=io.github.goshitsarch_eng.NixosToolkit
 StartupNotify=true

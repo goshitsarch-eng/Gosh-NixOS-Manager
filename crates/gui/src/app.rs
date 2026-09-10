@@ -521,7 +521,6 @@ impl Application for AppModel {
                     Key::Character(c) if c.eq_ignore_ascii_case("r") && modifiers.control() => {
                         Some(Message::RefreshSystem)
                     }
-                    Key::Named(Named::Escape) => Some(Message::DismissDialog),
                     _ => {
                         let _ = modifiers;
                         None
@@ -552,7 +551,13 @@ impl Application for AppModel {
     }
 
     fn on_escape(&mut self) -> Task<Self::Message> {
-        self.update(Message::DismissDialog)
+        if self.dialog.is_some() {
+            return self.update(Message::DismissDialog);
+        }
+        if self.context_open {
+            return self.update(Message::ToggleAbout);
+        }
+        Task::none()
     }
 }
 

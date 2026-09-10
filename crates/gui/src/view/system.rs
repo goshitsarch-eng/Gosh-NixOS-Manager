@@ -31,15 +31,18 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
     ];
 
     let mut groups = settings::section().title(crate::fl!("system-groups"));
-    groups = groups.add(
-        settings::item::builder(crate::fl!("system-username"))
-            .icon(super::icon("avatar-default-symbolic"))
-            .control(
-                widget::text_input(crate::fl!("system-username-placeholder"), username)
-                    .on_input(Message::UsernameChanged)
-                    .on_submit(Message::UsernameChanged),
-            ),
-    );
+    groups = groups.add({
+        let mut username_item = settings::item::builder(crate::fl!("system-username"))
+            .icon(super::icon("avatar-default-symbolic"));
+        if let Some(error) = app.field_errors.username.as_deref() {
+            username_item = username_item.description(error.to_owned());
+        }
+        username_item.control(
+            widget::text_input(crate::fl!("system-username-placeholder"), username)
+                .on_input(Message::UsernameChanged)
+                .on_submit(Message::UsernameChanged),
+        )
+    });
     for action in super::catalog_system_actions() {
         let SystemActionType::UserGroup { group } = &action.action_type else {
             continue;

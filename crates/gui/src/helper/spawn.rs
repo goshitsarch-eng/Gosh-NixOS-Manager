@@ -39,6 +39,8 @@ pub struct SpawnInputs {
     pub probed_helper: Option<String>,
     /// Host install discovery result (may use `Path::exists`).
     pub host_helper: String,
+    /// Host helper path is an executable file (or `which` found it).
+    pub host_helper_executable: bool,
 }
 
 impl SpawnSpec {
@@ -67,6 +69,8 @@ impl SpawnSpec {
         } else {
             discover_helper_path(helper_env.as_deref())
         };
+        let resolved_helper = helper_env.clone().unwrap_or_else(|| host_helper.clone());
+        let host_helper_executable = helper_is_executable(&resolved_helper);
 
         Self::from_parts(SpawnInputs {
             no_pkexec,
@@ -77,6 +81,7 @@ impl SpawnSpec {
             in_flatpak,
             probed_helper,
             host_helper,
+            host_helper_executable,
         })
     }
 
@@ -154,7 +159,7 @@ impl SpawnSpec {
             extra_env,
             remove_env,
             templates_dir,
-            helper_available: true,
+            helper_available: inputs.host_helper_executable,
         }
     }
 
@@ -265,6 +270,23 @@ fn host_executable(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn helper_is_executable(path: &str) -> bool {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() || path.contains('/') {
+        return unix_executable(candidate);
+    }
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| unix_executable(&dir.join(path))))
+        .unwrap_or(false)
+}
+
+fn unix_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .ok()
+        .is_some_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +301,7 @@ mod tests {
             in_flatpak: false,
             probed_helper: None,
             host_helper: "/usr/bin/nixos-toolkit-helper".into(),
+            host_helper_executable: true,
         }
     }
 
@@ -341,5 +364,14 @@ mod tests {
         assert!(spec.helper_available);
         assert_eq!(spec.program, PathBuf::from("pkexec"));
         assert_eq!(spec.args, vec!["/usr/bin/nixos-toolkit-helper".to_string()]);
+    }
+
+    #[test]
+    fn missing_host_helper_does_not_pkexec() {
+        let mut inputs = base_inputs();
+        inputs.host_helper_executable = false;
+        let spec = SpawnSpec::from_parts(inputs);
+        assert!(!spec.helper_available);
+        assert_eq!(spec.program, PathBuf::from("pkexec"));
     }
 }

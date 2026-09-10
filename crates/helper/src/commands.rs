@@ -281,7 +281,23 @@ pub fn apply(
         return HelperResponse::Error { message, details };
     }
 
-    // Generate files (not dry run)
+    let dry = matches!(rebuild_type, RebuildType::DryBuild);
+    let snapshot = if dry {
+        match snapshot_managed_dir() {
+            Ok(snap) => Some(snap),
+            Err(e) => {
+                return HelperResponse::Error {
+                    message: "Failed to snapshot managed configuration for dry-run".into(),
+                    details: Some(e.to_string()),
+                };
+            }
+        }
+    } else {
+        None
+    };
+
+    // Dry-build still writes so nixos-rebuild can evaluate the proposed tree;
+    // the snapshot is restored afterwards so nothing is left on disk.
     match nix_gen::generate_all_files(
         &selected_profile,
         &enabled_bundles,
@@ -298,9 +314,9 @@ pub fn apply(
         false,
     ) {
         Ok(files) => {
-            // Log each file that was written
             for f in &files {
-                send_log(LogLevel::Info, format!("Wrote: {}", f.path));
+                let prefix = if dry { "Would write" } else { "Wrote" };
+                send_log(LogLevel::Info, format!("{prefix}: {}", f.path));
             }
             send_log(
                 LogLevel::Info,
@@ -322,8 +338,80 @@ pub fn apply(
         ConfigMode::Classic
     };
 
-    // Run nixos-rebuild
-    rebuild::run_rebuild(rebuild_type, config_mode)
+    let response = rebuild::run_rebuild(rebuild_type, config_mode);
+    if dry {
+        if let Some(snapshot) = snapshot {
+            match snapshot.restore() {
+                Ok(()) => send_log(
+                    LogLevel::Info,
+                    "Dry-build finished; previous managed configuration restored.".into(),
+                ),
+                Err(e) => send_log(
+                    LogLevel::Error,
+                    format!("Dry-build finished but restoring managed files failed: {e}"),
+                ),
+            }
+        }
+    }
+    response
+}
+
+struct ManagedDirSnapshot {
+    backup: Option<tempfile::TempDir>,
+    existed: bool,
+}
+
+fn snapshot_managed_dir() -> anyhow::Result<ManagedDirSnapshot> {
+    let src = Path::new(paths::MANAGED_DIR);
+    if !src.exists() {
+        return Ok(ManagedDirSnapshot {
+            backup: None,
+            existed: false,
+        });
+    }
+    let backup = tempfile::Builder::new()
+        .prefix("nixos-toolkit-dryrun-")
+        .tempdir()?;
+    copy_dir_all(src, backup.path())?;
+    Ok(ManagedDirSnapshot {
+        backup: Some(backup),
+        existed: true,
+    })
+}
+
+impl ManagedDirSnapshot {
+    fn restore(self) -> anyhow::Result<()> {
+        let dest = Path::new(paths::MANAGED_DIR);
+        if !self.existed {
+            if dest.exists() {
+                fs::remove_dir_all(dest)?;
+            }
+            return Ok(());
+        }
+        let backup = self
+            .backup
+            .as_ref()
+            .expect("existed snapshot always has a backup dir");
+        if dest.exists() {
+            fs::remove_dir_all(dest)?;
+        }
+        copy_dir_all(backup.path(), dest)?;
+        Ok(())
+    }
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let dest = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &dest)?;
+        } else {
+            fs::copy(entry.path(), dest)?;
+        }
+    }
+    Ok(())
 }
 
 /// Ensure required directories exist and create placeholder files
@@ -379,10 +467,16 @@ pub fn read_state() -> HelperResponse {
     match fs::read_to_string(paths::STATE_JSON) {
         Ok(content) => match serde_json::from_str::<AppState>(&content) {
             Ok(state) => HelperResponse::State(state),
-            Err(e) => HelperResponse::Error {
-                message: "Failed to parse state".into(),
-                details: Some(e.to_string()),
-            },
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse state.json ({e}); reconstructing from managed Nix files"
+                );
+                send_log(
+                    LogLevel::Warning,
+                    format!("state.json was unreadable ({e}); reconstructing from Nix files"),
+                );
+                HelperResponse::State(reconstruct_state_from_nix())
+            }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // state.json doesn't exist - try to reconstruct from existing Nix files

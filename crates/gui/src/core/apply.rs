@@ -248,7 +248,19 @@ impl AppModel {
                 Vec::new()
             }
             Message::UsernameChanged(username) => {
-                self.state.set_username(username);
+                let trimmed = username.trim().to_string();
+                if trimmed.is_empty() {
+                    self.field_errors.username = None;
+                    self.state.set_username("");
+                    return Vec::new();
+                }
+                if !crate::app::is_valid_username(&trimmed) {
+                    self.field_errors.username =
+                        Some("Username contains invalid characters".into());
+                    return Vec::new();
+                }
+                self.field_errors.username = None;
+                self.state.set_username(trimmed);
                 Vec::new()
             }
             Message::ToggleUserGroup { group, enabled } => {
@@ -315,7 +327,14 @@ impl AppModel {
                 Vec::new()
             }
             Message::GpuDetected(gpu) => {
+                let nvidia = gpu.to_ascii_lowercase().contains("nvidia");
                 self.gpu_vendor = Some(gpu);
+                if nvidia
+                    && !self.cpu_arch.is_arm()
+                    && self.state.hardware_config.nvidia_driver.is_none()
+                {
+                    self.state.hardware_config.nvidia_driver = Some(0);
+                }
                 Vec::new()
             }
 
@@ -724,6 +743,7 @@ impl AppModel {
     pub(crate) fn hardware_for_nix(&self) -> HardwareConfig {
         let mut hardware_config = self.state.effective_hardware();
         if hardware_config.nvidia_driver.is_none()
+            && !self.cpu_arch.is_arm()
             && self
                 .gpu_vendor
                 .as_deref()
@@ -759,7 +779,13 @@ impl AppModel {
         } else {
             "Starting nixos-rebuild switch...\n\n".into()
         };
-        let save = then_write_state.then(|| Box::new(self.state.to_ipc_state()));
+        let save = then_write_state.then(|| {
+            let mut ipc = self.state.to_ipc_state();
+            let hardware = self.hardware_for_nix();
+            ipc.bluetooth_enabled = hardware.bluetooth_enabled;
+            ipc.hardware_config = hardware;
+            Box::new(ipc)
+        });
         let request = self.to_apply_request(rebuild);
         vec![Intent::SpawnHelper {
             op: HelperOp::Apply {
@@ -835,11 +861,21 @@ impl AppModel {
         if self.busy != Busy::Idle {
             return Vec::new();
         }
-        match self.current_generation {
-            Some(current) if current > 1 => self.apply(Message::RequestRollback {
-                generation: current - 1,
-            }),
-            Some(_) => {
+        let previous = self.current_generation.and_then(|current| {
+            self.generations
+                .iter()
+                .filter(|generation| generation.number < current)
+                .map(|generation| generation.number)
+                .max()
+        });
+        match previous {
+            Some(generation) => self.apply(Message::RequestRollback { generation }),
+            None if self.current_generation.is_some() && self.generations.is_empty() => {
+                self.generations_log
+                    .push_str("Cannot rollback: refresh the generation list first.\n");
+                Vec::new()
+            }
+            None if self.current_generation.is_some() => {
                 self.generations_log
                     .push_str("Cannot rollback: already at the first generation.\n");
                 Vec::new()
@@ -1427,9 +1463,10 @@ mod tests {
     fn nvidia_gpu_apply_defaults_unwritten_driver_to_stable() {
         let mut app = test_app_with_helper();
         app.apply(Message::GpuDetected("NVIDIA GeForce RTX 3060".into()));
-        assert!(app.state.hardware_config.nvidia_driver.is_none());
+        assert_eq!(app.state.hardware_config.nvidia_driver, Some(0));
         assert_eq!(app.hardware_for_nix().nvidia_driver, Some(0));
         assert!(app.hardware_for_nix().nvidia_modesetting);
+        assert!(!app.state.apply_is_empty());
 
         let intents = app.apply(Message::RequestDryRun);
         match spawn_helper(&intents) {
@@ -1441,7 +1478,17 @@ mod tests {
             },
             other => panic!("expected SpawnHelper, got {other:?}"),
         }
+        assert_eq!(app.state.hardware_config.nvidia_driver, Some(0));
+    }
+
+    #[test]
+    fn nvidia_gpu_on_arm_does_not_default_driver() {
+        let mut app = test_app_with_helper();
+        app.cpu_arch = common::actions::CpuArch::Aarch64;
+        app.apply(Message::GpuDetected("NVIDIA GeForce RTX 3060".into()));
         assert!(app.state.hardware_config.nvidia_driver.is_none());
+        assert!(app.hardware_for_nix().nvidia_driver.is_none());
+        assert!(app.state.apply_is_empty());
     }
 
     #[test]
@@ -1640,13 +1687,31 @@ mod tests {
     }
 
     #[test]
-    fn rollback_to_previous_opens_dialog_for_current_minus_one() {
+    fn rollback_to_previous_opens_dialog_for_listed_previous() {
         let mut app = test_app();
         app.current_generation = Some(5);
+        app.generations = vec![
+            Generation {
+                number: 5,
+                date: String::new(),
+                current: true,
+                nixos_version: None,
+                kernel_version: None,
+                config_rev: None,
+            },
+            Generation {
+                number: 3,
+                date: String::new(),
+                current: false,
+                nixos_version: None,
+                kernel_version: None,
+                config_rev: None,
+            },
+        ];
         app.apply(Message::RollbackToPrevious);
         match &app.dialog {
-            Some(Dialog::ConfirmRollback { generation: 4 }) => {}
-            other => panic!("expected ConfirmRollback 4, got {other:?}"),
+            Some(Dialog::ConfirmRollback { generation: 3 }) => {}
+            other => panic!("expected ConfirmRollback 3, got {other:?}"),
         }
     }
 
@@ -1954,6 +2019,22 @@ mod tests {
         assert!(crate::app::is_valid_username("gosh_1"));
         assert!(!crate::app::is_valid_username("bad user"));
         assert!(!crate::app::is_valid_username(""));
+    }
+
+    #[test]
+    fn username_changed_rejects_invalid_charset() {
+        let mut app = test_app();
+        app.apply(Message::UsernameChanged("gosh".into()));
+        assert_eq!(app.state.username.as_deref(), Some("gosh"));
+        assert!(app.field_errors.username.is_none());
+
+        app.apply(Message::UsernameChanged("bad user".into()));
+        assert_eq!(app.state.username.as_deref(), Some("gosh"));
+        assert!(app.field_errors.username.is_some());
+
+        app.apply(Message::UsernameChanged("".into()));
+        assert!(app.state.username.is_none());
+        assert!(app.field_errors.username.is_none());
     }
 
     #[test]

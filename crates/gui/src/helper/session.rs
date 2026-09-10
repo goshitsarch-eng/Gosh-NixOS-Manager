@@ -205,8 +205,11 @@ fn write_state_after_apply(
             });
         }
         None => {
-            // Timeout or EOF: GTK still treated the rebuild as complete.
-            push_log(events, op, "State save completed.");
+            push_log(
+                events,
+                op,
+                "Warning: State save timed out or helper closed; rebuild may have succeeded.",
+            );
         }
     }
 }
@@ -265,9 +268,9 @@ fn recv_until_terminal(
 
 fn timeout_for(op: &HelperOp) -> Option<Duration> {
     match op {
-        HelperOp::ReadState => Some(Duration::from_secs(5)),
+        HelperOp::ReadState => Some(Duration::from_secs(300)),
         HelperOp::EnsureDirectories => Some(Duration::from_secs(10)),
-        HelperOp::WriteState => Some(Duration::from_secs(3)),
+        HelperOp::WriteState => Some(Duration::from_secs(30)),
         HelperOp::Apply { .. } => None,
         HelperOp::ListGenerations | HelperOp::GetDiskUsage | HelperOp::RunMaintenance { .. } => {
             Some(Duration::from_secs(60))

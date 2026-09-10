@@ -175,7 +175,7 @@ fn service_groups() -> [ServiceGroup; 7] {
                 name: "RustDesk",
                 description: "Open-source remote desktop (like TeamViewer/AnyDesk)",
                 icon: "computer-symbolic",
-                nix_option: "services.rustdesk-server.enable",
+                nix_option: "environment.systemPackages (rustdesk)",
             }],
             extra: Some((
                 crate::fl!("services-rustdesk-client"),

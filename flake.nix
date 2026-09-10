@@ -152,9 +152,11 @@
           cargoExtraArgs = "-p helper";
 
           postInstall = ''
-            # Install polkit policy
             install -Dm644 ${./data/polkit/org.nixos-toolkit.helper.policy} \
-              $out/share/polkit-1/actions/org.nixos-toolkit.helper.policy || true
+              $out/share/polkit-1/actions/org.nixos-toolkit.helper.policy
+            substituteInPlace $out/share/polkit-1/actions/org.nixos-toolkit.helper.policy \
+              --replace-fail '/run/current-system/sw/bin/nixos-toolkit-helper' \
+              "$out/bin/nixos-toolkit-helper"
           '';
 
           preFixup = ''
@@ -259,6 +261,7 @@
           };
 
           config = lib.mkIf cfg.enable {
+            security.polkit.enable = true;
             environment.systemPackages = [
               cfg.package
               self.packages.${pkgs.system}.helper

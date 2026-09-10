@@ -23,6 +23,47 @@ pub enum NixGenError {
     IoError(#[from] std::io::Error),
 }
 
+/// Quote `s` as a Nix string literal.
+#[must_use]
+pub fn nix_escape_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '$' => out.push_str("\\$"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// True when `name` is a safe nixpkgs attribute path (dots allowed).
+#[must_use]
+pub fn is_nix_attrpath(name: &str) -> bool {
+    if name.is_empty() || name.len() > 128 {
+        return false;
+    }
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && !name.contains("..")
+}
+
+fn nix_permit_root_login(value: &str) -> &'static str {
+    match value {
+        "yes" => "yes",
+        "prohibit-password" => "prohibit-password",
+        _ => "no",
+    }
+}
+
 /// Output from Nix generation
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NixOutput {
@@ -222,10 +263,10 @@ pub fn generate_hostname_nix(hostname: &str) -> String {
 {{ config, lib, pkgs, ... }}:
 
 {{
-  networking.hostName = lib.mkForce "{}";
+  networking.hostName = lib.mkForce {};
 }}
 "#,
-        hostname
+        nix_escape_string(hostname)
     )
 }
 
@@ -237,7 +278,7 @@ pub fn generate_dns_nix(servers: &[String]) -> String {
 
     let servers_str = servers
         .iter()
-        .map(|s| format!("    \"{}\"", s))
+        .map(|s| format!("    {}", nix_escape_string(s)))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -266,7 +307,7 @@ pub fn generate_user_groups_nix(username: &str, groups: &[String]) -> String {
 
     let groups_str = groups
         .iter()
-        .map(|g| format!("\"{}\"", g))
+        .map(|g| nix_escape_string(g))
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -282,7 +323,8 @@ pub fn generate_user_groups_nix(username: &str, groups: &[String]) -> String {
   }};
 }}
 "#,
-        username, groups_str
+        nix_escape_string(username),
+        groups_str
     )
 }
 
@@ -294,7 +336,8 @@ pub fn generate_custom_packages_nix(packages: &[String]) -> String {
 
     let packages_str = packages
         .iter()
-        .map(|p| format!("    {}", p))
+        .filter(|p| is_nix_attrpath(p))
+        .map(|p| format!("    {p}"))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -378,7 +421,7 @@ pub fn generate_ssh_nix(
         if enabled { "true" } else { "false" },
         port,
         if password_auth { "true" } else { "false" },
-        root_login
+        nix_permit_root_login(root_login)
     );
 
     if fail2ban {
@@ -458,7 +501,7 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
         1 => {
             sections.push(
                 r#"  # PulseAudio
-  hardware.pulseaudio.enable = true;
+  services.pulseaudio.enable = true;
   services.pipewire.enable = false;"#
                     .to_string(),
             );
@@ -467,7 +510,7 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
             sections.push(
                 r#"  # Audio disabled
   services.pipewire.enable = false;
-  hardware.pulseaudio.enable = false;"#
+  services.pulseaudio.enable = false;"#
                     .to_string(),
             );
         }
@@ -599,8 +642,7 @@ pub fn generate_services_nix(services: &[&str]) -> String {
   services.resolved.enable = true;"#
             }
             "rustdesk" => {
-                r#"  # RustDesk Remote Desktop
-  services.rustdesk-server.enable = true;
+                r#"  # RustDesk client
   environment.systemPackages = with pkgs; [ rustdesk ];"#
             }
             "syncthing" => {
@@ -612,7 +654,6 @@ pub fn generate_services_nix(services: &[&str]) -> String {
   services.locate = {
     enable = true;
     package = pkgs.plocate;
-    localuser = null;
   };"#
             }
             "flatpak" => {
@@ -803,7 +844,7 @@ pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path)
                 "  services.openssh = {{\n    enable = true;\n    ports = [ {} ];\n    settings = {{\n      PasswordAuthentication = {};\n      PermitRootLogin = \"{}\";\n    }};\n  }};\n",
                 options.network_config.ssh_port,
                 if options.network_config.ssh_password_auth { "true" } else { "false" },
-                options.network_config.ssh_root_login
+                nix_permit_root_login(&options.network_config.ssh_root_login)
             ));
 
             if options.network_config.fail2ban_enabled {
@@ -958,7 +999,7 @@ mod tests {
     #[test]
     fn pulseaudio_disables_pipewire() {
         let nix = generate_hardware_nix(&hw(|c| c.audio_server = 1));
-        assert!(nix.contains("hardware.pulseaudio.enable = true;"));
+        assert!(nix.contains("services.pulseaudio.enable = true;"));
         assert!(nix.contains("services.pipewire.enable = false;"));
         assert!(!nix.contains("services.pipewire = {"));
     }
@@ -967,7 +1008,7 @@ mod tests {
     fn audio_none_disables_servers() {
         let nix = generate_hardware_nix(&hw(|c| c.audio_server = 2));
         assert!(nix.contains("services.pipewire.enable = false;"));
-        assert!(nix.contains("hardware.pulseaudio.enable = false;"));
+        assert!(nix.contains("services.pulseaudio.enable = false;"));
     }
 
     #[test]
@@ -988,7 +1029,7 @@ mod tests {
             c.audio_lowlatency = true;
         }));
         assert!(!nix.contains("92-low-latency"));
-        assert!(nix.contains("hardware.pulseaudio.enable = true;"));
+        assert!(nix.contains("services.pulseaudio.enable = true;"));
     }
 
     #[test]
@@ -1053,7 +1094,7 @@ mod tests {
         assert!(!bluetooth.contains("power-profiles-daemon"));
 
         let pulse = generate_hardware_nix(&hw(|c| c.audio_server = 1));
-        assert!(pulse.contains("hardware.pulseaudio.enable = true;"));
+        assert!(pulse.contains("services.pulseaudio.enable = true;"));
         assert!(!pulse.contains("power-profiles-daemon"));
 
         let nvidia = generate_hardware_nix(&hw(|c| c.nvidia_driver = Some(0)));
@@ -1094,6 +1135,57 @@ mod tests {
         };
         let preview = generate_preview_full(&options);
         assert!(preview.contains("hardware.nix"));
-        assert!(preview.contains("hardware.pulseaudio.enable = true;"));
+        assert!(preview.contains("services.pulseaudio.enable = true;"));
+    }
+
+    #[test]
+    fn nix_escape_string_quotes_and_dollars() {
+        assert_eq!(nix_escape_string("nixos"), "\"nixos\"");
+        assert_eq!(nix_escape_string("foo\"bar"), "\"foo\\\"bar\"");
+        assert_eq!(nix_escape_string("a${b}"), "\"a\\${b}\"");
+    }
+
+    #[test]
+    fn user_groups_quotes_hyphenated_username() {
+        let nix = generate_user_groups_nix("gosh-1", &["libvirtd".into()]);
+        assert!(nix.contains("users.users.\"gosh-1\""));
+        assert!(nix.contains("extraGroups = [ \"libvirtd\" ];"));
+        assert!(!nix.contains("users.users.gosh-1"));
+    }
+
+    #[test]
+    fn hostname_is_quoted_nix_string() {
+        let nix = generate_hostname_nix("desk-1");
+        assert!(nix.contains("networking.hostName = lib.mkForce \"desk-1\";"));
+    }
+
+    #[test]
+    fn locate_omits_removed_localuser() {
+        let nix = generate_services_nix(&["locate"]);
+        assert!(nix.contains("services.locate"));
+        assert!(nix.contains("package = pkgs.plocate;"));
+        assert!(!nix.contains("localuser"));
+    }
+
+    #[test]
+    fn rustdesk_is_client_package_not_server() {
+        let nix = generate_services_nix(&["rustdesk"]);
+        assert!(nix.contains("environment.systemPackages = with pkgs; [ rustdesk ];"));
+        assert!(!nix.contains("rustdesk-server"));
+    }
+
+    #[test]
+    fn ssh_root_login_is_allowlisted() {
+        let evil = generate_ssh_nix(
+            true,
+            22,
+            false,
+            "yes\";\n  networking.hostName = \"pwned",
+            false,
+        );
+        assert!(evil.contains("PermitRootLogin = \"no\";"));
+        assert!(!evil.contains("pwned"));
+        let ok = generate_ssh_nix(true, 22, false, "prohibit-password", false);
+        assert!(ok.contains("PermitRootLogin = \"prohibit-password\";"));
     }
 }

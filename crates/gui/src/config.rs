@@ -91,8 +91,7 @@ impl UserPreferences {
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(&path, json)?;
 
-        // TODO: keep cosmic-config in sync when the CosmicConfigEntry derive is wired.
-        // JSON remains the portable source of truth (DECISIONS C5).
+        // JSON is canonical (DECISIONS C5); cosmic-config is a best-effort mirror.
         if let Ok(helper) = cosmic::cosmic_config::Config::new(APP_ID, 1) {
             if let Err(err) =
                 cosmic::cosmic_config::ConfigSet::set(&helper, "color_scheme", self.color_scheme)

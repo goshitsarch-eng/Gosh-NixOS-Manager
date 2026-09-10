@@ -5,8 +5,8 @@ use common::config::paths;
 use common::ipc::{GeneratedFile, HardwareConfig, NetworkConfig, ServicesConfig};
 use common::nix::{
     generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix, generate_hostname_nix,
-    generate_selected_nix_full, generate_services_nix, generate_user_groups_nix, read_template,
-    NixGenOptions,
+    generate_selected_nix_full, generate_services_nix, generate_user_groups_nix, is_nix_attrpath,
+    read_template, NixGenOptions,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -245,7 +245,11 @@ pub fn generate_all_files(
                 "  services.openssh = {{\n    enable = true;\n    ports = [ {} ];\n    settings = {{\n      PasswordAuthentication = {};\n      PermitRootLogin = \"{}\";\n    }};\n  }};\n",
                 network_config.ssh_port,
                 if network_config.ssh_password_auth { "true" } else { "false" },
-                network_config.ssh_root_login
+                match network_config.ssh_root_login.as_str() {
+                    "yes" => "yes",
+                    "prohibit-password" => "prohibit-password",
+                    _ => "no",
+                }
             ));
 
             if network_config.fail2ban_enabled {
@@ -595,7 +599,8 @@ fn generate_fallback_profile(id: &str) -> String {
 fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
     let pkg_list = packages
         .iter()
-        .map(|p| format!("    {}", p))
+        .filter(|p| is_nix_attrpath(p))
+        .map(|p| format!("    {p}"))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -606,13 +611,80 @@ fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
 {{ config, lib, pkgs, ... }}:
 
 {{
+{}
   environment.systemPackages = with pkgs; [
 {}
   ];
 }}
 "#,
-        id, pkg_list
+        id,
+        bundle_module_stub(id),
+        pkg_list
     )
+}
+
+/// Keep service/module enables when a bundle is customized (packages-only fallback).
+fn bundle_module_stub(id: &str) -> &'static str {
+    match id {
+        "devtools" => {
+            r#"  programs.git.enable = true;
+  virtualisation.docker = {
+    enable = true;
+    enableOnBoot = true;
+  };
+"#
+        }
+        "gaming" => {
+            r#"  programs.steam = {
+    enable = true;
+    remotePlay.openFirewall = true;
+    dedicatedServer.openFirewall = true;
+    gamescopeSession.enable = true;
+  };
+  hardware.graphics = {
+    enable = true;
+    enable32Bit = true;
+  };
+  programs.gamemode.enable = true;
+"#
+        }
+        "virtualization" => {
+            r#"  boot.kernelModules = [ "kvm-amd" "kvm-intel" ];
+  virtualisation.libvirtd = {
+    enable = true;
+    qemu = {
+      package = pkgs.qemu_kvm;
+      runAsRoot = true;
+      swtpm.enable = true;
+      ovmf.enable = true;
+    };
+  };
+  programs.virt-manager.enable = true;
+"#
+        }
+        "virtualbox" => {
+            r#"  nixpkgs.config.allowUnfree = true;
+  virtualisation.virtualbox.host = {
+    enable = true;
+    enableExtensionPack = true;
+  };
+"#
+        }
+        "containers" => {
+            r#"  virtualisation.podman = {
+    enable = true;
+    dockerCompat = true;
+    defaultNetwork.settings.dns_enabled = true;
+  };
+"#
+        }
+        "flatpak" => {
+            r#"  services.flatpak.enable = true;
+  xdg.portal.enable = true;
+"#
+        }
+        _ => "",
+    }
 }
 
 #[cfg(test)]
@@ -678,5 +750,20 @@ mod tests {
     fn dry_run_skips_hardware_when_default() {
         let files = dry_run(false, &HardwareConfig::default()).unwrap();
         assert!(!files.iter().any(|f| f.path.contains("hardware.nix")));
+    }
+
+    #[test]
+    fn customized_gaming_fallback_keeps_steam_module() {
+        let nix = generate_fallback_bundle("gaming", &["lutris".into(), "mangohud".into()]);
+        assert!(nix.contains("programs.steam"));
+        assert!(nix.contains("lutris"));
+        assert!(nix.contains("mangohud"));
+    }
+
+    #[test]
+    fn fallback_bundle_drops_invalid_package_tokens() {
+        let nix = generate_fallback_bundle("utilities", &["htop".into(), "foo; extra".into()]);
+        assert!(nix.contains("htop"));
+        assert!(!nix.contains("foo; extra"));
     }
 }
