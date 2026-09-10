@@ -1,6 +1,7 @@
 //! System detection and integration checking (unprivileged, no GTK).
 
 use crate::helper::spawn::in_flatpak;
+use common::config::detect_integration_status;
 use common::{ConfigMode, IntegrationStatus, SystemInfo};
 use std::fs;
 use std::path::Path;
@@ -59,32 +60,9 @@ fn find_config_path() -> Option<std::path::PathBuf> {
 }
 
 fn detect_integration() -> IntegrationStatus {
-    if let Some(content) = host_read_to_string("/etc/nixos/configuration.nix") {
-        if content.contains("nixos-toolkit") || content.contains("./nixos-toolkit") {
-            return IntegrationStatus::Integrated;
-        }
-    }
-
-    if host_path_exists("/etc/nixos/nixos-toolkit/state/selected.nix") {
-        if let Some(content) = host_read_to_string("/etc/nixos/configuration.nix") {
-            if content.contains("nixos-toolkit") {
-                return IntegrationStatus::Integrated;
-            }
-        }
-        return IntegrationStatus::NotIntegrated;
-    }
-
-    if let Some(content) = host_read_to_string("/etc/nixos/flake.nix") {
-        if content.contains("nixos-toolkit") {
-            return IntegrationStatus::Integrated;
-        }
-    }
-
-    if host_path_exists("/etc/nixos/nixos-toolkit") {
-        return IntegrationStatus::NotIntegrated;
-    }
-
-    IntegrationStatus::NotIntegrated
+    let configuration_nix = host_read_to_string("/etc/nixos/configuration.nix");
+    let flake_nix = host_read_to_string("/etc/nixos/flake.nix");
+    detect_integration_status(configuration_nix.as_deref(), flake_nix.as_deref())
 }
 
 /// Current hostname from `/etc/hostname` or the `hostname` command.

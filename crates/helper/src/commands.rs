@@ -3,7 +3,7 @@
 use crate::nix_gen;
 use crate::rebuild;
 use common::actions::{default_bundles, default_profiles};
-use common::config::{paths, ConfigMode, IntegrationStatus, SystemInfo};
+use common::config::{detect_integration_status, paths, ConfigMode, IntegrationStatus, SystemInfo};
 use common::ipc::{
     AppState, Generation, HardwareConfig, HelperResponse, LogLevel, NetworkConfig, RebuildType,
     ServicesConfig,
@@ -40,23 +40,16 @@ pub fn check_permissions() -> HelperResponse {
 
 fn check_write_permission(path: &str) -> bool {
     let p = Path::new(path);
-    if p.exists() {
-        // Try to open for writing
-        fs::OpenOptions::new()
-            .append(true)
-            .open(p.join(".write_test"))
-            .map(|_| {
-                let _ = fs::remove_file(p.join(".write_test"));
-                true
-            })
-            .unwrap_or(false)
+    if p.is_dir() {
+        // Ephemeral probe inside `path`; deleted on drop. Never uses a stable `.write_test` name.
+        tempfile::Builder::new()
+            .prefix(".write_test-")
+            .tempfile_in(p)
+            .is_ok()
+    } else if let Some(parent) = p.parent() {
+        parent.to_str().is_some_and(check_write_permission)
     } else {
-        // Check parent
-        if let Some(parent) = p.parent() {
-            check_write_permission(parent.to_str().unwrap_or(""))
-        } else {
-            false
-        }
+        false
     }
 }
 
@@ -128,30 +121,18 @@ pub fn get_system_info() -> HelperResponse {
 }
 
 fn detect_integration() -> IntegrationStatus {
-    // Check if selected.nix exists
-    if !Path::new(paths::SELECTED_NIX).exists() {
-        return IntegrationStatus::NotIntegrated;
+    let selected_exists = Path::new(paths::SELECTED_NIX).exists();
+    if selected_exists {
+        tracing::info!("selected.nix exists at {}", paths::SELECTED_NIX);
+    } else {
+        tracing::info!(
+            "selected.nix is not present yet; integration still counts if configuration.nix or flake.nix imports it"
+        );
     }
 
-    // Check if it's imported in configuration.nix with correct path
-    if let Ok(content) = fs::read_to_string("/etc/nixos/configuration.nix") {
-        // Check for exact import paths that would work
-        if content.contains("./nixos-toolkit/state/selected.nix")
-            || content.contains("/etc/nixos/nixos-toolkit/state/selected.nix")
-            || content.contains("nixos-toolkit/state/selected.nix")
-        {
-            return IntegrationStatus::Integrated;
-        }
-    }
-
-    // Check flake.nix with correct path
-    if let Ok(content) = fs::read_to_string("/etc/nixos/flake.nix") {
-        if content.contains("nixos-toolkit/state/selected.nix") {
-            return IntegrationStatus::Integrated;
-        }
-    }
-
-    IntegrationStatus::NotIntegrated
+    let configuration_nix = fs::read_to_string("/etc/nixos/configuration.nix").ok();
+    let flake_nix = fs::read_to_string("/etc/nixos/flake.nix").ok();
+    detect_integration_status(configuration_nix.as_deref(), flake_nix.as_deref())
 }
 
 /// Validate a configuration
@@ -341,19 +322,65 @@ pub fn apply(
     let response = rebuild::run_rebuild(rebuild_type, config_mode);
     if dry {
         if let Some(snapshot) = snapshot {
-            match snapshot.restore() {
-                Ok(()) => send_log(
-                    LogLevel::Info,
-                    "Dry-build finished; previous managed configuration restored.".into(),
-                ),
-                Err(e) => send_log(
-                    LogLevel::Error,
-                    format!("Dry-build finished but restoring managed files failed: {e}"),
-                ),
-            }
+            let restore_err = match snapshot.restore() {
+                Ok(()) => {
+                    send_log(
+                        LogLevel::Info,
+                        "Dry-build finished; previous managed configuration restored.".into(),
+                    );
+                    None
+                }
+                Err(e) => {
+                    send_log(
+                        LogLevel::Error,
+                        format!("Dry-build finished but restoring managed files failed: {e}"),
+                    );
+                    Some(e.to_string())
+                }
+            };
+            return dry_build_response(response, restore_err);
         }
     }
     response
+}
+
+/// Combine a dry-build rebuild result with snapshot restore outcome.
+///
+/// Restore failure always becomes [`HelperResponse::Error`]. If the rebuild
+/// also failed, the message mentions both.
+fn dry_build_response(rebuild: HelperResponse, restore_err: Option<String>) -> HelperResponse {
+    let Some(restore_err) = restore_err else {
+        return rebuild;
+    };
+
+    match rebuild {
+        HelperResponse::ApplyComplete {
+            success: false,
+            message,
+        } => HelperResponse::Error {
+            message: format!(
+                "Dry-build failed ({message}) and the managed tree could not be restored"
+            ),
+            details: Some(restore_err),
+        },
+        HelperResponse::Error { message, details } => {
+            let rebuild_details = details.unwrap_or_default();
+            HelperResponse::Error {
+                message: format!(
+                    "Dry-build failed ({message}) and the managed tree could not be restored"
+                ),
+                details: Some(if rebuild_details.is_empty() {
+                    restore_err
+                } else {
+                    format!("rebuild: {rebuild_details}; restore: {restore_err}")
+                }),
+            }
+        }
+        _ => HelperResponse::Error {
+            message: "Dry-build finished but the managed tree could not be restored".into(),
+            details: Some(restore_err),
+        },
+    }
 }
 
 struct ManagedDirSnapshot {
@@ -495,92 +522,558 @@ pub fn read_state() -> HelperResponse {
 fn reconstruct_state_from_nix() -> AppState {
     let mut state = AppState::default();
 
-    // Parse selected.nix to find enabled bundles and profile
     if let Ok(content) = fs::read_to_string(paths::SELECTED_NIX) {
-        // Extract profile from imports like "../profiles/gnome.nix"
-        for line in content.lines() {
-            let line = line.trim();
-            if line.contains("../profiles/") && line.ends_with(".nix") {
-                if let Some(profile_id) = line
-                    .strip_prefix("../profiles/")
-                    .or_else(|| line.split("../profiles/").nth(1))
-                {
-                    let profile_id = profile_id.trim_end_matches(".nix").trim_matches('"').trim();
-                    if !profile_id.is_empty() {
-                        state.selected_profile = Some(profile_id.to_string());
-                        tracing::info!("Reconstructed profile: {}", profile_id);
-                    }
-                }
-            }
-
-            // Extract bundles from imports like "../bundles/gaming.nix"
-            if line.contains("../bundles/") && line.ends_with(".nix") {
-                if let Some(bundle_part) = line.split("../bundles/").nth(1) {
-                    let bundle_id = bundle_part
-                        .trim_end_matches(".nix")
-                        .trim_matches('"')
-                        .trim();
-                    if !bundle_id.is_empty() {
-                        state.enabled_bundles.push(bundle_id.to_string());
-                        tracing::info!("Reconstructed bundle: {}", bundle_id);
-                    }
-                }
-            }
+        let (profile, bundles) = parse_selected_nix(&content);
+        if let Some(ref profile_id) = profile {
+            tracing::info!("Reconstructed profile: {profile_id}");
         }
+        for bundle_id in &bundles {
+            tracing::info!("Reconstructed bundle: {bundle_id}");
+        }
+        state.selected_profile = profile;
+        state.enabled_bundles = bundles;
     }
 
-    // Parse custom-packages.nix to find custom packages
     if let Ok(content) = fs::read_to_string(paths::CUSTOM_PACKAGES_NIX) {
-        let mut in_packages_block = false;
-        for line in content.lines() {
-            let line = line.trim();
-
-            // Detect start of package list
-            if line.contains("environment.systemPackages") {
-                in_packages_block = true;
-                continue;
-            }
-
-            // Detect end of package list
-            if in_packages_block && line.starts_with("];") {
-                break;
-            }
-
-            // Extract package names (skip comments and empty lines)
-            if in_packages_block
-                && !line.is_empty()
-                && !line.starts_with('#')
-                && !line.starts_with('[')
-            {
-                let pkg = line.trim_end_matches(';').trim();
-                if !pkg.is_empty() && pkg != "with pkgs;" {
-                    state.custom_packages.push(pkg.to_string());
-                    tracing::info!("Reconstructed custom package: {}", pkg);
-                }
-            }
+        state.custom_packages = parse_custom_packages_snippet(&content);
+        for pkg in &state.custom_packages {
+            tracing::info!("Reconstructed custom package: {pkg}");
         }
     }
 
-    // Parse hostname.nix if it exists
     if let Ok(content) = fs::read_to_string(paths::HOSTNAME_NIX) {
-        for line in content.lines() {
-            if line.contains("networking.hostName") {
-                if let Some(hostname) = line.split('"').nth(1) {
-                    state.hostname = Some(hostname.to_string());
-                    tracing::info!("Reconstructed hostname: {}", hostname);
-                }
-            }
+        if let Some(hostname) = parse_hostname_snippet(&content) {
+            tracing::info!("Reconstructed hostname: {hostname}");
+            state.hostname = Some(hostname);
         }
+    }
+
+    if let Ok(content) = fs::read_to_string(paths::DNS_NIX) {
+        state.dns_servers = parse_dns_snippet(&content);
+        if !state.dns_servers.is_empty() {
+            tracing::info!(
+                "Reconstructed DNS servers: {}",
+                state.dns_servers.join(", ")
+            );
+        }
+    }
+
+    if let Ok(content) = fs::read_to_string(paths::USERS_NIX) {
+        let (username, groups) = parse_users_snippet(&content);
+        if let Some(ref user) = username {
+            tracing::info!("Reconstructed username: {user}");
+        }
+        if !groups.is_empty() {
+            tracing::info!("Reconstructed user groups: {}", groups.join(", "));
+        }
+        state.username = username;
+        state.user_groups = groups;
+    }
+
+    if let Ok(content) = fs::read_to_string(paths::HARDWARE_NIX) {
+        state.hardware_config = parse_hardware_snippet(&content);
+        state.bluetooth_enabled = state.hardware_config.bluetooth_enabled;
+        tracing::info!(
+            "Reconstructed hardware (bluetooth={}, nvidia={:?}, audio={})",
+            state.hardware_config.bluetooth_enabled,
+            state.hardware_config.nvidia_driver,
+            state.hardware_config.audio_server
+        );
+    }
+
+    if let Ok(content) = fs::read_to_string(paths::NETWORK_NIX) {
+        state.network_config = parse_network_snippet(&content);
+        if content.contains("networking.wireguard") {
+            tracing::info!(
+                "network.nix contains networking.wireguard; AppState has no wireguard field"
+            );
+        }
+        tracing::info!(
+            "Reconstructed network (firewall={}, ssh={}, tailscale={})",
+            state.network_config.firewall_enabled,
+            state.network_config.ssh_enabled,
+            state.network_config.tailscale_enabled
+        );
+    }
+
+    if let Ok(content) = fs::read_to_string(paths::SERVICES_NIX) {
+        state.services_config = parse_services_snippet(&content);
+        tracing::info!(
+            "Reconstructed services: {}",
+            state.services_config.enabled_services().join(", ")
+        );
     }
 
     if state.selected_profile.is_some()
         || !state.enabled_bundles.is_empty()
         || !state.custom_packages.is_empty()
+        || state.hostname.is_some()
+        || !state.dns_servers.is_empty()
+        || state.username.is_some()
+        || state.hardware_config.has_settings()
+        || state.network_config.has_settings()
+        || state.services_config.has_settings()
     {
         tracing::info!("Successfully reconstructed state from existing Nix files");
     }
 
     state
+}
+
+fn skip_nix_comment(line: &str) -> Option<&str> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        None
+    } else {
+        Some(line)
+    }
+}
+
+/// `lhs = true` / `lhs = false` on a non-comment line, ignoring a trailing `;`.
+fn nix_assignment_bool(line: &str) -> Option<(&str, bool)> {
+    let line = skip_nix_comment(line)?;
+    let line = line.trim_end_matches(';').trim();
+    let (lhs, rhs) = line.split_once('=')?;
+    let lhs = lhs.trim();
+    let val = match rhs.trim() {
+        "true" => true,
+        "false" => false,
+        _ => return None,
+    };
+    Some((lhs, val))
+}
+
+fn parse_quoted_strings(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '"' {
+            continue;
+        }
+        let mut cur = String::new();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' => {
+                    if let Some(n) = chars.next() {
+                        cur.push(n);
+                    }
+                }
+                '"' => break,
+                _ => cur.push(ch),
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+    }
+    out
+}
+
+fn parse_u16_list(line: &str) -> Vec<u16> {
+    let Some(start) = line.find('[') else {
+        return Vec::new();
+    };
+    let rest = &line[start + 1..];
+    let Some(end) = rest.find(']') else {
+        return Vec::new();
+    };
+    rest[..end]
+        .split_whitespace()
+        .filter_map(|tok| tok.trim_matches(',').parse().ok())
+        .collect()
+}
+
+fn update_nix_context(context: &mut String, line: &str) {
+    let Some(trimmed) = skip_nix_comment(line) else {
+        return;
+    };
+    if trimmed == "};" || trimmed == "}" {
+        context.clear();
+        return;
+    }
+    if let Some(eq) = trimmed.find('=') {
+        if trimmed.contains('{') {
+            *context = trimmed[..eq].trim().to_string();
+        }
+    }
+}
+
+fn parse_selected_nix(content: &str) -> (Option<String>, Vec<String>) {
+    let mut profile = None;
+    let mut bundles = Vec::new();
+    for line in content.lines() {
+        let Some(line) = skip_nix_comment(line) else {
+            continue;
+        };
+        if let Some(rest) = line.split("../profiles/").nth(1) {
+            let id = rest
+                .split(".nix")
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c: char| c == '"' || c.is_whitespace());
+            if !id.is_empty() {
+                profile = Some(id.to_string());
+            }
+        }
+        if let Some(rest) = line.split("../bundles/").nth(1) {
+            let id = rest
+                .split(".nix")
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c: char| c == '"' || c.is_whitespace());
+            if !id.is_empty() {
+                bundles.push(id.to_string());
+            }
+        }
+    }
+    (profile, bundles)
+}
+
+fn parse_custom_packages_snippet(content: &str) -> Vec<String> {
+    let mut packages = Vec::new();
+    let mut in_packages_block = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.contains("environment.systemPackages") {
+            in_packages_block = true;
+            continue;
+        }
+        if in_packages_block && line.starts_with("];") {
+            break;
+        }
+        if in_packages_block {
+            let Some(line) = skip_nix_comment(line) else {
+                continue;
+            };
+            if line.starts_with('[') {
+                continue;
+            }
+            let pkg = line.trim_end_matches(';').trim();
+            if !pkg.is_empty() && pkg != "with pkgs;" {
+                packages.push(pkg.to_string());
+            }
+        }
+    }
+    packages
+}
+
+fn parse_hostname_snippet(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let Some(line) = skip_nix_comment(line) else {
+            continue;
+        };
+        if line.contains("networking.hostName") {
+            if let Some(hostname) = line.split('"').nth(1) {
+                if !hostname.is_empty() {
+                    return Some(hostname.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_dns_snippet(content: &str) -> Vec<String> {
+    let mut servers = Vec::new();
+    let mut in_list = false;
+    for line in content.lines() {
+        let Some(trimmed) = skip_nix_comment(line) else {
+            continue;
+        };
+        if trimmed.contains("networking.nameservers") {
+            in_list = true;
+        }
+        if in_list {
+            servers.extend(parse_quoted_strings(trimmed));
+            if trimmed.contains(']') {
+                break;
+            }
+        }
+    }
+    servers
+}
+
+fn parse_users_snippet(content: &str) -> (Option<String>, Vec<String>) {
+    let mut username = None;
+    let mut groups = Vec::new();
+    for line in content.lines() {
+        let Some(line) = skip_nix_comment(line) else {
+            continue;
+        };
+        if let Some(rest) = line.strip_prefix("users.users.") {
+            let rest = rest.trim();
+            if let Some(name) = rest.strip_prefix('"') {
+                if let Some(end) = name.find('"') {
+                    let name = &name[..end];
+                    if !name.is_empty() {
+                        username = Some(name.to_string());
+                    }
+                }
+            } else {
+                let name = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('=')
+                    .trim();
+                if !name.is_empty() {
+                    username = Some(name.to_string());
+                }
+            }
+        }
+        if line.contains("extraGroups") {
+            groups = parse_quoted_strings(line);
+        }
+    }
+    (username, groups)
+}
+
+fn parse_hardware_snippet(content: &str) -> HardwareConfig {
+    let mut hw = HardwareConfig::default();
+    let mut context = String::new();
+    let mut pulse: Option<bool> = None;
+    let mut pipewire: Option<bool> = None;
+
+    for line in content.lines() {
+        update_nix_context(&mut context, line);
+        let Some(line) = skip_nix_comment(line) else {
+            continue;
+        };
+
+        if line.contains("videoDrivers") {
+            if line.contains("nouveau") {
+                hw.nvidia_driver = Some(3);
+            } else if line.contains("nvidia") && hw.nvidia_driver.is_none() {
+                hw.nvidia_driver = Some(0);
+            }
+        }
+        if line.contains("nvidiaPackages.beta") {
+            hw.nvidia_driver = Some(1);
+        } else if line.contains("nvidiaPackages.latest") {
+            hw.nvidia_driver = Some(2);
+        } else if line.contains("nvidiaPackages.stable") {
+            hw.nvidia_driver = Some(0);
+        }
+
+        if line.contains("92-low-latency") {
+            hw.audio_lowlatency = true;
+        }
+        if line.contains("powerprofilesctl set performance") {
+            hw.power_profile = 1;
+        } else if line.contains("powerprofilesctl set power-saver") {
+            hw.power_profile = 2;
+        } else if line.contains("powerprofilesctl set balanced") {
+            hw.power_profile = 0;
+        }
+
+        if let Some((lhs, val)) = nix_assignment_bool(line) {
+            if lhs.ends_with("modesetting.enable") {
+                hw.nvidia_modesetting = val;
+            }
+            if lhs.ends_with("powerManagement.enable") {
+                hw.nvidia_powermanagement = val;
+            }
+            if lhs == "open" && hw.nvidia_driver.is_some() {
+                hw.nvidia_open = val;
+            }
+            if lhs.ends_with("services.pulseaudio.enable")
+                || (context == "services.pulseaudio" && lhs == "enable")
+            {
+                pulse = Some(val);
+            }
+            if lhs.ends_with("services.pipewire.enable")
+                || (context == "services.pipewire" && lhs == "enable")
+            {
+                pipewire = Some(val);
+            }
+            if (lhs.ends_with("hardware.bluetooth.enable")
+                || (context == "hardware.bluetooth" && lhs == "enable"))
+                && val
+            {
+                hw.bluetooth_enabled = true;
+            }
+            if (lhs == "powerOnBoot" || lhs.ends_with("hardware.bluetooth.powerOnBoot")) && val {
+                hw.bluetooth_autopower = true;
+            }
+            if (lhs.ends_with("services.tlp.enable")
+                || (context == "services.tlp" && lhs == "enable"))
+                && val
+            {
+                hw.tlp_enabled = true;
+            }
+            if lhs.ends_with("services.thermald.enable") && val {
+                hw.thermald_enabled = true;
+            }
+        }
+    }
+
+    if hw.audio_lowlatency {
+        hw.audio_server = 0;
+    } else if pulse == Some(true) {
+        hw.audio_server = 1;
+    } else if pipewire == Some(false) && pulse == Some(false) {
+        hw.audio_server = 2;
+    } else if pipewire == Some(true) {
+        hw.audio_server = 0;
+    }
+
+    hw
+}
+
+fn parse_network_snippet(content: &str) -> NetworkConfig {
+    let mut cfg = NetworkConfig::default();
+    let mut context = String::new();
+
+    for line in content.lines() {
+        update_nix_context(&mut context, line);
+        let Some(line) = skip_nix_comment(line) else {
+            continue;
+        };
+
+        if line.contains("allowedTCPPorts") {
+            cfg.allowed_tcp_ports = parse_u16_list(line);
+        }
+        if line.contains("allowedUDPPorts") {
+            cfg.allowed_udp_ports = parse_u16_list(line);
+        }
+        if context == "services.openssh" && line.contains("ports") {
+            if let Some(port) = parse_u16_list(line).first().copied() {
+                cfg.ssh_port = port;
+            }
+        }
+        if line.contains("PermitRootLogin") {
+            if let Some(value) = parse_quoted_strings(line).into_iter().next() {
+                cfg.ssh_root_login = value;
+            }
+        }
+
+        if let Some((lhs, val)) = nix_assignment_bool(line) {
+            if lhs.ends_with("networking.firewall.enable")
+                || (context == "networking.firewall" && lhs == "enable")
+            {
+                cfg.firewall_enabled = val;
+            }
+            if (lhs.ends_with("services.openssh.enable")
+                || (context == "services.openssh" && lhs == "enable"))
+                && val
+            {
+                cfg.ssh_enabled = true;
+                if cfg.ssh_port == 0 {
+                    cfg.ssh_port = 22;
+                }
+                if cfg.ssh_root_login.is_empty() {
+                    cfg.ssh_root_login = "no".into();
+                }
+            }
+            if lhs == "PasswordAuthentication" {
+                cfg.ssh_password_auth = val;
+            }
+            if (lhs.ends_with("services.fail2ban.enable")
+                || (context == "services.fail2ban" && lhs == "enable"))
+                && val
+            {
+                cfg.fail2ban_enabled = true;
+            }
+            if lhs.ends_with("services.tailscale.enable") && val {
+                cfg.tailscale_enabled = true;
+            }
+        }
+    }
+
+    cfg
+}
+
+fn line_has_pkg(line: &str, pkg: &str) -> bool {
+    let Some(line) = skip_nix_comment(line) else {
+        return false;
+    };
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .any(|tok| tok == pkg)
+}
+
+fn parse_services_snippet(content: &str) -> ServicesConfig {
+    let mut cfg = ServicesConfig::default();
+    let mut context = String::new();
+
+    for line in content.lines() {
+        update_nix_context(&mut context, line);
+        let Some(line) = skip_nix_comment(line) else {
+            continue;
+        };
+
+        if line_has_pkg(line, "rustdesk") {
+            cfg.rustdesk = true;
+        }
+        if line_has_pkg(line, "gnome-tweaks") {
+            cfg.gnome_tweaks = true;
+        }
+
+        if let Some((lhs, true)) = nix_assignment_bool(line) {
+            if lhs.ends_with("services.printing.enable") {
+                cfg.printing = true;
+            }
+            if lhs.ends_with("services.avahi.enable")
+                || (context == "services.avahi" && lhs == "enable")
+            {
+                cfg.avahi = true;
+            }
+            if lhs.ends_with("services.fwupd.enable") {
+                cfg.fwupd = true;
+            }
+            if lhs.ends_with("services.upower.enable") {
+                cfg.upower = true;
+            }
+            if lhs.ends_with("networking.networkmanager.enable") {
+                cfg.networkmanager = true;
+            }
+            if lhs.ends_with("services.resolved.enable") {
+                cfg.resolved = true;
+            }
+            if lhs.ends_with("services.syncthing.enable") {
+                cfg.syncthing = true;
+            }
+            if lhs.ends_with("services.locate.enable")
+                || (context == "services.locate" && lhs == "enable")
+            {
+                cfg.locate = true;
+            }
+            if lhs.ends_with("services.flatpak.enable") {
+                cfg.flatpak = true;
+            }
+            if lhs.ends_with("services.gnome.gnome-keyring.enable") {
+                cfg.gnome_keyring = true;
+            }
+            if lhs.ends_with("programs.dconf.enable") {
+                cfg.dconf = true;
+            }
+            if lhs.ends_with("virtualisation.docker.enable") {
+                cfg.docker = true;
+            }
+            if lhs.ends_with("virtualisation.libvirtd.enable") {
+                cfg.libvirtd = true;
+            }
+            if lhs.ends_with("services.postgresql.enable") {
+                cfg.postgresql = true;
+            }
+            if lhs.contains("services.redis") && lhs.ends_with("enable") {
+                cfg.redis = true;
+            }
+            if lhs.ends_with("services.earlyoom.enable") {
+                cfg.earlyoom = true;
+            }
+            if lhs.ends_with("system.autoUpgrade.enable") {
+                cfg.auto_upgrade = true;
+            }
+            if (context == "nix.gc" && lhs == "automatic") || lhs.ends_with("nix.gc.automatic") {
+                cfg.auto_gc = true;
+            }
+            if lhs.ends_with("nix.settings.auto-optimise-store") {
+                cfg.store_optimize = true;
+            }
+        }
+    }
+
+    cfg
 }
 
 /// Write application state to state.json
@@ -794,27 +1287,54 @@ pub fn delete_generations(generations: Vec<u32>) -> HelperResponse {
     }
 }
 
+const NIX_CHANNEL_UPDATE: &str = "nix-channel --update";
+const NIX_FLAKE_UPDATE: &str = "nix flake update --flake /etc/nixos";
+
+const ALLOWED_MAINTENANCE_COMMANDS: &[&str] = &[
+    "nix-collect-garbage",
+    "nix-collect-garbage -d",
+    "nix-store --optimise",
+    "nix-store --verify --check-contents",
+    NIX_CHANNEL_UPDATE,
+    NIX_FLAKE_UPDATE,
+];
+
+/// Map a requested maintenance command to the exact string that will be run.
+///
+/// On flake hosts, `nix-channel --update` is rewritten to [`NIX_FLAKE_UPDATE`].
+fn maintenance_command_to_run(requested: &str, flake_nix_exists: bool) -> Option<String> {
+    if !ALLOWED_MAINTENANCE_COMMANDS.contains(&requested) {
+        return None;
+    }
+    if requested == NIX_CHANNEL_UPDATE && flake_nix_exists {
+        Some(NIX_FLAKE_UPDATE.to_string())
+    } else {
+        Some(requested.to_string())
+    }
+}
+
 /// Run a maintenance command
 pub fn run_maintenance(command: String) -> HelperResponse {
     use std::process::Command;
 
-    // Only allow specific maintenance commands for security
-    let allowed_commands = [
-        "nix-collect-garbage",
-        "nix-collect-garbage -d",
-        "nix-store --optimise",
-        "nix-store --verify --check-contents",
-        "nix-channel --update",
-    ];
-
-    if !allowed_commands.contains(&command.as_str()) {
+    let flake_nix_exists = Path::new("/etc/nixos/flake.nix").exists();
+    let requested = command;
+    let Some(command) = maintenance_command_to_run(&requested, flake_nix_exists) else {
         return HelperResponse::Error {
             message: "Command not allowed".into(),
             details: Some(format!(
                 "Only these commands are allowed: {:?}",
-                allowed_commands
+                ALLOWED_MAINTENANCE_COMMANDS
             )),
         };
+    };
+
+    if requested != command {
+        send_log(
+            LogLevel::Info,
+            "Detected flake at /etc/nixos/flake.nix; running nix flake update --flake /etc/nixos"
+                .into(),
+        );
     }
 
     // Parse and execute command
@@ -901,6 +1421,10 @@ pub fn get_disk_usage() -> HelperResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::nix::{
+        generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix,
+        generate_hostname_nix, generate_services_nix, generate_user_groups_nix,
+    };
 
     #[test]
     fn kernel_version_from_store_path() {
@@ -917,5 +1441,344 @@ mod tests {
             }
             other => panic!("expected Error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn dry_build_restore_success_keeps_rebuild_response() {
+        let rebuild = HelperResponse::ApplyComplete {
+            success: true,
+            message: "ok".into(),
+        };
+        match dry_build_response(rebuild, None) {
+            HelperResponse::ApplyComplete { success: true, .. } => {}
+            other => panic!("expected ApplyComplete success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dry_build_restore_failure_after_success_is_error() {
+        match dry_build_response(
+            HelperResponse::ApplyComplete {
+                success: true,
+                message: "nixos-rebuild dry-build completed successfully".into(),
+            },
+            Some("permission denied".into()),
+        ) {
+            HelperResponse::Error { message, details } => {
+                assert!(message.contains("managed tree could not be restored"));
+                assert!(details.is_some_and(|d| d.contains("permission denied")));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dry_build_restore_and_rebuild_failure_mentions_both() {
+        match dry_build_response(
+            HelperResponse::ApplyComplete {
+                success: false,
+                message: "nixos-rebuild dry-build failed with exit code 1".into(),
+            },
+            Some("restore io".into()),
+        ) {
+            HelperResponse::Error { message, details } => {
+                assert!(message.contains("Dry-build failed"));
+                assert!(message.contains("managed tree could not be restored"));
+                assert!(details.is_some_and(|d| d.contains("restore io")));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dry_build_restore_failure_with_rebuild_error_mentions_both() {
+        match dry_build_response(
+            HelperResponse::Error {
+                message: "Failed to spawn nixos-rebuild".into(),
+                details: Some("enoent".into()),
+            },
+            Some("restore io".into()),
+        ) {
+            HelperResponse::Error { message, details } => {
+                assert!(message.contains("Failed to spawn nixos-rebuild"));
+                assert!(message.contains("managed tree could not be restored"));
+                assert!(details.is_some_and(|d| d.contains("enoent") && d.contains("restore io")));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_write_permission_uses_ephemeral_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8 temp path");
+        assert!(check_write_permission(path));
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .expect("read tempdir")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".write_test"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "expected no leftover .write_test files, found {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn check_write_permission_falls_back_to_parent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist");
+        assert!(check_write_permission(
+            missing.to_str().expect("utf-8 temp path")
+        ));
+    }
+
+    #[test]
+    fn parse_hostname_snippet_from_generated() {
+        let nix = generate_hostname_nix("desk-1");
+        assert_eq!(parse_hostname_snippet(&nix).as_deref(), Some("desk-1"));
+    }
+
+    #[test]
+    fn parse_dns_snippet_from_generated() {
+        let nix = generate_dns_nix(&["1.1.1.1".into(), "8.8.8.8".into()]);
+        assert_eq!(
+            parse_dns_snippet(&nix),
+            vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_users_snippet_from_generated() {
+        let nix = generate_user_groups_nix("gosh-1", &["libvirtd".into(), "docker".into()]);
+        let (user, groups) = parse_users_snippet(&nix);
+        assert_eq!(user.as_deref(), Some("gosh-1"));
+        assert_eq!(groups, vec!["libvirtd".to_string(), "docker".to_string()]);
+    }
+
+    #[test]
+    fn parse_custom_packages_snippet_from_generated() {
+        let nix = generate_custom_packages_nix(&["htop".into(), "ripgrep".into()]);
+        assert_eq!(
+            parse_custom_packages_snippet(&nix),
+            vec!["htop".to_string(), "ripgrep".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_selected_nix_profile_and_bundles() {
+        let nix = r#"
+{ config, lib, pkgs, ... }:
+{
+  imports = [
+    ../profiles/gnome.nix
+    ../bundles/gaming.nix
+    ../bundles/dev-tools.nix
+    ./hostname.nix
+  ];
+}
+"#;
+        let (profile, bundles) = parse_selected_nix(nix);
+        assert_eq!(profile.as_deref(), Some("gnome"));
+        assert_eq!(bundles, vec!["gaming".to_string(), "dev-tools".to_string()]);
+    }
+
+    #[test]
+    fn parse_hardware_bluetooth_tlp_thermald() {
+        let hw = HardwareConfig {
+            bluetooth_enabled: true,
+            bluetooth_autopower: true,
+            tlp_enabled: true,
+            thermald_enabled: true,
+            ..HardwareConfig::default()
+        };
+        let parsed = parse_hardware_snippet(&generate_hardware_nix(&hw));
+        assert!(parsed.bluetooth_enabled);
+        assert!(parsed.bluetooth_autopower);
+        assert!(parsed.tlp_enabled);
+        assert!(parsed.thermald_enabled);
+    }
+
+    #[test]
+    fn parse_hardware_nvidia_beta_pulse_and_modesetting() {
+        let hw = HardwareConfig {
+            nvidia_driver: Some(1),
+            nvidia_modesetting: false,
+            nvidia_powermanagement: true,
+            nvidia_open: true,
+            audio_server: 1,
+            ..HardwareConfig::default()
+        };
+        let parsed = parse_hardware_snippet(&generate_hardware_nix(&hw));
+        assert_eq!(parsed.nvidia_driver, Some(1));
+        assert!(!parsed.nvidia_modesetting);
+        assert!(parsed.nvidia_powermanagement);
+        assert!(parsed.nvidia_open);
+        assert_eq!(parsed.audio_server, 1);
+    }
+
+    #[test]
+    fn parse_hardware_nouveau_audio_none_and_power_profile() {
+        let hw = HardwareConfig {
+            nvidia_driver: Some(3),
+            audio_server: 2,
+            power_profile: 1,
+            ..HardwareConfig::default()
+        };
+        let parsed = parse_hardware_snippet(&generate_hardware_nix(&hw));
+        assert_eq!(parsed.nvidia_driver, Some(3));
+        assert_eq!(parsed.audio_server, 2);
+        assert_eq!(parsed.power_profile, 1);
+    }
+
+    #[test]
+    fn parse_hardware_pipewire_lowlatency() {
+        let hw = HardwareConfig {
+            audio_server: 0,
+            audio_lowlatency: true,
+            ..HardwareConfig::default()
+        };
+        let parsed = parse_hardware_snippet(&generate_hardware_nix(&hw));
+        assert_eq!(parsed.audio_server, 0);
+        assert!(parsed.audio_lowlatency);
+    }
+
+    #[test]
+    fn parse_network_snippet_firewall_ssh_vpn_and_wireguard() {
+        let nix = r#"
+{ config, lib, pkgs, ... }:
+{
+  networking.firewall = {
+    enable = true;
+    allowedTCPPorts = [ 80 443 ];
+    allowedUDPPorts = [ 53 ];
+  };
+  services.openssh = {
+    enable = true;
+    ports = [ 2222 ];
+    settings = {
+      PasswordAuthentication = true;
+      PermitRootLogin = "prohibit-password";
+    };
+  };
+  services.fail2ban = {
+    enable = true;
+    jails.sshd = {
+      enabled = true;
+    };
+  };
+  services.tailscale.enable = true;
+  networking.wireguard.enable = true;
+}
+"#;
+        let parsed = parse_network_snippet(nix);
+        assert!(parsed.firewall_enabled);
+        assert_eq!(parsed.allowed_tcp_ports, vec![80, 443]);
+        assert_eq!(parsed.allowed_udp_ports, vec![53]);
+        assert!(parsed.ssh_enabled);
+        assert_eq!(parsed.ssh_port, 2222);
+        assert!(parsed.ssh_password_auth);
+        assert_eq!(parsed.ssh_root_login, "prohibit-password");
+        assert!(parsed.fail2ban_enabled);
+        assert!(parsed.tailscale_enabled);
+        assert!(nix.contains("networking.wireguard"));
+    }
+
+    #[test]
+    fn parse_network_snippet_firewall_disabled() {
+        let nix = r#"
+{
+  networking.firewall = {
+    enable = false;
+    allowedTCPPorts = [ ];
+    allowedUDPPorts = [ ];
+  };
+}
+"#;
+        let parsed = parse_network_snippet(nix);
+        assert!(!parsed.firewall_enabled);
+        assert!(!parsed.ssh_enabled);
+    }
+
+    #[test]
+    fn parse_services_snippet_from_generated() {
+        let nix = generate_services_nix(&[
+            "printing",
+            "fwupd",
+            "docker",
+            "libvirtd",
+            "dconf",
+            "postgresql",
+            "redis",
+            "earlyoom",
+            "auto_upgrade",
+            "auto_gc",
+            "store_optimize",
+            "flatpak",
+            "syncthing",
+            "locate",
+            "networkmanager",
+            "resolved",
+            "upower",
+            "gnome_keyring",
+            "rustdesk",
+            "gnome_tweaks",
+        ]);
+        let parsed = parse_services_snippet(&nix);
+        assert!(parsed.printing);
+        assert!(parsed.avahi); // printing also enables avahi
+        assert!(parsed.fwupd);
+        assert!(parsed.docker);
+        assert!(parsed.libvirtd);
+        assert!(parsed.dconf);
+        assert!(parsed.postgresql);
+        assert!(parsed.redis);
+        assert!(parsed.earlyoom);
+        assert!(parsed.auto_upgrade);
+        assert!(parsed.auto_gc);
+        assert!(parsed.store_optimize);
+        assert!(parsed.flatpak);
+        assert!(parsed.syncthing);
+        assert!(parsed.locate);
+        assert!(parsed.networkmanager);
+        assert!(parsed.resolved);
+        assert!(parsed.upower);
+        assert!(parsed.gnome_keyring);
+        assert!(parsed.rustdesk);
+        assert!(parsed.gnome_tweaks);
+    }
+
+    #[test]
+    fn parse_services_ignores_false_enable() {
+        let nix = r#"
+{
+  services.printing.enable = false;
+  virtualisation.docker.enable = true;
+}
+"#;
+        let parsed = parse_services_snippet(nix);
+        assert!(!parsed.printing);
+        assert!(parsed.docker);
+    }
+
+    #[test]
+    fn maintenance_rewrites_channel_update_on_flake_hosts() {
+        assert_eq!(
+            maintenance_command_to_run(NIX_CHANNEL_UPDATE, true).as_deref(),
+            Some(NIX_FLAKE_UPDATE)
+        );
+        assert_eq!(
+            maintenance_command_to_run(NIX_CHANNEL_UPDATE, false).as_deref(),
+            Some(NIX_CHANNEL_UPDATE)
+        );
+        assert_eq!(
+            maintenance_command_to_run(NIX_FLAKE_UPDATE, true).as_deref(),
+            Some(NIX_FLAKE_UPDATE)
+        );
+        assert_eq!(
+            maintenance_command_to_run("nix-collect-garbage", true).as_deref(),
+            Some("nix-collect-garbage")
+        );
+        assert!(maintenance_command_to_run("rm -rf /", false).is_none());
     }
 }
