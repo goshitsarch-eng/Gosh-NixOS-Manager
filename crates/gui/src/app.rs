@@ -203,6 +203,11 @@ impl AppModel {
         }
     }
 
+    #[must_use]
+    pub(crate) fn helper_can_spawn(&self) -> bool {
+        self.flags.spawn.helper_available && !self.helper_missing
+    }
+
     pub(crate) fn startup_intents(&mut self) -> Vec<Intent> {
         let mut intents = vec![
             Intent::SetWindowTitle(self.window_title()),

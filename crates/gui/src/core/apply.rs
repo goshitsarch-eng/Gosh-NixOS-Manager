@@ -370,7 +370,7 @@ impl AppModel {
                 Vec::new()
             }
             Message::RequestApply => {
-                if self.busy != Busy::Idle {
+                if self.busy != Busy::Idle || !self.helper_can_spawn() {
                     return Vec::new();
                 }
                 self.dialog = Some(self.apply_confirm_dialog());
@@ -736,7 +736,7 @@ impl AppModel {
     }
 
     fn start_rebuild(&mut self, rebuild: RebuildType, then_write_state: bool) -> Vec<Intent> {
-        if self.busy != Busy::Idle {
+        if self.busy != Busy::Idle || !self.helper_can_spawn() {
             return Vec::new();
         }
         self.busy = if matches!(rebuild, RebuildType::DryBuild) {
@@ -762,7 +762,7 @@ impl AppModel {
     }
 
     fn load_generations_intents(&mut self) -> Vec<Intent> {
-        if self.busy != Busy::Idle {
+        if self.busy != Busy::Idle || !self.helper_can_spawn() {
             return Vec::new();
         }
         self.busy = Busy::LoadingGenerations;
@@ -774,7 +774,7 @@ impl AppModel {
     }
 
     fn load_disk_usage_intents(&mut self) -> Vec<Intent> {
-        if self.busy != Busy::Idle {
+        if self.busy != Busy::Idle || !self.helper_can_spawn() {
             return Vec::new();
         }
         self.busy = Busy::LoadingDisk;
@@ -785,7 +785,7 @@ impl AppModel {
     }
 
     fn start_rollback(&mut self, generation: u32, mode: RollbackMode) -> Vec<Intent> {
-        if self.busy != Busy::Idle {
+        if self.busy != Busy::Idle || !self.helper_can_spawn() {
             return Vec::new();
         }
         let activate = match mode {
@@ -805,7 +805,7 @@ impl AppModel {
     }
 
     fn start_delete_generation(&mut self, generation: u32) -> Vec<Intent> {
-        if self.busy != Busy::Idle {
+        if self.busy != Busy::Idle || !self.helper_can_spawn() {
             return Vec::new();
         }
         self.busy = Busy::DeletingGeneration;
@@ -843,6 +843,9 @@ impl AppModel {
     }
 
     fn request_maintenance(&mut self, id: String) -> Vec<Intent> {
+        if !self.helper_can_spawn() {
+            return Vec::new();
+        }
         let Some(action) = common::actions::default_maintenance_actions()
             .into_iter()
             .find(|action| action.id == id)
@@ -865,7 +868,7 @@ impl AppModel {
     }
 
     fn start_maintenance(&mut self, id: &str) -> Vec<Intent> {
-        if self.busy != Busy::Idle {
+        if self.busy != Busy::Idle || !self.helper_can_spawn() {
             return Vec::new();
         }
         let Some(action) = common::actions::default_maintenance_actions()
@@ -950,6 +953,13 @@ mod tests {
 
     fn test_app() -> AppModel {
         AppModel::test_model()
+    }
+
+    fn test_app_with_helper() -> AppModel {
+        let mut app = AppModel::test_model();
+        app.helper_missing = false;
+        app.flags.spawn.helper_available = true;
+        app
     }
 
     fn spawn_helper(intents: &[Intent]) -> Option<&Intent> {
@@ -1289,7 +1299,7 @@ mod tests {
 
     #[test]
     fn request_apply_empty_is_destructive_confirm() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.state.network_config.ssh_enabled = true;
         let intents = app.apply(Message::RequestApply);
         assert!(intents.is_empty());
@@ -1305,7 +1315,7 @@ mod tests {
 
     #[test]
     fn request_apply_hardware_only_is_not_empty() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.state.hardware_config.nvidia_driver = Some(0);
         app.apply(Message::RequestApply);
         match &app.dialog {
@@ -1320,7 +1330,7 @@ mod tests {
 
     #[test]
     fn request_apply_with_profile_is_not_destructive() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.state.select_profile("gnome");
         app.apply(Message::RequestApply);
         match &app.dialog {
@@ -1335,7 +1345,7 @@ mod tests {
 
     #[test]
     fn request_apply_packages_only_uses_packages_copy() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.state.add_custom_package("htop");
         app.apply(Message::RequestApply);
         match &app.dialog {
@@ -1361,7 +1371,7 @@ mod tests {
 
     #[test]
     fn confirm_apply_spawns_switch_with_write_state() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.state.select_profile("gnome");
         app.apply(Message::RequestApply);
         let intents = app.apply(Message::ConfirmApply);
@@ -1393,7 +1403,7 @@ mod tests {
 
     #[test]
     fn nvidia_gpu_apply_defaults_unwritten_driver_to_stable() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.apply(Message::GpuDetected("NVIDIA GeForce RTX 3060".into()));
         assert!(app.state.hardware_config.nvidia_driver.is_none());
         assert_eq!(app.hardware_for_nix().nvidia_driver, Some(0));
@@ -1414,7 +1424,7 @@ mod tests {
 
     #[test]
     fn nvidia_gpu_apply_keeps_explicit_driver() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.apply(Message::GpuDetected("nvidia".into()));
         app.state.hardware_config.nvidia_driver = Some(2);
         assert_eq!(app.hardware_for_nix().nvidia_driver, Some(2));
@@ -1432,7 +1442,7 @@ mod tests {
 
     #[test]
     fn non_nvidia_gpu_apply_leaves_driver_none() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.apply(Message::GpuDetected("Intel Corporation".into()));
         assert!(app.hardware_for_nix().nvidia_driver.is_none());
         let intents = app.apply(Message::RequestDryRun);
@@ -1449,7 +1459,7 @@ mod tests {
 
     #[test]
     fn request_dry_run_spawns_dry_build_without_write_state() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         let intents = app.apply(Message::RequestDryRun);
         assert!(app.dialog.is_none());
         assert_eq!(app.busy, Busy::DryRun);
@@ -1477,7 +1487,7 @@ mod tests {
 
     #[test]
     fn cancel_apply_dismisses_dialog_without_spawn() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         app.apply(Message::RequestApply);
         let intents = app.apply(Message::CancelApply);
         assert!(app.dialog.is_none());
@@ -1564,7 +1574,7 @@ mod tests {
 
     #[test]
     fn load_generations_spawns_list() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         let intents = app.apply(Message::LoadGenerations);
         assert_eq!(app.busy, Busy::LoadingGenerations);
         match spawn_helper(&intents) {
@@ -1578,12 +1588,12 @@ mod tests {
 
     #[test]
     fn confirm_rollback_switch_vs_boot_requests_differ() {
-        let mut switch_app = test_app();
+        let mut switch_app = test_app_with_helper();
         let switch = switch_app.apply(Message::ConfirmRollback {
             generation: 3,
             mode: RollbackMode::SwitchNow,
         });
-        let mut boot_app = test_app();
+        let mut boot_app = test_app_with_helper();
         let boot = boot_app.apply(Message::ConfirmRollback {
             generation: 3,
             mode: RollbackMode::SetForNextBoot,
@@ -1620,7 +1630,7 @@ mod tests {
 
     #[test]
     fn request_maintenance_without_warning_spawns_allowlist_command() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         let intents = app.apply(Message::RequestMaintenance {
             id: "gc_unreachable".into(),
         });
@@ -1637,7 +1647,7 @@ mod tests {
 
     #[test]
     fn request_maintenance_with_warning_opens_dialog() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         let intents = app.apply(Message::RequestMaintenance {
             id: "gc_all".into(),
         });
@@ -1650,7 +1660,7 @@ mod tests {
 
     #[test]
     fn confirm_maintenance_sends_exact_allowlist_string() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         let intents = app.apply(Message::ConfirmMaintenance {
             id: "gc_all".into(),
         });
@@ -1665,7 +1675,7 @@ mod tests {
 
     #[test]
     fn load_disk_usage_spawns_get_disk_usage() {
-        let mut app = test_app();
+        let mut app = test_app_with_helper();
         let intents = app.apply(Message::LoadDiskUsage);
         match spawn_helper(&intents) {
             Some(Intent::SpawnHelper {
@@ -1791,5 +1801,40 @@ mod tests {
         assert!(!intents
             .iter()
             .any(|intent| matches!(intent, Intent::DetectGpu)));
+    }
+
+    #[test]
+    fn helper_missing_does_not_spawn_on_nav_or_refresh_loaders() {
+        let mut app = test_app();
+        assert!(app.helper_missing);
+        assert!(!app.flags.spawn.helper_available);
+
+        let intents = app.apply(Message::NavSelect(Page::Generations));
+        assert_eq!(app.page, Page::Generations);
+        assert_eq!(app.busy, Busy::Idle);
+        assert!(spawn_helper(&intents).is_none());
+
+        let intents = app.apply(Message::LoadGenerations);
+        assert_eq!(app.busy, Busy::Idle);
+        assert!(spawn_helper(&intents).is_none());
+
+        let intents = app.apply(Message::NavSelect(Page::Maintenance));
+        assert_eq!(app.page, Page::Maintenance);
+        assert!(spawn_helper(&intents).is_none());
+
+        let intents = app.apply(Message::LoadDiskUsage);
+        assert!(spawn_helper(&intents).is_none());
+
+        let intents = app.apply(Message::RequestApply);
+        assert!(app.dialog.is_none());
+        assert!(intents.is_empty());
+
+        let intents = app.apply(Message::ConfirmApply);
+        assert!(spawn_helper(&intents).is_none());
+        assert_eq!(app.busy, Busy::Idle);
+
+        let intents = app.apply(Message::RequestDryRun);
+        assert!(spawn_helper(&intents).is_none());
+        assert_eq!(app.busy, Busy::Idle);
     }
 }
