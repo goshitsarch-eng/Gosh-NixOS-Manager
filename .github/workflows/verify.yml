@@ -1,0 +1,105 @@
+name: verify
+
+on:
+  push:
+    branches: [main, cosmic-migration]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  cargo:
+    name: cargo
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            cmake \
+            libegl1-mesa-dev \
+            libexpat1-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            mesa-common-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --all-targets -- --nocapture
+
+  # Full Flatpak + weston smoke is the local `scripts/verify.sh` gate.
+  # GitHub-hosted runners are tight on disk/time for Freedesktop 25.08 + libcosmic.
+  # Enable via workflow_dispatch when a runner with cached runtimes is available.
+  flatpak:
+    name: flatpak
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            flatpak \
+            flatpak-builder \
+            weston \
+            python3 \
+            dbus-x11
+
+      - name: Add Flathub and runtimes
+        run: |
+          flatpak remote-add --if-not-exists --user flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Build Flatpak
+        run: scripts/build-flatpak.sh
+
+      - name: Smoke
+        run: scripts/smoke-flatpak.sh
+
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: /tmp/nixos-toolkit-smoke.*/**
+          if-no-files-found: ignore

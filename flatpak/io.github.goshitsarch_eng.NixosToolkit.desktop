@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=NixOS Toolkit
+GenericName=System Configuration
+Comment=Manage your NixOS system declaratively
+Exec=nixos-toolkit
+Icon=io.github.goshitsarch_eng.NixosToolkit
+Terminal=false
+Type=Application
+Categories=System;Settings;
+Keywords=nix;nixos;system;configuration;settings;
+StartupWMClass=io.github.goshitsarch_eng.NixosToolkit
+StartupNotify=true

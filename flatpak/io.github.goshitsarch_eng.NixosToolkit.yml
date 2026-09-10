@@ -1,0 +1,79 @@
+id: io.github.goshitsarch_eng.NixosToolkit
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: nixos-toolkit
+finish-args:
+  # Display: Wayland first, X11 fallback (winit x11 + wayland features).
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # wgpu / Mesa / NVIDIA GL.
+  - --device=dri
+  # Host helper: flatpak-spawn --host pkexec nixos-toolkit-helper.
+  # flathub-linter: skip=finish-args-flatpak-spawn-access
+  - --talk-name=org.freedesktop.Flatpak
+  # Unprivileged NixOS detection without a pkexec prompt on startup.
+  # Sandbox /etc/os-release is the runtime, not the host — do not overlay it.
+  - --filesystem=/etc/NIXOS:ro
+  - --filesystem=/etc/nixos:ro
+  - --filesystem=/etc/hostname:ro
+  # Preview templates shipped in /app. Do not set SKIP_PRIVILEGED_INIT here:
+  # production NixOS should still ReadState on startup (smoke sets it at run).
+  - --env=NIXOS_TOOLKIT_TEMPLATES_DIR=/app/share/nixos-toolkit/templates
+  # No --share=network.
+  # No --filesystem=host.
+  # No --device=all.
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/nixos-toolkit/cargo
+    CARGO_NET_OFFLINE: "true"
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/doc
+  - /share/man
+  - "*.a"
+
+modules:
+  - name: nixos-toolkit
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/nixos-toolkit/cargo
+        CARGO_NET_OFFLINE: "true"
+        # mold is bundled in rust-stable; optional speed-up.
+        RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+    build-commands:
+      # Generator writes cargo/config; cargo only reads .cargo/config.toml
+      # when CARGO_HOME is overridden by some toolchains. Install both.
+      - mkdir -p .cargo
+      - cp -f cargo/config .cargo/config.toml
+      - cp -f cargo/config cargo/config.toml
+      - cargo --offline fetch --locked --verbose
+      - cargo --offline build --locked --release -p gui --bin nixos-toolkit
+      - install -Dm755 target/release/nixos-toolkit -t ${FLATPAK_DEST}/bin/
+      - install -Dm644 data/icons/nixos-toolkit.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 flatpak/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 flatpak/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      - mkdir -p ${FLATPAK_DEST}/share/nixos-toolkit
+      - cp -a nix/templates ${FLATPAK_DEST}/share/nixos-toolkit/templates
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .git
+          - .flatpak
+          - .flatpak-builder
+          - .cache
+          - target
+          - result
+          - .idea
+          - .claude
+      - cargo-sources.json

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.goshitsarch_eng.NixosToolkit</id>
+  <launchable type="desktop-id">io.github.goshitsarch_eng.NixosToolkit.desktop</launchable>
+  <name>NixOS Toolkit</name>
+  <summary>Manage your NixOS system declaratively</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.goshitsarch_eng">
+    <name translatable="no">goshitsarch-eng</name>
+  </developer>
+  <description>
+    <p>
+      NixOS Toolkit is a graphical front-end for declarative NixOS configuration.
+      Choose a desktop profile, software bundles, and system settings, then preview
+      and apply them through a privileged host helper.
+    </p>
+    <p>
+      The Flatpak contains only the unprivileged GUI. Apply, generations, and
+      maintenance require nixos-toolkit-helper on the host (the NixOS Toolkit
+      system module) and will ask for authentication.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/goshitsarch-eng/Gosh-NixOS-Manager</url>
+  <url type="bugtracker">https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/goshitsarch-eng/Gosh-NixOS-Manager/main/data/icons/nixos-toolkit.svg</image>
+      <caption>NixOS Toolkit</caption>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-09-10">
+      <description>
+        <p>Initial libcosmic skeleton.</p>
+      </description>
+    </release>
+  </releases>
+  <categories>
+    <category>System</category>
+    <category>Settings</category>
+  </categories>
+</component>

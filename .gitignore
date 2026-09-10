@@ -3,6 +3,11 @@
 /result
 /result-*
 
+# Flatpak builder output and cargo-sources generator clone
+.flatpak/
+.flatpak-builder/
+.cache/flatpak-builder-tools/
+
 # IDE
 .idea/
 .vscode/
