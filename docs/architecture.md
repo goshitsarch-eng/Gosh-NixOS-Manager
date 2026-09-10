@@ -70,7 +70,7 @@ Discovery (host): `NIXOS_TOOLKIT_HELPER`, sibling of `current_exe`, then `/run/c
 
 `SHELL` is always removed from the child environment (pkexec rejects some nix-develop shells).
 
-One helper **process per operation**. Apply and dry-run share `run_apply_chain`: one process, `EnsureDirectories` then `Apply`. Successful `Switch` / `Boot` / `Test` / `Build` also sends `WriteState`. Dry-build does not.
+One helper **process per operation**. Apply (`Switch` / `Boot` / `Test` / `Build`) uses `run_apply_chain`: one process, `EnsureDirectories` then `Apply`, then `WriteState` on success. Dry-build sends only `Apply` (`DryBuild`) so the helper can snapshot the managed tree before creating directories.
 
 ## IPC
 
@@ -89,7 +89,7 @@ The GUI actually spawns:
 |----|---------|
 | Startup | `ReadState` |
 | Apply | `EnsureDirectories` → `Apply` (`Switch`/`Boot`/`Test`/`Build`) → `WriteState` |
-| Dry run | `EnsureDirectories` → `Apply` (`DryBuild`); no `WriteState` |
+| Dry run | `Apply` (`DryBuild`) only; no `EnsureDirectories`, no `WriteState` |
 | Generations | `ListGenerations`, `RollbackGeneration`, `DeleteGenerations` |
 | Maintenance | `RunMaintenance`, `GetDiskUsage` |
 

@@ -170,7 +170,7 @@ modules = [
 sudo nixos-rebuild switch --flake .#
 ```
 
-The helper creates the directory tree and placeholder on **Apply** and **Dry Run** (`EnsureDirectories` first). The import line in *your* config is always manual.
+The helper creates the directory tree and placeholder on **Apply** (`EnsureDirectories` first). **Dry Run** skips that request so it can snapshot the managed tree, then creates directories inside `Apply` and restores afterwards. The import line in *your* config is always manual.
 
 ### Verifying integration
 

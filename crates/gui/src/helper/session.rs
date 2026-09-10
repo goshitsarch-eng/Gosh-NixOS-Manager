@@ -3,7 +3,7 @@
 use crate::helper::client::HelperClient;
 use crate::helper::spawn::SpawnSpec;
 use crate::message::{HelperEvent, HelperOp};
-use common::ipc::{HelperRequest, HelperResponse, LogLevel};
+use common::ipc::{HelperRequest, HelperResponse, LogLevel, RebuildType};
 use futures::stream::{self, Stream, StreamExt};
 use std::time::Duration;
 
@@ -19,7 +19,9 @@ pub fn stream(
     stream::once(async move { run_blocking(spec, op, request) }).flat_map(stream::iter)
 }
 
-/// Run one helper process to completion. Apply chains EnsureDirectories → Apply → optional WriteState.
+/// Run one helper process to completion.
+/// Switch/Boot/Test/Build: EnsureDirectories → Apply → optional WriteState.
+/// DryBuild: Apply only (the helper snapshots before creating directories).
 pub(crate) fn run_blocking(
     spec: SpawnSpec,
     op: HelperOp,
@@ -109,34 +111,46 @@ fn run_apply_chain(
     save: Option<&common::ipc::AppState>,
     events: &mut Vec<HelperEvent>,
 ) {
-    push_log(events, op, "Ensuring directories exist...");
-    if let Err(err) = client.send(&HelperRequest::EnsureDirectories) {
-        events.push(HelperEvent::SpawnFailed {
-            op: event_op(op),
-            error: err.to_string(),
-        });
-        return;
-    }
-
-    match recv_until_terminal(
-        client,
+    let dry_build = matches!(
         op,
-        timeout_for(&HelperOp::EnsureDirectories),
-        events,
-        true,
-        true,
-    ) {
-        Some(HelperResponse::Ok) => {
-            push_log(events, op, "Directories ready.");
+        HelperOp::Apply {
+            rebuild: RebuildType::DryBuild,
+            ..
         }
-        Some(other) => {
-            events.push(HelperEvent::Response {
+    );
+    // Dry-build snapshots inside Apply before EnsureDirectories. Sending
+    // EnsureDirectories first would create a placeholder tree and make restore
+    // leave that placeholder instead of the pre-dry-run state.
+    if !dry_build {
+        push_log(events, op, "Ensuring directories exist...");
+        if let Err(err) = client.send(&HelperRequest::EnsureDirectories) {
+            events.push(HelperEvent::SpawnFailed {
                 op: event_op(op),
-                response: Box::new(other),
+                error: err.to_string(),
             });
             return;
         }
-        None => return,
+
+        match recv_until_terminal(
+            client,
+            op,
+            timeout_for(&HelperOp::EnsureDirectories),
+            events,
+            true,
+            true,
+        ) {
+            Some(HelperResponse::Ok) => {
+                push_log(events, op, "Directories ready.");
+            }
+            Some(other) => {
+                events.push(HelperEvent::Response {
+                    op: event_op(op),
+                    response: Box::new(other),
+                });
+                return;
+            }
+            None => return,
+        }
     }
 
     if let Err(err) = client.send(apply_request) {
@@ -431,7 +445,7 @@ for raw in sys.stdin:
             crate::state::AppState::new().to_apply_request(RebuildType::DryBuild),
         );
         assert_eq!(spawn_count(&spawns), 1);
-        assert_eq!(request_types(&requests), ["EnsureDirectories", "Apply"]);
+        assert_eq!(request_types(&requests), ["Apply"]);
         assert!(!request_types(&requests).iter().any(|t| t == "WriteState"));
         assert!(events.iter().any(|event| {
             matches!(
