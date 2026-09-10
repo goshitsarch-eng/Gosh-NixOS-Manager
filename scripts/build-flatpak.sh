@@ -35,8 +35,10 @@ flatpak-builder --user --force-clean --ccache \
   "${BUILD_DIR}" \
   "${MANIFEST}"
 
-flatpak --user remote-add --if-not-exists --no-gpg-verify \
-  "${REMOTE}" "${REPO_DIR}" || true
+# --if-not-exists keeps a leftover file:///tmp/... URL from a previous
+# sandbox; install then fails with "server has no summary file".
+flatpak --user remote-delete --force "${REMOTE}" >/dev/null 2>&1 || true
+flatpak --user remote-add --no-gpg-verify "${REMOTE}" "${REPO_DIR}"
 
 flatpak --user install -y --or-update --reinstall \
   "${REMOTE}" "${APP_ID}"

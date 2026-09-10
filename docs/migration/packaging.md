@@ -506,8 +506,10 @@ flatpak-builder --user --force-clean \
   "${ROOT}/.flatpak/build" \
   flatpak/io.github.goshitsarch_eng.NixosToolkit.yml
 
-flatpak --user remote-add --if-not-exists --no-gpg-verify \
-  nixos-toolkit-local "${ROOT}/.flatpak/repo" || true
+# Retarget if a previous sandbox left file:///tmp/... as the remote URL.
+flatpak --user remote-delete --force nixos-toolkit-local >/dev/null 2>&1 || true
+flatpak --user remote-add --no-gpg-verify \
+  nixos-toolkit-local "${ROOT}/.flatpak/repo"
 flatpak --user install -y --reinstall \
   nixos-toolkit-local io.github.goshitsarch_eng.NixosToolkit
 ```
