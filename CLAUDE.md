@@ -8,7 +8,7 @@ NixOS Toolkit — a libcosmic (iced) GUI for declarative NixOS system management
 
 Repository: `goshitsarch-eng/Gosh-NixOS-Manager`. Product name and binaries are NixOS Toolkit, not the repo title.
 
-Workspace version `0.1.0`, edition `2021`, `rust-version = "1.93"`, license `GPL-3.0-or-later`.
+Workspace version `0.1.0`, edition `2021`, `rust-version = "1.93"`, license `GPL-3.0-or-later` (`LICENSE` in the repository root).
 
 ## Build & Development Commands
 
@@ -46,15 +46,15 @@ cargo run -p gui
 
 ### Checks
 
-GitHub Actions (`.github/workflows/verify.yml`, job `cargo`):
+GitHub Actions (`.github/workflows/verify.yml`):
 
-- `cargo build --workspace --all-targets`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace --all-targets`
+- job `cargo`: `cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`
+- job `flake`: `nix build .#checks.x86_64-linux.fmt` and `.#checks.x86_64-linux.audit` on push/PR (not full `nix flake check`)
+- job `flatpak`: `workflow_dispatch` only
 
-Flake `checks` (not the GHA cargo job): inherit GUI/helper packages, `clippy` using GUI crane inputs/artifacts with `--all-targets -- --deny warnings` (no `-p gui`; clippy still walks the workspace), `fmt`, `audit`. No flake cargo-test check.
+Flake `checks`: inherit GUI/helper packages, `clippy` using GUI crane inputs/artifacts with `--all-targets -- --deny warnings` (no `-p gui`; clippy still walks the workspace), `fmt`, `audit`. No flake cargo-test check.
 
-Local full gate: `scripts/verify.sh` (cargo + clippy + test + Flatpak build + weston smoke). Flatpak GHA job is `workflow_dispatch` only.
+Local full gate: `scripts/verify.sh` (cargo + clippy + test + Flatpak build + weston smoke).
 
 ## Architecture
 
@@ -75,7 +75,7 @@ There is no `window.rs` and no `pages/` directory. UI is `crates/gui/src/view/*.
 
 - GUI runs unprivileged. Default spawn: `pkexec <helper>`. Flatpak: `flatpak-spawn --host --forward-fd=0 --forward-fd=1 -- pkexec <host-helper>`.
 - IPC: internally tagged JSON (`type` / `payload`), one object per line, stdout; tracing on stderr.
-- Apply chain on one helper process: `EnsureDirectories` → `Apply` → `WriteState` on success.
+- Apply chain on one helper process: `EnsureDirectories` → `Apply` → `WriteState` on success for Switch/Boot/Test/Build (not DryBuild).
 - Local preview does **not** call the helper (`common::nix::generate_preview_full_from`).
 
 ### Counts (from code, not marketing)
@@ -84,29 +84,33 @@ There is no `window.rs` and no `pages/` directory. UI is `crates/gui/src/view/*.
 - 16 bundle **definitions** (`default_bundles()`), 15 bundle **template files** (`ai-tools` has none)
 - 21 service toggles (`ServicesConfig` / `view/services.rs`)
 - 13 `HelperRequest` variants (including `GetDiskUsage`)
-- 5 system actions, 5 maintenance actions
+- 5 system actions, 5 maintenance catalog actions
+- 6 maintenance allowlist strings (`nix-channel --update` plus `nix flake update --flake /etc/nixos`)
 - 11 nav pages
+- Apply rebuild dropdown: Switch / Boot / Test / Build; Dry Run is a separate button
+- `NetworkConfig` also has `wireguard_enabled` and `wireguard_listen_port`
 
-Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. The helper then generates a fallback module (catalog packages + `bundle_module_stub`) instead of copying `nix/templates/bundles/*.nix`. Template copy still happens if the id is missing from `bundle_packages` (reconstructed or old state). Profile templates **are** copied. Preview still inlines bundle template files when present — preview can disagree with apply.
+Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. Preview and apply then generate a fallback module (resolved catalog attrs + `bundle_module_stub` in `crates/common/src/nix.rs`) instead of copying `nix/templates/bundles/*.nix`. Template copy still happens if the id is missing from `bundle_packages` (reconstructed or old state). Profile templates **are** copied. Preview inlines the same profile file when it exists; file order in the preview dump can still differ from apply.
 
 ### Key files
 
 - `crates/common/src/actions.rs` — profiles, bundles, system/maintenance defs
 - `crates/common/src/ipc.rs` — `HelperRequest`, `HelperResponse`, `AppState`, hardware/network/services
-- `crates/common/src/nix.rs` — selected/hostname/DNS/users/packages/hardware/services generation + local preview
+- `crates/common/src/nix.rs` — selected/hostname/DNS/users/packages/hardware/network/services/unfree generation, bundle stubs, local preview
+- `crates/common/src/config.rs` — managed paths (including `UNFREE_NIX`), `detect_integration_status`
 - `crates/gui/src/view/*.rs` — UI pages
 - `crates/gui/src/core/apply.rs` — message reducer
 - `crates/gui/src/helper/spawn.rs` — pkexec / Flatpak / env
-- `crates/helper/src/commands.rs` — request handlers
-- `crates/helper/src/nix_gen.rs` — writes + fallbacks/stubs
+- `crates/helper/src/commands.rs` — request handlers, reconstruct, dry-build snapshot
+- `crates/helper/src/nix_gen.rs` — writes, profile fallbacks, stale cleanup, atomic write jail
 - `nix/templates/profiles/` — desktop templates (used on apply)
-- `nix/templates/bundles/` — bundle templates (preview / helper-without-`bundle_packages`)
+- `nix/templates/bundles/` — bundle templates (legacy / helper-without-`bundle_packages`)
 
 ### Adding profiles / bundles
 
 1. Add `nix/templates/profiles/<id>.nix` or `nix/templates/bundles/<id>.nix`.
 2. Add the def in `default_profiles()` or `default_bundles()`.
-3. For a bundle that must enable NixOS modules (not just `environment.systemPackages`), add a match arm in `crates/helper/src/nix_gen.rs` (`bundle_module_stub`). GUI apply will not copy the template.
+3. For a bundle that must enable NixOS modules (not just `environment.systemPackages`), add a match arm in `crates/common/src/nix.rs` (`bundle_module_stub`). GUI apply will not copy the template.
 
 ## Storage locations
 
@@ -120,10 +124,13 @@ Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. Th
 - GUI never writes `/etc/nixos/`
 - Privileged operations go through the helper via pkexec (or `flatpak-spawn --host` + pkexec)
 - Managed files are separate from the user's `configuration.nix` / `flake.nix`
-- Maintenance commands are an exact-string allowlist in `commands.rs`
-- Hostname Nix uses `lib.mkForce`; DNS uses `lib.mkDefault`
+- Maintenance commands are an exact-string allowlist in `commands.rs` (6 strings)
+- Hostname and DNS Nix use `lib.mkDefault` (explicit user settings win)
+- `atomic_write` refuses paths outside `/etc/nixos/nixos-toolkit` (prefix check)
 
-GUI integration detection: if `selected.nix` already exists, `flake.nix` is not read. A flake-only import then shows Not integrated. Helper still accepts `flake.nix`.
+GUI and helper integration detection share `detect_integration_status`. Either `configuration.nix` or `flake.nix` importing `nixos-toolkit/state/selected.nix` (or `./` / absolute variants) counts. A comment containing that exact path is a false positive. Bare `nixos-toolkit` is not enough.
+
+NixOS module: `programs.nixos-toolkit.enable`, `.package` (GUI), `.helperPackage` (helper). Polkit actions `manage-system`, `write-config`, and `rebuild` all set `exec.path`.
 
 User-facing docs: `README.md`, `docs/architecture.md`, `docs/development.md`, `docs/reference.md`. `docs/migration/` is historical.
 

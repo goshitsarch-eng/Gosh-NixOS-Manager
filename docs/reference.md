@@ -13,7 +13,7 @@ Facts from the current source. Catalog tables are `default_*` in `crates/common/
 | Helper crate / binary | `helper` / `nixos-toolkit-helper` |
 | Version | `0.1.0` |
 | Edition / MSRV | 2021 / 1.93 |
-| License (Cargo / flake) | GPL-3.0-or-later / `licenses.gpl3Plus` |
+| License | GPL-3.0-or-later (`LICENSE`; Cargo `GPL-3.0-or-later`; flake `licenses.gpl3Plus`) |
 | libcosmic rev | `7cc116803b18d7b888eb511b009f775f036c3da7` |
 
 ## Paths
@@ -35,6 +35,7 @@ Facts from the current source. Catalog tables are `default_*` in `crates/common/
 | `HARDWARE_NIX` | `…/state/hardware.nix` |
 | `NETWORK_NIX` | `…/state/network.nix` |
 | `SERVICES_NIX` | `…/state/services.nix` |
+| `UNFREE_NIX` | `…/state/unfree.nix` |
 
 User prefs (GUI): `$XDG_CONFIG_HOME/nixos-toolkit/preferences.json`.
 
@@ -66,9 +67,13 @@ Host probes: `/etc/NIXOS`, `/etc/os-release`, `/etc/nixos/flake.nix`, `/etc/nixo
 
 Generate/Apply selection fields: `selected_profile`, `enabled_bundles`, `bundle_packages`, `hostname`, `dns_servers`, `user_groups`, `username`, `bluetooth_enabled`, `custom_packages`, `network_config`, `services_config`, `hardware_config`.
 
+The GUI does not send `CheckPermissions`, `GetSystemInfo`, `Validate`, or `Generate`.
+
 ### `RebuildType`
 
 `Switch` → `switch`, `Boot` → `boot`, `Test` → `test`, `Build` → `build`, `DryBuild` → `dry-build`.
+
+GUI: dropdown Switch/Boot/Test/Build; Dry Run button sends `DryBuild`. `WriteState` runs after successful Switch/Boot/Test/Build, not DryBuild.
 
 Flake hosts: helper appends `--flake /etc/nixos#{hostname}` (`/etc/hostname`, default `nixos`). Classic: no extra args. No `--impure`, no timeout.
 
@@ -82,9 +87,11 @@ Flake hosts: helper appends `--flake /etc/nixos#{hostname}` (`/etc/hostname`, de
 
 ### `NetworkConfig`
 
-`firewall_enabled` (default true), `allowed_tcp_ports`, `allowed_udp_ports`, `ssh_enabled`, `ssh_port` (22), `ssh_password_auth`, `ssh_root_login` (`"no"`), `fail2ban_enabled`, `tailscale_enabled`.
+`firewall_enabled` (default true), `allowed_tcp_ports`, `allowed_udp_ports`, `ssh_enabled`, `ssh_port` (22), `ssh_password_auth`, `ssh_root_login` (`"no"`), `fail2ban_enabled`, `tailscale_enabled`, `wireguard_enabled`, `wireguard_listen_port` (51820).
 
-`has_settings()` is true if TCP/UDP lists are non-empty, SSH is on, Tailscale is on, or the firewall is **off**. Fail2Ban, SSH port, and root-login alone do not count.
+`has_settings()` is true if TCP/UDP lists are non-empty, SSH is on, Tailscale is on, Fail2Ban is on, the firewall is **off**, SSH port ≠ 22, password auth is on, root-login ≠ `"no"`, or WireGuard is on. Changing only `wireguard_listen_port` while WireGuard is off does not count.
+
+`generate_network_nix` emits firewall (including WireGuard listen UDP), optional OpenSSH, Fail2Ban (with `jails.sshd` only when SSH is on), Tailscale, and `networking.wireguard.enable`.
 
 ### `HardwareConfig`
 
@@ -94,18 +101,20 @@ Flake hosts: helper appends `--flake /etc/nixos#{hostname}` (`/etc/hostname`, de
 | `nvidia_modesetting` | default true |
 | `nvidia_powermanagement` | |
 | `nvidia_open` | `hardware.nvidia.open` |
-| `audio_server` | `0` PipeWire (emitted only if `audio_lowlatency`); `1` PulseAudio; `2` none |
+| `audio_server` | `0` PipeWire (emitted whenever `hardware.nix` is written); `1` PulseAudio; `2` none |
 | `audio_lowlatency` | PipeWire 32-quantum extraConfig |
 | `bluetooth_enabled` / `bluetooth_autopower` | Blueman + `powerOnBoot` |
 | `power_profile` | `0` balanced (no PPD); `1` performance; `2` power-saver |
 | `tlp_enabled` | TLP on, PPD off |
 | `thermald_enabled` | |
 
+`has_settings()` is `self != Default`. Default `audio_server` is 0, so PipeWire-only is **not** a non-default field: `hardware.nix` is omitted until some other field changes. Bluetooth-only apply writes `hardware.nix` and therefore also enables PipeWire.
+
 Sibling `bluetooth_enabled` on Generate/Apply/AppState is OR-ed into hardware via `with_bluetooth_or`.
 
 ### Maintenance allowlist
 
-Exact match in `commands.rs`:
+Exact match in `commands.rs` (`ALLOWED_MAINTENANCE_COMMANDS`):
 
 ```
 nix-collect-garbage
@@ -113,7 +122,10 @@ nix-collect-garbage -d
 nix-store --optimise
 nix-store --verify --check-contents
 nix-channel --update
+nix flake update --flake /etc/nixos
 ```
+
+GUI catalog still has 5 actions. `update_channels` sends `nix-channel --update`. If `/etc/nixos/flake.nix` exists, the helper rewrites that request to `nix flake update --flake /etc/nixos` (the rewritten string is also on the allowlist).
 
 ### Validation
 
@@ -153,14 +165,16 @@ No `session` field on `ProfileDef`. What the templates enable (apply copies thes
 
 ## Bundles (16 defs / 15 files)
 
-If `bundle_packages` contains the bundle id (always true after enabling it in this GUI), apply writes **catalog packages** + **stub**. The template file is copied only when that key is absent (legacy/reconstructed state) and the file exists.
+If `bundle_packages` contains the bundle id (always true after enabling it in this GUI), preview and apply write **catalog packages** (resolved attrs) + **stub**. The template file is copied only when that key is absent (legacy/reconstructed state) and the file exists.
 
 ### Catalog + stub
+
+`bundle_module_stub` is `crates/common/src/nix.rs`.
 
 | id | Catalog package ids | `bundle_module_stub` |
 |----|---------------------|----------------------|
 | `devtools` | git, neovim, emacs, vscode, vscodium, zed-editor, rustup, nodejs, python3, docker | git + docker daemon |
-| `ai-tools` | ollama | none; **no** `ai-tools.nix` |
+| `ai-tools` | ollama | none; **no** `ai-tools.nix` (preview and apply both use fallback) |
 | `gaming` | steam, lutris, heroic, bottles, mangohud, gamemode | Steam (firewall/gamescope session), 32-bit GL, GameMode. **Not** gamescope program, wine, PAM limits |
 | `virtualization` | virt-manager, qemu, spice-gtk | kvm-amd+kvm-intel, libvirtd, swtpm, ovmf enable, virt-manager. Stub does not set `ovmf.packages` |
 | `virtualbox` | virtualbox | `allowUnfree`, host + extension pack. **Not** guest / guest.x11 |
@@ -168,17 +182,17 @@ If `bundle_packages` contains the bundle id (always true after enabling it in th
 | `flatpak` | flatpak | `services.flatpak` + `xdg.portal` (no gnome-software, no extra portal package) |
 | `multimedia` | vlc, mpv, gimp, inkscape, obs-studio, audacity | empty stub (no PipeWire) |
 | `office` | libreoffice, onlyoffice-desktopeditors, thunderbird, evince, obsidian | empty (no CUPS/SANE) |
-| `security` | keepassxc, bitwarden, `_1password-gui`, veracrypt, gnupg, age | empty (no gnupg.agent) |
+| `security` | keepassxc, bitwarden (`bitwarden-desktop`), `_1password-gui`, veracrypt, gnupg, age | empty (no gnupg.agent) |
 | `communication` | discord, signal-desktop, element-desktop, slack, zoom-us | empty |
 | `browsers` | firefox, chromium, google-chrome, brave, tor-browser-bundle-bin | empty (no `programs.firefox` policies) |
-| `science` | octave, julia, gnuplot | empty |
+| `science` | octave, julia (`julia-bin`), gnuplot | empty |
 | `cad` | blender, freecad, openscad, kicad | empty |
 | `utilities` | htop, btop, fastfetch, tmux, tree, unzip, wget, curl, appimage-run | empty |
-| `fonts` | nerd-fonts.fira-code, nerd-fonts.jetbrains-mono, fira-code, jetbrains-mono, inter, noto-fonts | empty (fallback puts these in `environment.systemPackages`, not `fonts.packages`) |
+| `fonts` | nerd-fonts.fira-code, nerd-fonts.jetbrains-mono, fira-code, jetbrains-mono, inter, noto-fonts | `fonts.fontconfig`; fallback uses `fonts.packages` |
 
-### Template extras (preview / unused-on-GUI-apply)
+### Template extras (legacy / reconstruct path)
 
-These appear in `nix/templates/bundles/` and in local preview when the file exists. They are **not** installed by default GUI apply.
+These appear in `nix/templates/bundles/` and are copied only when `bundle_packages` omits the id.
 
 | File | Extra vs catalog (incomplete; see the file) |
 |------|-----------------------------------------------|
@@ -196,6 +210,17 @@ These appear in `nix/templates/bundles/` and in local preview when the file exis
 | `containers.nix` | lazydocker, dive; podman via module not package |
 
 ARM notes in catalog that do not match package lists: science mentions RStudio; gaming mentions Wine; browsers mention Chrome (Chrome **is** in the catalog).
+
+### Unfree
+
+`needs_allow_unfree` writes `unfree.nix` (`nixpkgs.config.allowUnfree = true`) when:
+
+- NVIDIA driver index is 0..=2
+- bundle id is `gaming` or `virtualbox`
+- bundle id is `fonts` and `bundle_packages` has no entry (template includes corefonts/vistafonts)
+- a selected catalog/custom attr is in `attr_needs_unfree`: `steam`, `google-chrome`, `_1password-gui`, `corefonts`, `vistafonts`, `discord`, `slack`, `zoom-us`, `virtualbox`, `vscode`, `obsidian`, `onlyoffice-desktopeditors`
+
+This is not nixpkgs `meta.unfree`.
 
 ## System actions (5)
 
@@ -231,15 +256,15 @@ The System page renders username plus the three `UserGroup` actions. Hostname/DN
 
 `generate_services_nix` also has a `"tailscale"` arm; `ServicesConfig::enabled_services()` never yields it. Tailscale is generated in `network.nix`.
 
-## Maintenance (5)
+## Maintenance (5 GUI / 6 allowlist strings)
 
-| id | Command | Warning dialog |
-|----|---------|----------------|
+| id | Command sent | Warning dialog |
+|----|--------------|----------------|
 | `gc_unreachable` | `nix-collect-garbage` | no |
 | `gc_all` | `nix-collect-garbage -d` | yes |
 | `optimize_store` | `nix-store --optimise` | no |
 | `verify_store` | `nix-store --verify --check-contents` | no |
-| `update_channels` | `nix-channel --update` | no |
+| `update_channels` | `nix-channel --update` (rewritten on flake hosts) | no |
 
 ## Polkit
 
@@ -248,8 +273,8 @@ File: `data/polkit/org.nixos-toolkit.helper.policy`.
 | Action | Defaults | Exec annotation |
 |--------|----------|-----------------|
 | `org.nixos-toolkit.helper.manage-system` | any/inactive `auth_admin`; active `auth_admin_keep` | `/run/current-system/sw/bin/nixos-toolkit-helper` in source; Nix substitute → `$out/bin/…`; `allow_gui=true` |
-| `org.nixos-toolkit.helper.write-config` | active `auth_admin_keep` | none |
-| `org.nixos-toolkit.helper.rebuild` | active `auth_admin` (no keep) | none |
+| `org.nixos-toolkit.helper.write-config` | active `auth_admin_keep` | same `exec.path` / `allow_gui` |
+| `org.nixos-toolkit.helper.rebuild` | active `auth_admin` (no keep) | same `exec.path` / `allow_gui` |
 
 ## Desktop entry
 
@@ -261,33 +286,30 @@ File: `data/polkit/org.nixos-toolkit.helper.policy`.
 
 Per system: `packages.{default,gui,helper,templates,full}`, `apps.{default,helper}`, `devShells.default`, `checks.{nixos-toolkit-gui,nixos-toolkit-helper,clippy,fmt,audit}`.
 
-Top-level: `nixosModules.default` (`programs.nixos-toolkit.enable` / `.package`), `overlays.default`.
+Top-level: `nixosModules.default` (`programs.nixos-toolkit.enable` / `.package` / `.helperPackage`), `overlays.default`.
 
 No formatter, hydraJobs, cachix, or `nixConfig` substituters.
 
+GitHub Actions: cargo job (build/clippy/test) and flake job (`fmt` + `audit` checks) on push/PR. Flatpak job is `workflow_dispatch` only.
+
+## Integration
+
+`common::config::detect_integration_status` (GUI and helper). Markers: `./nixos-toolkit/state/selected.nix`, `/etc/nixos/nixos-toolkit/state/selected.nix`, `nixos-toolkit/state/selected.nix`. Either `configuration.nix` or `flake.nix` is enough. Comments are not stripped.
+
+## Reconstruct
+
+`reconstruct_state_from_nix` in `crates/helper/src/commands.rs` is line-oriented. It reads `selected.nix`, `custom-packages.nix`, `hostname.nix`, `dns.nix`, `users.nix`, `hardware.nix`, `network.nix` (including WireGuard enable + `# nixos-toolkit.wireguardListenPort =`), `services.nix`. It does not fill `bundle_packages`.
+
 ## Known limitations
 
-1. Bundle preview always inlines the template file when it exists and ignores `bundle_packages` (unchecks do not change the preview). GUI apply after enable writes catalog + stub.
-2. `ai-tools` has no template; preview omits a bundle file; apply writes packages-only.
-3. Fonts fallback uses `environment.systemPackages`, not `fonts.packages`.
-4. Helper does not delete stale managed files (`profiles/`, `bundles/`, or leftover `hostname.nix` / `network.nix` / … once `selected.nix` stops importing them).
-5. No UDP widget; no WireGuard.
-6. `NetworkConfig.has_settings` ignores Fail2Ban-only / SSH-option-only changes; Fail2Ban Nix is nested under SSH enable.
-7. Default PipeWire is not emitted unless low-latency is on (or you use the unused multimedia template).
-8. `apply_is_empty` ignores network, services, hostname, DNS, and user groups. Those still get the destructive empty-apply dialog.
-9. Hostname `mkForce` can override the user's hostname.
-10. Integration: GUI substring vs helper path.
-11. Reconstruct-from-Nix ignores most settings.
-12. Unfree: only the VirtualBox stub sets `allowUnfree`.
-13. `nix-channel --update` on flake systems.
-14. GUI does not expose `Boot` / `Test` / `Build` rebuild types.
-15. No write jail: helper writes the constant paths; `atomic_write` does not check a prefix.
-16. CheckPermissions may create `/etc/nixos/.write_test` or `…/nixos-toolkit/.write_test`.
-17. Dry-build: snapshot failure is `Error`; restore failure after a finished dry-build is a log line.
-18. i18n English only; many strings hardcoded.
-19. No LICENSE file in the repository root.
-20. GitHub Actions does not run flake fmt/audit or Flatpak on PRs.
-21. Fallback package lists are filtered by `is_nix_attrpath` (must start with a letter). Catalog id `_1password-gui` is dropped from generated Nix.
-22. Catalog ids that are not nixpkgs attrs (`bitwarden` vs template `bitwarden-desktop`, `julia` vs template `julia-bin`) are interpolated as-is in fallback Nix.
-23. `programs.nixos-toolkit.package` replaces the GUI package only; the helper is always `self.packages.${system}.helper`.
-24. Polkit actions `write-config` and `rebuild` have no `exec.path`; only `manage-system` annotates pkexec.
+1. i18n is English Fluent only (`crates/gui/i18n/en/`). Catalog names in `actions.rs` and service row names/descriptions in `view/services.rs` are English. Apply dialogs are Fluent.
+2. GitHub Actions Flatpak job is `workflow_dispatch` only (disk). Flake `fmt`/`audit` run on PRs. No Cachix / binary cache.
+3. Write jail is a path-prefix check under `/etc/nixos/nixos-toolkit`, not a kernel sandbox. `EnsureDirectories` placeholder and `WriteState` use plain/`state.json.tmp` writes.
+4. Reconstruct is line-oriented, not a Nix parser. Unusual hand-edited modules may be missed. `bundle_packages` is not reconstructed.
+5. Unfree is an allowlist of known attrs/bundles, not nixpkgs `meta.unfree`. Unknown unfree attrs can still fail eval.
+6. WireGuard UI enables `networking.wireguard.enable` and opens the listen UDP port. It does not write peers, addresses, or private keys.
+7. Preview vs apply: bundle path matches apply. Profile templates are inlined when present; a missing profile template is omitted from preview and still gets a helper fallback on apply. File order in the preview dump can differ from apply.
+8. GUI never sends `CheckPermissions` / `GetSystemInfo` / `Validate` / `Generate`.
+9. Integration: a comment containing the exact `selected.nix` path still counts as integrated.
+10. Hostname `lib.mkDefault` still sets the hostname when the user has no explicit `networking.hostName`.
+11. Maintenance catalog name remains **Update Channels**; on flake hosts the helper runs `nix flake update --flake /etc/nixos`.

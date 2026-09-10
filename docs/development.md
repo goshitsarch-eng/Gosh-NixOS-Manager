@@ -61,9 +61,11 @@ cargo test --workspace --all-targets
 
 | Location | What |
 |----------|------|
-| `crates/common/src/ipc.rs`, `nix.rs` | JSON compatibility (old Apply without `hardware_config`), hostname/hardware/services Nix |
-| `crates/helper/src/commands.rs` | rollback activate reject, kernel version parse |
-| `crates/gui/src/core/apply.rs` | reducer: apply/dry-run, packages, rollback, maintenance |
+| `crates/common/src/ipc.rs`, `nix.rs` | JSON compatibility (old Apply without `hardware_config` / WireGuard), hostname/hardware/services/network Nix, preview vs customized bundles, unfree |
+| `crates/common/src/config.rs` | Shared integration markers (flake-only, comments, bare word) |
+| `crates/helper/src/commands.rs` | rollback activate reject, kernel version parse, reconstruct parsers, dry-build restore `Error`, tempfile write probe, flake channel rewrite |
+| `crates/helper/src/nix_gen.rs` | hardware dry-run, stale cleanup, write jail, Fail2Ban without SSH |
+| `crates/gui/src/core/apply.rs` | reducer: apply/dry-run, rebuild types, packages, rollback, maintenance, UDP/WireGuard |
 | `crates/gui/src/core/packages.rs` | parser and duplicate classification |
 | `crates/gui/src/helper/spawn.rs` | pkexec / Flatpak matrix |
 | `crates/gui/src/helper/session.rs` | Ensure → Apply → WriteState against a scripted helper |
@@ -81,7 +83,8 @@ There is no `crates/gui/tests/integration.rs`.
 
 `.github/workflows/verify.yml`:
 
-- **cargo** on push (`main`, `cosmic-migration`), pull_request, workflow_dispatch: build, clippy `-D warnings`, test. No fmt, no audit, no `nix flake check`.
+- **cargo** on push (`main`, `cosmic-migration`), pull_request, workflow_dispatch: build, clippy `-D warnings`, test.
+- **flake** on the same events: `nix build .#checks.x86_64-linux.fmt` and `.#checks.x86_64-linux.audit` only. It does **not** run `nix flake check` (that also builds GUI/helper/clippy).
 - **flatpak** only on `workflow_dispatch`.
 
 Flake checks: GUI/helper packages, `clippy` (crane `guiArgs` for native/build inputs and GUI cargo artifacts; **`cargoClippyExtraArgs` is `--all-targets -- --deny warnings` with no `-p gui`, so clippy still walks the workspace), `fmt`, `audit`. No flake cargo-test check.
@@ -129,26 +132,28 @@ ProfileDef {
 
 3. Add a fallback arm in `crates/helper/src/nix_gen.rs` `generate_fallback_profile` if you care about missing-template applies. Unknown ids already get a generic LightDM fallback.
 
-Apply copies the template file. Preview shows the same file.
+Apply copies the template file. Preview shows the same file when it exists.
 
 ## Adding a software bundle
 
-1. Create `nix/templates/bundles/<id>.nix` if you want a rich **preview** (and a helper path that copies the file when `bundle_packages` omits the id).
-2. Append a `BundleDef` in `default_bundles()` with the packages the **GUI** should toggle. Those ids are what GUI apply installs as `environment.systemPackages`.
-3. If the bundle must enable NixOS options (Steam, libvirt, Podman, …), add a match arm in `bundle_module_stub` in `crates/helper/src/nix_gen.rs`. **Without a stub, GUI apply will not copy your template and will not enable those options.**
-4. Set `arm_compat` / `arm_note`. `ArmCompat::None` disables the bundle on ARM in the UI.
+1. Create `nix/templates/bundles/<id>.nix` if you want a rich module for the **legacy/reconstruct** path (template is copied only when `bundle_packages` omits the id).
+2. Append a `BundleDef` in `default_bundles()` with the packages the **GUI** should toggle. Those ids are what GUI apply installs. If the nixpkgs attr differs from the catalog id, use `PackageDef::with_nix_attr`.
+3. If the bundle must enable NixOS options (Steam, libvirt, Podman, …), add a match arm in `bundle_module_stub` in **`crates/common/src/nix.rs`**. Preview and GUI apply both call this. **Without a stub, GUI apply will not copy your template and will not enable those options.**
+4. If the generated packages are unfree, add the attr (or bundle id) to `needs_allow_unfree` / `attr_needs_unfree` in the same file so `unfree.nix` is imported.
+5. Set `arm_compat` / `arm_note`. `ArmCompat::None` disables the bundle on ARM in the UI.
 
-`ai-tools` is the existing example of a catalog entry with no template: apply emits packages only (`ollama`).
+`ai-tools` is the existing example of a catalog entry with no template file: preview and apply both emit packages only (`ollama`).
 
 ## i18n
 
-Fluent, fallback `en`. Files: `crates/gui/i18n/en/gui.ftl` and `nixos_toolkit.ftl` (overlapping keys). `fl!` in views. Many dialogs/toasts in `core/apply.rs` are still hardcoded English. Catalog names in `actions.rs` are English.
+Fluent, fallback `en`. Files: `crates/gui/i18n/en/gui.ftl` and `nixos_toolkit.ftl` (overlapping keys — keep them in sync). `fl!` in views. Apply confirm dialogs in `core/apply.rs` use Fluent (`apply-empty-*`, `apply-packages-*`, `apply-normal-*`). Catalog names in `actions.rs` are English by design. Service **row** names and descriptions in `view/services.rs` are still hardcoded English; group titles on that page are Fluent.
 
 ## Project layout
 
 ```
 .
 ├── Cargo.toml                 # workspace, rust-version 1.93, GPL-3.0-or-later
+├── LICENSE                    # GNU GPL v3
 ├── flake.nix
 ├── crates/
 │   ├── common/src/{actions,ipc,config,nix}.rs

@@ -20,6 +20,7 @@ nixos-toolkit-helper             assumed privileged
   │  nixos-rebuild {switch,boot,test,build,dry-build}
   │  nix-env on /nix/var/nix/profiles/system
   │  allowlisted nix-collect-garbage / nix-store / nix-channel
+  │  nix flake update --flake /etc/nixos (when channel update is requested on a flake host)
   ▼
 NixOS evaluation of the user's config, which must import
   /etc/nixos/nixos-toolkit/state/selected.nix
@@ -31,7 +32,7 @@ The GUI never writes `/etc/nixos`. The helper never edits `configuration.nix` or
 
 | Crate | Path | Artifact |
 |-------|------|----------|
-| `common` | `crates/common` | library: catalogs, IPC types, path constants, Nix string generation |
+| `common` | `crates/common` | library: catalogs, IPC types, path constants, Nix string generation (including `bundle_module_stub`) |
 | `gui` | `crates/gui` | library `nixos_toolkit_gui` + binary **`nixos-toolkit`** |
 | `helper` | `crates/helper` | binary **`nixos-toolkit-helper`**. Declares tokio; `main` is synchronous (`std::process::Command`) |
 | `fake-helper` | `crates/fake-helper` | binary `fake-helper`. Replies `Ok` or a `FAKE_HELPER_SCRIPT` JSONL (it **reads** that file). Never touches `/etc/nixos` |
@@ -69,7 +70,7 @@ Discovery (host): `NIXOS_TOOLKIT_HELPER`, sibling of `current_exe`, then `/run/c
 
 `SHELL` is always removed from the child environment (pkexec rejects some nix-develop shells).
 
-One helper **process per operation**. Apply and dry-run share `run_apply_chain`: one process, `EnsureDirectories` then `Apply`. Successful `Switch` also sends `WriteState`. Dry-build does not.
+One helper **process per operation**. Apply and dry-run share `run_apply_chain`: one process, `EnsureDirectories` then `Apply`. Successful `Switch` / `Boot` / `Test` / `Build` also sends `WriteState`. Dry-build does not.
 
 ## IPC
 
@@ -87,20 +88,22 @@ The GUI actually spawns:
 | UI | Request |
 |----|---------|
 | Startup | `ReadState` |
-| Apply | `EnsureDirectories` → `Apply` (`Switch`) → `WriteState` |
+| Apply | `EnsureDirectories` → `Apply` (`Switch`/`Boot`/`Test`/`Build`) → `WriteState` |
 | Dry run | `EnsureDirectories` → `Apply` (`DryBuild`); no `WriteState` |
 | Generations | `ListGenerations`, `RollbackGeneration`, `DeleteGenerations` |
 | Maintenance | `RunMaintenance`, `GetDiskUsage` |
 
 It does **not** send `CheckPermissions`, `GetSystemInfo`, `Validate`, or `Generate`. Preview is local. System info is `integration.rs` (and `flatpak-spawn --host` inside the sandbox).
 
-`RebuildType` in IPC: `Switch`, `Boot`, `Test`, `Build`, `DryBuild`. The GUI only uses `Switch` and `DryBuild`. Rollback `activate` is `"switch"` or `"boot"`.
+`RebuildType` in IPC: `Switch`, `Boot`, `Test`, `Build`, `DryBuild`. The Apply page dropdown uses Switch/Boot/Test/Build; Dry Run is a separate button (`DryBuild`). Rollback `activate` is `"switch"` or `"boot"`.
 
 Streaming: during apply/rebuild the helper may emit many `Log` lines before a terminal `ApplyComplete` / `Error`.
 
 Full field list: [reference.md](reference.md).
 
 ## Nix generation
+
+Shared generators live in `crates/common/src/nix.rs`. The helper writes them in `crates/helper/src/nix_gen.rs`.
 
 ### `selected.nix`
 
@@ -109,41 +112,66 @@ Import-only module. Conditional imports:
 - `../profiles/<id>.nix`
 - `../bundles/<id>.nix` for each enabled bundle
 - `./hostname.nix`, `./dns.nix`, `./users.nix`, `./custom-packages.nix`, `./hardware.nix`, `./network.nix`, `./services.nix` when the corresponding state is set
+- `./unfree.nix` when `needs_allow_unfree` is true
 
 ### Profiles
 
 Helper `read_template(profile.template)` from `NIXOS_TOOLKIT_TEMPLATES_DIR` (else `./nix/templates`). On success, atomic-write to `/etc/nixos/nixos-toolkit/profiles/<id>.nix`. On failure, `generate_fallback_profile` in the helper.
 
-### Bundles (GUI apply)
+### Bundles (preview and GUI apply)
 
 1. `ToggleBundle { enabled: true }` copies every catalog package id into `state.bundle_packages[id]`.
-2. Apply sends that map.
-3. Helper: if `bundle_packages` **contains** the id **or** the template is missing → `generate_fallback_bundle` (package list + `bundle_module_stub`).
-4. Template copy happens only when the id is **absent** from `bundle_packages` and the file exists. That is the path for old `state.json` or `reconstruct_state_from_nix()` (enabled bundle ids only). A toggle-on in this GUI always inserts the key.
+2. Apply sends that map. Local preview uses the same `NixGenOptions`.
+3. If `bundle_packages` **contains** the id **or** the template is missing → `generate_fallback_bundle` (resolved nixpkgs attrs + `bundle_module_stub`).
+4. Template copy happens only when the id is **absent** from `bundle_packages` and the file exists. That is the path for old `state.json` or `reconstruct_state_from_nix()` (enabled bundle ids only; `bundle_packages` is not reconstructed). A toggle-on in this GUI always inserts the key.
+
+`bundle_module_stub` and `generate_fallback_bundle` live in `common::nix` so preview and apply cannot drift on package lists or stubs. Fonts fallback uses `fonts.packages` plus `fonts.fontconfig.enable`. Catalog ids can map to a different attr (`PackageDef::nix_attr`: `bitwarden` → `bitwarden-desktop`, `julia` → `julia-bin`). `is_nix_attrpath` allows a leading `_`.
 
 ### Preview vs apply
 
-`generate_preview_full_from` always inlines profile **and** bundle template files when they exist. It does not read `bundle_packages` and does not simulate `bundle_module_stub`. Unchecking catalog packages still previews the full template. The Apply page can therefore show a richer (or different) bundle file than the helper will write.
+`generate_preview_full_from` uses the same bundle rule as apply. Profile templates are inlined when the file exists; apply copies that file, or a helper fallback if it is missing (preview then omits the profile file). The dump order of files in the preview string is not the same as `generate_all_files` write order (preview emits custom-packages/hardware/network/services/unfree before profiles/bundles; apply writes hardware and profiles before custom-packages).
+
+### Network
+
+`generate_network_nix` always emits firewall TCP/UDP lists when `NetworkConfig::has_settings()` is true. Fail2Ban is independent of SSH (with SSH it also enables `jails.sshd`). WireGuard sets `networking.wireguard.enable`, opens the listen UDP port, and writes `# nixos-toolkit.wireguardListenPort = <port>;` so reconstruct can round-trip the spin-button value. It does not emit peers, addresses, or keys.
+
+### Hardware / PipeWire
+
+`HardwareConfig` default `audio_server` is `0` (PipeWire). `has_settings()` is false for the struct default, so an apply with no hardware changes does **not** write `hardware.nix`. Whenever `hardware.nix` **is** written (any non-default field, including bluetooth-only), `generate_hardware_nix` emits PipeWire for `audio_server == 0` (low-latency extraConfig only if that toggle is on). PulseAudio (`1`) disables PipeWire; `2` disables both.
 
 ### Priority
 
 | Snippet | Nix priority |
 |---------|----------------|
-| hostname | `lib.mkForce` |
+| hostname | `lib.mkDefault` |
 | DNS nameservers | `lib.mkDefault` |
 | everything else | plain assignment |
 
+`mkDefault` means an explicit `networking.hostName` / `networking.nameservers` in the user's config wins. If the user has no hostname set, the toolkit value is used.
+
 ### Dry-build
 
-`Apply` with `DryBuild` still writes the managed tree so `nixos-rebuild dry-build` can evaluate it, then restores a snapshot of `/etc/nixos/nixos-toolkit`. Failure to **take** the snapshot is `HelperResponse::Error`. Failure to **restore** after a finished dry-build is a log line only.
+`Apply` with `DryBuild`:
+
+1. Snapshot `/etc/nixos/nixos-toolkit` (or record that it did not exist) **before** `EnsureDirectories`.
+2. Ensure directories / placeholder, generate files (`dry_run: false` so evaluation can see them), run `nixos-rebuild dry-build`.
+3. Restore the snapshot. If the dir did not exist, restore deletes it.
+
+Failure to **take** the snapshot is `HelperResponse::Error`. Failure to **restore** (after ensure, generate, or rebuild) is `HelperResponse::Error` via `dry_build_response` (combined with a rebuild/generate error when both failed).
 
 `Generate { dry_run: true }` does not write. The GUI does not call `Generate`.
 
-### Atomic writes
+### Atomic writes and stale cleanup
 
-Helper `atomic_write`: write `*.tmp` (extension replaced, so `selected.nix` → `selected.tmp`), rename, read back. `WriteState` uses `state.json.tmp` then rename, **without** read-back. `EnsureDirectories` placeholder uses plain `fs::write`.
+Helper `atomic_write`: refuse paths that do not stay under `/etc/nixos/nixos-toolkit` (absolute, no `..`, existing-prefix canonicalize). Write `*.tmp` (extension replaced, so `selected.nix` → `selected.tmp`), rename, read back. This is a path-prefix check, not a kernel sandbox.
 
-Leftover files are not removed when a profile/bundle/snippet is no longer imported.
+`WriteState` uses `state.json.tmp` then rename, **without** read-back or that jail helper. `EnsureDirectories` placeholder uses plain `fs::write`.
+
+After a successful generate (not helper `Generate` dry-run), `cleanup_stale_managed_files` deletes `.nix` files in `profiles/` and `bundles/` whose stems are not the current profile/bundles, and deletes unused managed snippets listed in `MANAGED_SNIPPETS` (`hostname.nix`, `dns.nix`, `users.nix`, `custom-packages.nix`, `hardware.nix`, `network.nix`, `services.nix`, `unfree.nix`). `selected.nix` and `state.json` are not in that list.
+
+### CheckPermissions
+
+`check_write_permission` creates an ephemeral tempfile (`prefix(".write_test-")`) in the directory and relies on `Drop` to remove it. It does not leave a stable `/etc/nixos/.write_test` file. The GUI does not send `CheckPermissions`.
 
 ## State
 
@@ -153,24 +181,21 @@ Leftover files are not removed when a profile/bundle/snippet is no longer import
 | Theme | `$XDG_CONFIG_HOME/nixos-toolkit/preferences.json` (`dirs::config_dir()`) | GUI; cosmic-config is a best-effort mirror under `APP_ID` |
 | Managed Nix | `/etc/nixos/nixos-toolkit/{state,profiles,bundles}` | helper |
 
-If `state.json` is missing or invalid, the helper reconstructs a **partial** `AppState` from `selected.nix` (profile + bundle ids), `custom-packages.nix`, and `hostname.nix`. Network, services, hardware, DNS, and groups are not reconstructed.
+If `state.json` is missing or invalid, the helper reconstructs `AppState` from managed Nix with line-oriented parsers (`reconstruct_state_from_nix`):
+
+- `selected.nix` — profile + bundle ids (not `bundle_packages`)
+- `custom-packages.nix`, `hostname.nix`, `dns.nix`, `users.nix`
+- `hardware.nix`, `network.nix` (including `wireguard_enabled` and listen port from the toolkit comment), `services.nix`
+
+This is not a Nix parser. Unusual formatting, extra comments that look like options, or hand-edited modules can be missed or misread.
 
 ## Integration detection
 
-Two implementations, different strings:
+GUI (`crates/gui/src/integration.rs`) and helper (`crates/helper/src/commands.rs`) both call `common::config::detect_integration_status` on the contents of `/etc/nixos/configuration.nix` and `/etc/nixos/flake.nix`. Either file is sufficient. Callers must not skip `flake.nix` when `selected.nix` already exists.
 
-**GUI** (`crates/gui/src/integration.rs`), in order:
+Markers (substring): `./nixos-toolkit/state/selected.nix`, `/etc/nixos/nixos-toolkit/state/selected.nix`, `nixos-toolkit/state/selected.nix`. A bare `nixos-toolkit` word is not enough. Comments are not stripped (documented false positive). `selected.nix` existing is not required for the status.
 
-1. If `/etc/nixos/configuration.nix` is readable and contains `nixos-toolkit` → `Integrated`.
-2. Else if `/etc/nixos/nixos-toolkit/state/selected.nix` exists: `Integrated` only when `configuration.nix` contains `nixos-toolkit`; otherwise **`NotIntegrated` without reading `flake.nix`**.
-3. Else if `flake.nix` contains `nixos-toolkit` → `Integrated`.
-4. Else `NotIntegrated`.
-
-So a flake-only import, after the placeholder `selected.nix` exists, is **NotIntegrated** in the GUI. `detect_integration()` never returns `Unknown`; `SystemInfo::default()` does when host probes are skipped.
-
-**Helper** (`crates/helper/src/commands.rs`): `selected.nix` must exist, then `configuration.nix` or `flake.nix` must contain `nixos-toolkit/state/selected.nix` (or `./` / `/etc/nixos/` prefix variants). Helper `detect_integration()` never returns `Unknown`.
-
-The GUI never calls helper `GetSystemInfo`.
+`detect_integration()` never returns `Unknown`; `SystemInfo::default()` does when host probes are skipped. The GUI never calls helper `GetSystemInfo`.
 
 ## Flake packaging
 
@@ -178,7 +203,7 @@ The GUI never calls helper `GetSystemInfo`.
 - GUI wrap: `NIXOS_TOOLKIT_TEMPLATES_DIR`, `NIXOS_TOOLKIT_HELPER`
 - Helper wrap: templates dir, `PATH` prefix `nix`, `nixos-rebuild`, `git`, `hostname`
 - Helper `postInstall` installs polkit policy and substitutes the exec path to `$out/bin/nixos-toolkit-helper`
-- `nixosModules.default`: `programs.nixos-toolkit.enable` → polkit + systemPackages GUI (`programs.nixos-toolkit.package`) **and** `self.packages.${system}.helper` (the helper is not swapped by `.package`). No import of `selected.nix`, no directory creation
+- `nixosModules.default`: `programs.nixos-toolkit.enable` → polkit + `systemPackages` of `programs.nixos-toolkit.package` (GUI) **and** `programs.nixos-toolkit.helperPackage` (helper). No import of `selected.nix`, no directory creation
 - Overlay: `nixos-toolkit`, `nixos-toolkit-helper`
 
 ## Flatpak

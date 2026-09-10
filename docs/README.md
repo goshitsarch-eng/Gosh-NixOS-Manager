@@ -4,9 +4,9 @@ These files describe the **current** tree (libcosmic GUI, privileged helper, fla
 
 | File | Audience | Contents |
 |------|----------|----------|
-| [../README.md](../README.md) | Users | Install, setup, features, apply vs preview |
-| [architecture.md](architecture.md) | Contributors | Crates, process model, IPC, Nix generation, state |
-| [development.md](development.md) | Contributors | Build, test, CI, adding profiles/bundles, env vars |
+| [../README.md](../README.md) | Users | Install, setup, features, apply vs preview, remaining limitations |
+| [architecture.md](architecture.md) | Contributors | Crates, process model, IPC, Nix generation, dry-build restore, state |
+| [development.md](development.md) | Contributors | Build, test, CI (cargo + flake fmt/audit), adding profiles/bundles, i18n |
 | [reference.md](reference.md) | Contributors | Paths, IPC variants, catalogs, helper stubs, limitations |
 | [migration/](migration/) | Archaeology | GTK4 → libcosmic design notes. **Historical.** |
 
@@ -17,3 +17,4 @@ Identity:
 - App ID: `io.github.goshitsarch_eng.NixosToolkit`
 - GUI binary: `nixos-toolkit` (Cargo package `gui`)
 - Helper binary: `nixos-toolkit-helper` (Cargo package `helper`)
+- License: GPL-3.0-or-later (`LICENSE`)
