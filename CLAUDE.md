@@ -1,10 +1,14 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance when working with code in this repository.
 
 ## Project Overview
 
-NixOS Toolkit - A libcosmic GUI for declarative NixOS system management. Users select desktop profiles, software bundles, and system settings through a graphical interface, and the tool generates appropriate Nix configuration files.
+NixOS Toolkit — a libcosmic (iced) GUI for declarative NixOS system management. Users select a desktop profile, software bundles, and system settings. The unprivileged GUI talks to `nixos-toolkit-helper` (typically via `pkexec`). The helper writes Nix modules under `/etc/nixos/nixos-toolkit/` and runs `nixos-rebuild`. It does not edit the user's `configuration.nix` or `flake.nix`.
+
+Repository: `goshitsarch-eng/Gosh-NixOS-Manager`. Product name and binaries are NixOS Toolkit, not the repo title.
+
+Workspace version `0.1.0`, edition `2021`, `rust-version = "1.93"`, license `GPL-3.0-or-later`.
 
 ## Build & Development Commands
 
@@ -12,76 +16,119 @@ NixOS Toolkit - A libcosmic GUI for declarative NixOS system management. Users s
 # Enter development shell (required for cargo commands)
 nix develop
 
-# Run the GUI application
+# Run the GUI (Cargo package "gui", binary nixos-toolkit)
 cargo run -p gui
 
-# Run the helper binary (requires root for actual operations)
+# Run the helper (Cargo package "helper", binary nixos-toolkit-helper)
 cargo run -p helper
 
-# Build all packages with Nix
+# Build all flake packages
 nix build
 
 # Build specific packages
 nix build .#gui
 nix build .#helper
+nix build .#templates
+nix build .#full
 
-# Run from flake directly
+# Run from flake
 nix run github:goshitsarch-eng/Gosh-NixOS-Manager
 ```
 
-### CI Checks (defined in flake.nix)
+Dev-shell sets `NIXOS_TOOLKIT_TEMPLATES_DIR` to `$PWD/nix/templates`. For apply tests against a local helper:
 
-- **clippy**: `--all-targets -- --deny warnings`
-- **fmt**: Cargo formatting check
-- **audit**: Security vulnerability scanning via cargo-audit
+```bash
+export NIXOS_TOOLKIT_HELPER="$PWD/target/debug/nixos-toolkit-helper"
+cargo run -p gui
+```
+
+`NIXOS_TOOLKIT_NO_PKEXEC=1` spawns the helper directly (still needs write access to `/etc/nixos` for real applies).
+
+### Checks
+
+GitHub Actions (`.github/workflows/verify.yml`, job `cargo`):
+
+- `cargo build --workspace --all-targets`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace --all-targets`
+
+Flake `checks` (not the GHA cargo job): inherit GUI/helper packages, `clippy` using GUI crane inputs/artifacts with `--all-targets -- --deny warnings` (no `-p gui`; clippy still walks the workspace), `fmt`, `audit`. No flake cargo-test check.
+
+Local full gate: `scripts/verify.sh` (cargo + clippy + test + Flatpak build + weston smoke). Flatpak GHA job is `workflow_dispatch` only.
 
 ## Architecture
 
-### Crate Structure
+### Crate structure
 
 ```
 crates/
-├── common/     # Shared types: actions.rs (profile/bundle defs), ipc.rs (JSON protocol), config.rs, nix.rs
-├── gui/        # libcosmic application - view/ contains all UI screens
-└── helper/     # Privileged operations binary - runs via pkexec
+├── common/       # Shared types: actions, ipc, config paths, nix generation
+├── gui/          # libcosmic application; binary nixos-toolkit
+│                 # view/ pages, helper/ spawn, core/ apply reducer
+├── helper/       # Privileged binary nixos-toolkit-helper (pkexec)
+└── fake-helper/  # JSON-line IPC double for tests; never touches /etc/nixos
 ```
 
-### Communication Model
+There is no `window.rs` and no `pages/` directory. UI is `crates/gui/src/view/*.rs` plus `app.rs`.
 
-- **GUI** runs unprivileged, spawns **helper** via `pkexec` for privileged operations
-- **IPC**: JSON messages over stdin/stdout (line-delimited)
-- Helper handles: file writes to `/etc/nixos/nixos-toolkit/`, `nixos-rebuild` execution, generation management
+### Communication model
 
-### Key Files
+- GUI runs unprivileged. Default spawn: `pkexec <helper>`. Flatpak: `flatpak-spawn --host --forward-fd=0 --forward-fd=1 -- pkexec <host-helper>`.
+- IPC: internally tagged JSON (`type` / `payload`), one object per line, stdout; tracing on stderr.
+- Apply chain on one helper process: `EnsureDirectories` → `Apply` → `WriteState` on success.
+- Local preview does **not** call the helper (`common::nix::generate_preview_full_from`).
 
-- `crates/common/src/actions.rs` - Define profiles (13 desktop environments) and bundles (15 software collections) here
-- `crates/common/src/ipc.rs` - IPC message types (`HelperRequest`, `HelperResponse`, `AppState`)
-- `crates/gui/src/view/*.rs` - UI pages for each feature (profiles, bundles, hardware, network, etc.)
-- `crates/helper/src/commands.rs` - Request handlers (12 commands)
-- `crates/helper/src/nix_gen.rs` - Nix file generation logic
-- `nix/templates/profiles/` - Nix templates for desktop environments
-- `nix/templates/bundles/` - Nix templates for software bundles
+### Counts (from code, not marketing)
 
-### Adding New Profiles/Bundles
+- 13 profiles (`default_profiles()` + `nix/templates/profiles/`)
+- 16 bundle **definitions** (`default_bundles()`), 15 bundle **template files** (`ai-tools` has none)
+- 21 service toggles (`ServicesConfig` / `view/services.rs`)
+- 13 `HelperRequest` variants (including `GetDiskUsage`)
+- 5 system actions, 5 maintenance actions
+- 11 nav pages
 
-1. Create template in `nix/templates/profiles/` or `nix/templates/bundles/`
-2. Add definition in `crates/common/src/actions.rs` (`default_profiles()` or `default_bundles()`)
+Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. The helper then generates a fallback module (catalog packages + `bundle_module_stub`) instead of copying `nix/templates/bundles/*.nix`. Template copy still happens if the id is missing from `bundle_packages` (reconstructed or old state). Profile templates **are** copied. Preview still inlines bundle template files when present — preview can disagree with apply.
 
-## Storage Locations
+### Key files
 
-- Managed config: `/etc/nixos/nixos-toolkit/state/selected.nix` (and related files)
-- User preferences: `~/.local/share/nixos-toolkit/`
-- Templates at runtime: `$NIXOS_TOOLKIT_TEMPLATES_DIR` (set by Nix wrapper)
+- `crates/common/src/actions.rs` — profiles, bundles, system/maintenance defs
+- `crates/common/src/ipc.rs` — `HelperRequest`, `HelperResponse`, `AppState`, hardware/network/services
+- `crates/common/src/nix.rs` — selected/hostname/DNS/users/packages/hardware/services generation + local preview
+- `crates/gui/src/view/*.rs` — UI pages
+- `crates/gui/src/core/apply.rs` — message reducer
+- `crates/gui/src/helper/spawn.rs` — pkexec / Flatpak / env
+- `crates/helper/src/commands.rs` — request handlers
+- `crates/helper/src/nix_gen.rs` — writes + fallbacks/stubs
+- `nix/templates/profiles/` — desktop templates (used on apply)
+- `nix/templates/bundles/` — bundle templates (preview / helper-without-`bundle_packages`)
 
-## Security Model
+### Adding profiles / bundles
 
-- GUI never writes to `/etc/nixos/` directly
-- All privileged operations go through helper via pkexec (polkit authentication)
-- Toolkit files are separate from user's existing configuration.nix
-- Maintenance commands in helper are allowlisted
+1. Add `nix/templates/profiles/<id>.nix` or `nix/templates/bundles/<id>.nix`.
+2. Add the def in `default_profiles()` or `default_bundles()`.
+3. For a bundle that must enable NixOS modules (not just `environment.systemPackages`), add a match arm in `crates/helper/src/nix_gen.rs` (`bundle_module_stub`). GUI apply will not copy the template.
 
+## Storage locations
+
+- Managed Nix: `/etc/nixos/nixos-toolkit/` (`state/`, `profiles/`, `bundles/`)
+- Privileged UI state: `/etc/nixos/nixos-toolkit/state/state.json`
+- User theme prefs: `$XDG_CONFIG_HOME/nixos-toolkit/preferences.json` (not `~/.local/share/`)
+- Templates at runtime: `$NIXOS_TOOLKIT_TEMPLATES_DIR` (Nix wrapper, Flatpak `/app/share/…`, else `./nix/templates`)
+
+## Security model
+
+- GUI never writes `/etc/nixos/`
+- Privileged operations go through the helper via pkexec (or `flatpak-spawn --host` + pkexec)
+- Managed files are separate from the user's `configuration.nix` / `flake.nix`
+- Maintenance commands are an exact-string allowlist in `commands.rs`
+- Hostname Nix uses `lib.mkForce`; DNS uses `lib.mkDefault`
+
+GUI integration detection: if `selected.nix` already exists, `flake.nix` is not read. A flake-only import then shows Not integrated. Helper still accepts `flake.nix`.
+
+User-facing docs: `README.md`, `docs/architecture.md`, `docs/development.md`, `docs/reference.md`. `docs/migration/` is historical.
 
 ## Git Commits & Documentation Style
+
 Never include references to AI, Claude, or automated generation in:
 
 Git commit messages

@@ -1,3 +1,5 @@
+> **Historical (January 2026).** GTK-era notes. Paths such as `crates/gui/src/window.rs`, `pages/`, `./result/bin/gui`, and `/home/gosh/Downloads/NixOSApp-main` are not the current libcosmic tree. Hostname generation is `lib.mkForce`, not `mkDefault`. Current docs: [README.md](README.md), [docs/](docs/).
+
 # NixOS Toolkit - Bug Fixes Progress
 
 ## Issue
