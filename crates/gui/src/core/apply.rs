@@ -1,6 +1,7 @@
 //! Pure-enough reducer: `AppModel::apply` returns side-effect [`Intent`]s.
 
 use crate::app::{AppModel, Banner, BannerKind, Busy, HelperStatus};
+use crate::core::packages::{classify_new_packages, parse_package_input};
 use crate::helper::session::helper_missing_message;
 use crate::integration::{classic_integration_snippet, flake_integration_snippet};
 use crate::message::{ContextPage, Dialog, HelperEvent, HelperOp, Intent, Message};
@@ -11,6 +12,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 const TOAST_MS: u64 = 3000;
+const IN_BUNDLE_TOAST_MS: u64 = 4000;
 
 const SSH_ROOT_LOGIN: [&str; 3] = ["no", "prohibit-password", "yes"];
 
@@ -127,8 +129,46 @@ impl AppModel {
                 Vec::new()
             }
             Message::AddPackagesFromInput => {
-                // Parser lands in task 7 (`core/packages.rs`).
-                Vec::new()
+                let packages = parse_package_input(&self.package_input);
+                if packages.is_empty() {
+                    return Vec::new();
+                }
+                self.package_input.clear();
+
+                let (added, duplicates, in_bundle) = classify_new_packages(
+                    &packages,
+                    &self.state.custom_packages,
+                    &default_bundles(),
+                );
+                for pkg in &added {
+                    self.state.add_custom_package(pkg.clone());
+                }
+
+                let mut intents = Vec::new();
+                if !added.is_empty() {
+                    let text = if added.len() == 1 {
+                        format!("Added: {}", added[0])
+                    } else {
+                        format!("Added {} packages", added.len())
+                    };
+                    intents.push(Intent::ShowToast {
+                        text,
+                        timeout_ms: TOAST_MS,
+                    });
+                }
+                if !duplicates.is_empty() {
+                    intents.push(Intent::ShowToast {
+                        text: format!("Already added: {}", duplicates.join(", ")),
+                        timeout_ms: TOAST_MS,
+                    });
+                }
+                for (pkg, bundle) in &in_bundle {
+                    intents.push(Intent::ShowToast {
+                        text: format!("'{pkg}' is already in '{bundle}' bundle"),
+                        timeout_ms: IN_BUNDLE_TOAST_MS,
+                    });
+                }
+                intents
             }
             Message::AddCustomPackages(packages) => {
                 for pkg in packages {
@@ -513,9 +553,16 @@ mod tests {
     use crate::app::Flags;
     use crate::config::ColorSchemePreference;
     use crate::message::{Dialog, HelperOp, Page, RollbackMode};
-    use common::ipc::{DiskUsageInfo, Generation, HardwareConfig, NetworkConfig, ServicesConfig};
+    use common::ipc::{
+        AppState as IpcAppState, DiskUsageInfo, Generation, HardwareConfig, LogLevel,
+        NetworkConfig, RebuildType, ServicesConfig,
+    };
     use common::SystemInfo;
     use cosmic::Application;
+
+    fn test_app() -> AppModel {
+        AppModel::init(cosmic::Core::default(), Flags::for_tests()).0
+    }
 
     fn dummy_generation() -> Generation {
         Generation {
@@ -726,9 +773,75 @@ mod tests {
         );
     }
 
+    fn toast_text<'a>(intents: &'a [Intent], needle: &str) -> Option<&'a Intent> {
+        intents
+            .iter()
+            .find(|intent| matches!(intent, Intent::ShowToast { text, .. } if text == needle))
+    }
+
+    fn toast_timeout(intent: &Intent) -> u64 {
+        match intent {
+            Intent::ShowToast { timeout_ms, .. } => *timeout_ms,
+            _ => panic!("expected ShowToast"),
+        }
+    }
+
+    #[test]
+    fn add_packages_from_input_single_toast() {
+        let (mut app, _) = AppModel::init(cosmic::Core::default(), Flags::for_tests());
+        app.apply(Message::PackageInputChanged("neofetch".into()));
+        let intents = app.apply(Message::AddPackagesFromInput);
+        assert!(app.state.has_custom_package("neofetch"));
+        assert!(app.package_input.is_empty());
+        let toast = toast_text(&intents, "Added: neofetch").expect("added toast");
+        assert_eq!(toast_timeout(toast), 3000);
+    }
+
+    #[test]
+    fn add_packages_from_input_multiple_toast() {
+        let (mut app, _) = AppModel::init(cosmic::Core::default(), Flags::for_tests());
+        app.apply(Message::PackageInputChanged("neofetch, ripgrep".into()));
+        let intents = app.apply(Message::AddPackagesFromInput);
+        assert!(app.state.has_custom_package("neofetch"));
+        assert!(app.state.has_custom_package("ripgrep"));
+        let toast = toast_text(&intents, "Added 2 packages").expect("count toast");
+        assert_eq!(toast_timeout(toast), 3000);
+    }
+
+    #[test]
+    fn add_packages_from_input_duplicate_toast() {
+        let (mut app, _) = AppModel::init(cosmic::Core::default(), Flags::for_tests());
+        app.apply(Message::AddCustomPackages(vec!["neofetch".into()]));
+        app.apply(Message::PackageInputChanged("neofetch".into()));
+        let intents = app.apply(Message::AddPackagesFromInput);
+        let toast = toast_text(&intents, "Already added: neofetch").expect("dup toast");
+        assert_eq!(toast_timeout(toast), 3000);
+        assert_eq!(app.state.custom_packages.len(), 1);
+    }
+
+    #[test]
+    fn add_packages_from_input_in_bundle_toast_all_bundles() {
+        let (mut app, _) = AppModel::init(cosmic::Core::default(), Flags::for_tests());
+        app.apply(Message::PackageInputChanged("git".into()));
+        let intents = app.apply(Message::AddPackagesFromInput);
+        assert!(!app.state.has_custom_package("git"));
+        let toast = toast_text(&intents, "'git' is already in 'Development Tools' bundle")
+            .expect("in-bundle toast");
+        assert_eq!(toast_timeout(toast), 4000);
+    }
+
+    #[test]
+    fn add_packages_from_input_empty_is_noop() {
+        let (mut app, _) = AppModel::init(cosmic::Core::default(), Flags::for_tests());
+        app.apply(Message::PackageInputChanged("123invalid".into()));
+        let intents = app.apply(Message::AddPackagesFromInput);
+        assert!(intents.is_empty());
+        assert_eq!(app.package_input, "123invalid");
+    }
+
     #[test]
     fn quit_returns_exit() {
-        let (mut app, _) = AppModel::init(cosmic::Core::default(), Flags::for_tests());
+        let mut app = test_app();
         let intents = app.apply(Message::Quit);
         assert!(intents.iter().any(Intent::is_exit));
     }
@@ -738,5 +851,161 @@ mod tests {
         let flags = Flags::for_tests();
         assert!(flags.skip_privileged_on_init);
         let (_app, _task) = AppModel::init(cosmic::Core::default(), flags);
+    }
+
+    #[test]
+    fn apply_select_profile_bundle_service_and_ports() {
+        let mut app = test_app();
+        app.apply(Message::SelectProfile("kde".into()));
+        assert_eq!(app.state.selected_profile.as_deref(), Some("kde"));
+
+        app.apply(Message::ToggleBundle {
+            id: "devtools".into(),
+            enabled: true,
+        });
+        assert!(app.state.is_bundle_enabled("devtools"));
+        assert!(app
+            .state
+            .get_bundle_packages("devtools")
+            .is_some_and(|pkgs| pkgs.contains("git")));
+
+        app.apply(Message::SetBluetoothEnabled(true));
+        assert!(app.state.bluetooth_enabled);
+        assert!(app.state.hardware_config.bluetooth_enabled);
+
+        app.apply(Message::ToggleTcpPort {
+            port: 22,
+            enabled: true,
+        });
+        app.apply(Message::CustomTcpPortsChanged("80, 443".into()));
+        assert_eq!(
+            app.state.network_config.allowed_tcp_ports,
+            vec![22, 80, 443]
+        );
+
+        app.apply(Message::ToggleService {
+            id: "printing".into(),
+            enabled: true,
+        });
+        assert!(app.state.services_config.printing);
+
+        app.apply(Message::AddCustomPackages(vec!["htop".into()]));
+        assert!(app.state.has_custom_package("htop"));
+    }
+
+    #[test]
+    fn request_apply_empty_is_destructive_confirm() {
+        let mut app = test_app();
+        app.state.network_config.ssh_enabled = true;
+        let intents = app.apply(Message::RequestApply);
+        assert!(intents.is_empty());
+        match &app.dialog {
+            Some(Dialog::ConfirmApply {
+                heading,
+                destructive: true,
+                ..
+            }) => assert!(heading.contains("Empty")),
+            other => panic!("expected empty ConfirmApply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_apply_with_profile_is_not_destructive() {
+        let mut app = test_app();
+        app.state.select_profile("gnome");
+        app.apply(Message::RequestApply);
+        match &app.dialog {
+            Some(Dialog::ConfirmApply {
+                heading,
+                destructive: false,
+                ..
+            }) => assert!(!heading.contains("Empty")),
+            other => panic!("expected non-empty ConfirmApply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_apply_packages_only_shares_non_empty_dialog() {
+        let mut app = test_app();
+        app.state.add_custom_package("htop");
+        app.apply(Message::RequestApply);
+        match &app.dialog {
+            Some(Dialog::ConfirmApply {
+                destructive: false,
+                heading,
+                ..
+            }) => assert_eq!(heading, "Apply Configuration?"),
+            other => panic!("expected non-empty ConfirmApply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_apply_ignored_when_busy() {
+        let mut app = test_app();
+        app.busy = Busy::Applying;
+        app.apply(Message::RequestApply);
+        assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn confirm_and_cancel_apply_dismiss_dialog_without_spawn() {
+        let mut app = test_app();
+        app.apply(Message::RequestApply);
+        assert!(app.dialog.is_some());
+        let intents = app.apply(Message::ConfirmApply);
+        assert!(app.dialog.is_none());
+        assert!(!intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::SpawnHelper { .. })));
+
+        app.apply(Message::RequestApply);
+        let intents = app.apply(Message::CancelApply);
+        assert!(app.dialog.is_none());
+        assert!(intents.is_empty());
+    }
+
+    #[test]
+    fn helper_state_log_and_apply_complete() {
+        let mut app = test_app();
+        app.state.has_changes = true;
+
+        let ipc = IpcAppState {
+            selected_profile: Some("xfce".into()),
+            ..IpcAppState::default()
+        };
+        app.apply(Message::Helper(HelperEvent::Response {
+            op: HelperOp::ReadState,
+            response: Box::new(HelperResponse::State(ipc)),
+        }));
+        assert_eq!(app.state.selected_profile.as_deref(), Some("xfce"));
+
+        app.apply(Message::Helper(HelperEvent::Response {
+            op: HelperOp::Apply {
+                rebuild: RebuildType::Switch,
+                then_write_state: true,
+            },
+            response: Box::new(HelperResponse::Log {
+                level: LogLevel::Info,
+                message: "building".into(),
+            }),
+        }));
+        assert!(app.apply_log.contains("building"));
+
+        app.state.has_changes = true;
+        let intents = app.apply(Message::Helper(HelperEvent::Response {
+            op: HelperOp::Apply {
+                rebuild: RebuildType::Switch,
+                then_write_state: true,
+            },
+            response: Box::new(HelperResponse::ApplyComplete {
+                success: true,
+                message: "done".into(),
+            }),
+        }));
+        assert!(!app.state.has_changes);
+        assert!(intents.iter().any(|intent| matches!(
+            intent,
+            Intent::ShowToast { text, .. } if text == "done"
+        )));
     }
 }
