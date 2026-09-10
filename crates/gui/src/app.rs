@@ -8,7 +8,7 @@ use crate::message::{
     ContextPage, Dialog, HelperEvent, HelperOp, Intent, Message, Page, RollbackMode,
 };
 use crate::state::AppState;
-use common::actions::CpuArch;
+use common::actions::{default_bundles, default_profiles, CpuArch};
 use common::config::SystemInfo;
 use common::ipc::{DiskUsageInfo, Generation, HelperRequest};
 use cosmic::app::{context_drawer, Core, Task};
@@ -21,7 +21,7 @@ use cosmic::widget::{self, about::About, icon, menu, nav_bar};
 use cosmic::{Application, ApplicationExt, Apply, Element};
 use futures::StreamExt;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const APP_ICON: &[u8] = include_bytes!("../../../data/icons/nixos-toolkit.svg");
@@ -33,7 +33,7 @@ pub struct Flags {
     pub spawn: SpawnSpec,
     pub templates_dir: PathBuf,
     pub prefs_path: Option<PathBuf>,
-    /// Tests / headless CI: do not pkexec on startup.
+    /// Tests / headless CI: do not spawn a privileged helper on startup.
     pub skip_privileged_on_init: bool,
     /// Tests: skip lspci / /etc/NIXOS probes.
     pub skip_host_probes: bool,
@@ -60,7 +60,7 @@ impl Flags {
     pub fn for_tests() -> Self {
         Self {
             spawn: SpawnSpec::unavailable(None, Vec::new(), vec!["SHELL".into()]),
-            templates_dir: PathBuf::from("./nix/templates"),
+            templates_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../nix/templates"),
             prefs_path: None,
             skip_privileged_on_init: true,
             skip_host_probes: true,
@@ -141,9 +141,16 @@ pub struct AppModel {
     pub(crate) helper: HelperStatus,
     pub(crate) busy: Busy,
     pub(crate) field_errors: FieldErrors,
+    pub(crate) verify_pending: bool,
 }
 
 impl AppModel {
+    /// Display-free model for integration tests (`Core::default()`).
+    #[must_use]
+    pub fn test_model() -> Self {
+        Self::init(Core::default(), Flags::for_tests()).0
+    }
+
     #[must_use]
     pub fn page(&self) -> Page {
         self.page
@@ -152,6 +159,16 @@ impl AppModel {
     #[must_use]
     pub fn state(&self) -> &AppState {
         &self.state
+    }
+
+    #[must_use]
+    pub fn pending_dialog(&self) -> Option<&Dialog> {
+        self.dialog.as_ref()
+    }
+
+    #[must_use]
+    pub fn busy(&self) -> Busy {
+        self.busy
     }
 
     #[must_use]
@@ -290,6 +307,7 @@ impl Application for AppModel {
             helper: HelperStatus::Idle,
             busy: Busy::Idle,
             field_errors: FieldErrors::default(),
+            verify_pending: false,
         };
 
         if helper_missing {
@@ -506,8 +524,12 @@ impl AppModel {
                         Message::GpuDetected(crate::integration::detect_gpu())
                     }));
                 }
-                Intent::LocalPreview | Intent::LocalProfilePreview { .. } => {
-                    // Local preview is task 12 / 5.
+                Intent::LocalPreview => {
+                    let preview = generate_local_preview(&self.state, &self.flags.templates_dir);
+                    tasks.push(cosmic::task::message(Message::PreviewReady(preview)));
+                }
+                Intent::LocalProfilePreview { id } => {
+                    self.profile_preview = generate_profile_preview(&id, &self.flags.templates_dir);
                 }
                 Intent::CopyClipboard(text) => {
                     tasks.push(
@@ -563,6 +585,28 @@ impl AppModel {
             }
         }
         Task::batch(tasks)
+    }
+}
+
+fn generate_local_preview(state: &AppState, templates_dir: &Path) -> String {
+    let profiles = default_profiles();
+    let bundles = default_bundles();
+    let options = state.to_nix_gen_options(&profiles, &bundles);
+    common::nix::generate_preview_full_from(&options, templates_dir)
+}
+
+fn generate_profile_preview(id: &str, templates_dir: &Path) -> String {
+    match default_profiles().into_iter().find(|profile| profile.id == id) {
+        Some(profile) => match common::nix::read_template_from(templates_dir, &profile.template) {
+            Ok(content) => content,
+            Err(_) => format!(
+                "# Profile: {}\n# Template: {}\n# (Template file not found - will be available after installation)",
+                profile.name, profile.template
+            ),
+        },
+        None => format!(
+            "# Profile: {id}\n# (Template file not found - will be available after installation)"
+        ),
     }
 }
 

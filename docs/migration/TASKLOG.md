@@ -2,6 +2,21 @@
 
 Short plans and DA notes for Phase 2. Newest first.
 
+## Task 12–14 — Architecture plan
+
+Make apply/preview/generations/maintenance actually run without a second pkexec.
+
+- Local preview: `generate_preview_full` / profile `read_template` from Flags templates dir; `SelectProfile` and `NavSelect(Apply)` refresh; VerifyIntegration toasts GTK copy after DetectSystem.
+- Session: one spawn for Apply — EnsureDirectories → Apply (stream Log) → WriteState on success when `then_write_state` (ipc state on `HelperOp::Apply.save`). DryBuild skips WriteState. SpawnFailed → banner + toast.
+- C4: `RollbackGeneration.activate` default `"switch"`; helper `switch-to-configuration` uses it; generations/maintenance only via helper IPC (no gui `pkexec`/`nix-env`). Cheap generation nixos/kernel reads. `AppModel::test_model()` via `Core::default()`.
+
+## Task 12–14 — Architecture (landed)
+
+Local preview uses Flags `templates_dir` (`generate_preview_full_from` / `read_template_from`). `SelectProfile` emits `LocalProfilePreview`; `NavSelect(Apply)` refreshes preview. Apply confirm uses GTK empty / packages-only / normal copy; empty check includes non-default hardware. One helper process: EnsureDirectories → Apply (Log stream) → WriteState when `then_write_state`. DryBuild skips WriteState. SpawnFailed sets banner + toast.
+
+`RollbackGeneration.activate` defaults to `"switch"` (old JSON). Helper `switch-to-configuration` uses `switch`|`boot`. ListGenerations fills nixos/kernel from `system-N-link` (two reads). Maintenance looks up `default_maintenance_actions()` and sends the exact allowlist string; log prints `$ {command}` (not pkexec). `rg pkexec crates/gui` is `spawn.rs` only. `AppModel::test_model()` uses `Core::default()`.
+
+
 ## Task 2 — Packaging tests (landed)
 
 `crates/gui/tests/state_mutations.rs` covers AppState public methods: select/clear profile, bundle enable/disable (drops package set), bluetooth sibling mirror, TCP port split/parse, services, and NetworkConfig UDP vec IPC+JSON round-trip (no UDP widget).

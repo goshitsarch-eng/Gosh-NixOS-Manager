@@ -69,7 +69,12 @@ pub enum HelperRequest {
     ListGenerations,
 
     /// Rollback to a specific generation
-    RollbackGeneration { generation: u32 },
+    RollbackGeneration {
+        generation: u32,
+        /// `"switch"` (activate now) or `"boot"` (next boot). Old JSON omits this.
+        #[serde(default = "default_switch")]
+        activate: String,
+    },
 
     /// Delete specific generations
     DeleteGenerations { generations: Vec<u32> },
@@ -234,7 +239,7 @@ impl LogLevel {
 }
 
 /// Network configuration for firewall, SSH, and VPN
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkConfig {
     /// Enable firewall
     #[serde(default = "default_true")]
@@ -277,6 +282,10 @@ fn default_root_login() -> String {
     "no".to_string()
 }
 
+fn default_switch() -> String {
+    "switch".to_string()
+}
+
 impl NetworkConfig {
     /// Check if any network settings are configured (non-default)
     pub fn has_settings(&self) -> bool {
@@ -289,7 +298,7 @@ impl NetworkConfig {
 }
 
 /// Services configuration for system services
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicesConfig {
     #[serde(default)]
     pub printing: bool,
@@ -465,7 +474,7 @@ impl HardwareConfig {
 }
 
 /// Persisted application state
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppState {
     /// Selected profile ID (e.g., "gnome", "kde")
     pub selected_profile: Option<String>,
@@ -620,5 +629,42 @@ mod tests {
             ..HardwareConfig::default()
         };
         assert!(already.with_bluetooth_or(false).bluetooth_enabled);
+    }
+
+    #[test]
+    fn old_rollback_generation_json_without_activate_defaults_to_switch() {
+        let request: HelperRequest =
+            serde_json::from_str(r#"{"type":"RollbackGeneration","payload":{"generation":42}}"#)
+                .expect("old RollbackGeneration JSON should deserialize");
+        match request {
+            HelperRequest::RollbackGeneration {
+                generation,
+                activate,
+            } => {
+                assert_eq!(generation, 42);
+                assert_eq!(activate, "switch");
+            }
+            other => panic!("expected RollbackGeneration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rollback_generation_boot_round_trips() {
+        let request = HelperRequest::RollbackGeneration {
+            generation: 7,
+            activate: "boot".into(),
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+        let back: HelperRequest = serde_json::from_str(&json).expect("deserialize");
+        match back {
+            HelperRequest::RollbackGeneration {
+                generation,
+                activate,
+            } => {
+                assert_eq!(generation, 7);
+                assert_eq!(activate, "boot");
+            }
+            other => panic!("expected RollbackGeneration, got {other:?}"),
+        }
     }
 }

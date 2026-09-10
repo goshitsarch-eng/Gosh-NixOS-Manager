@@ -20,7 +20,7 @@ pub struct HelperClient {
 impl HelperClient {
     /// Spawn the helper using an injectable [`SpawnSpec`].
     ///
-    /// Does not invoke pkexec when `spec.helper_available` is false.
+    /// Does not spawn when `spec.helper_available` is false.
     pub fn spawn(spec: &SpawnSpec) -> Result<Self> {
         if !spec.helper_available || spec.program.as_os_str().is_empty() {
             anyhow::bail!("nixos-toolkit-helper is not available");

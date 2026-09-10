@@ -145,9 +145,10 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
         HelperRequest::ReadState => commands::read_state(),
         HelperRequest::WriteState { state } => commands::write_state(state),
         HelperRequest::ListGenerations => commands::list_generations(),
-        HelperRequest::RollbackGeneration { generation } => {
-            commands::rollback_generation(generation)
-        }
+        HelperRequest::RollbackGeneration {
+            generation,
+            activate,
+        } => commands::rollback_generation(generation, activate),
         HelperRequest::DeleteGenerations { generations } => {
             commands::delete_generations(generations)
         }

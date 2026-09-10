@@ -2,7 +2,9 @@
 
 use crate::config::{ColorSchemePreference, UserPreferences};
 use common::config::SystemInfo;
-use common::ipc::{DiskUsageInfo, Generation, HelperRequest, HelperResponse, RebuildType};
+use common::ipc::{
+    AppState as IpcAppState, DiskUsageInfo, Generation, HelperRequest, HelperResponse, RebuildType,
+};
 use std::path::PathBuf;
 
 /// Top-level application message. Every user action and every helper event.
@@ -248,6 +250,7 @@ pub enum HelperEvent {
 
 /// Why a helper was spawned.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum HelperOp {
     ReadState,
     WriteState,
@@ -256,9 +259,12 @@ pub enum HelperOp {
     EnsureDirectories,
     Validate,
     Generate,
+    /// `then_write_state` is true for Switch; false for DryBuild.
+    /// `save` is written on the same session after a successful Apply.
     Apply {
         rebuild: RebuildType,
         then_write_state: bool,
+        save: Option<Box<IpcAppState>>,
     },
     ListGenerations,
     Rollback {

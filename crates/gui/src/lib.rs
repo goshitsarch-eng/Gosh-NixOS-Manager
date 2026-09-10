@@ -11,7 +11,7 @@ pub mod state;
 pub mod view;
 pub mod widget;
 
-pub use app::{AppModel, Flags};
+pub use app::{AppModel, Busy, Flags};
 pub use config::{ColorSchemePreference, UserPreferences};
 pub use helper::spawn::SpawnSpec;
 pub use message::{Dialog, HelperEvent, HelperOp, Intent, Message, Page, RollbackMode};

@@ -545,7 +545,10 @@ pub fn list_generations() -> HelperResponse {
             let mut generations = Vec::new();
 
             for line in stdout.lines() {
-                if let Some(gen) = parse_generation_line(line) {
+                if let Some(mut gen) = parse_generation_line(line) {
+                    let (nixos_version, kernel_version) = generation_metadata(gen.number);
+                    gen.nixos_version = nixos_version;
+                    gen.kernel_version = kernel_version;
                     generations.push(gen);
                 }
             }
@@ -593,9 +596,44 @@ fn parse_generation_line(line: &str) -> Option<Generation> {
     })
 }
 
+/// NixOS and kernel versions from a generation path. Two filesystem reads; missing files stay None.
+fn generation_metadata(number: u32) -> (Option<String>, Option<String>) {
+    let gen_path = format!("/nix/var/nix/profiles/system-{number}-link");
+    let nixos_version = fs::read_to_string(format!("{gen_path}/nixos-version"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let kernel_version = fs::read_link(format!("{gen_path}/kernel"))
+        .ok()
+        .as_deref()
+        .and_then(kernel_version_from_link);
+    (nixos_version, kernel_version)
+}
+
+fn kernel_version_from_link(path: &Path) -> Option<String> {
+    let path_str = path.to_string_lossy();
+    path_str
+        .split('/')
+        .find(|part| part.contains("-linux-"))
+        .and_then(|part| {
+            part.find("-linux-")
+                .map(|idx| part[idx + 7..].to_string())
+                .filter(|s| !s.is_empty())
+        })
+}
+
 /// Rollback to a specific generation
-pub fn rollback_generation(generation: u32) -> HelperResponse {
+pub fn rollback_generation(generation: u32, activate: String) -> HelperResponse {
     use std::process::Command;
+
+    if activate != "switch" && activate != "boot" {
+        return HelperResponse::Error {
+            message: "Invalid activate mode".into(),
+            details: Some(format!(
+                "activate must be \"switch\" or \"boot\", got {activate}"
+            )),
+        };
+    }
 
     // Switch to the specified generation
     let switch_output = Command::new("nix-env")
@@ -609,10 +647,10 @@ pub fn rollback_generation(generation: u32) -> HelperResponse {
 
     match switch_output {
         Ok(output) if output.status.success() => {
-            // Activate the generation
+            // Activate the generation (`switch` now or `boot` for next reboot).
             let activate_output =
                 Command::new("/nix/var/nix/profiles/system/bin/switch-to-configuration")
-                    .arg("switch")
+                    .arg(&activate)
                     .output();
 
             match activate_output {
@@ -764,4 +802,26 @@ pub fn get_disk_usage() -> HelperResponse {
         generation_count,
         error,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kernel_version_from_store_path() {
+        let path = Path::new("/nix/store/xxx-linux-6.1.0/bzImage");
+        assert_eq!(kernel_version_from_link(path).as_deref(), Some("6.1.0"));
+    }
+
+    #[test]
+    fn rollback_rejects_unknown_activate() {
+        match rollback_generation(1, "explode".into()) {
+            HelperResponse::Error { message, details } => {
+                assert!(message.contains("Invalid"));
+                assert!(details.is_some_and(|d| d.contains("explode")));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
 }

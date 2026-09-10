@@ -4,10 +4,12 @@ use crate::app::{AppModel, Banner, BannerKind, Busy, HelperStatus};
 use crate::core::packages::{classify_new_packages, parse_package_input};
 use crate::helper::session::helper_missing_message;
 use crate::integration::{classic_integration_snippet, flake_integration_snippet};
-use crate::message::{ContextPage, Dialog, HelperEvent, HelperOp, Intent, Message};
+use crate::message::{
+    ContextPage, Dialog, HelperEvent, HelperOp, Intent, Message, Page, RollbackMode,
+};
 use common::actions::default_bundles;
 use common::config::{ConfigMode, IntegrationStatus};
-use common::ipc::HelperResponse;
+use common::ipc::{HelperRequest, HelperResponse, RebuildType};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -16,14 +18,26 @@ const IN_BUNDLE_TOAST_MS: u64 = 4000;
 
 const SSH_ROOT_LOGIN: [&str; 3] = ["no", "prohibit-password", "yes"];
 
+const APPLY_EMPTY_HEADING: &str = "Apply Empty Configuration?";
+const APPLY_EMPTY_BODY: &str = "WARNING: You have no profile, bundles, or packages selected.\n\n\
+     Applying this will remove ALL managed software from your system.\n\n\
+     If you previously had bundles or packages installed through this tool, \
+     they will be REMOVED.\n\n\
+     Are you sure you want to continue?";
+const APPLY_PACKAGES_HEADING: &str = "Apply Configuration?";
+const APPLY_PACKAGES_BODY: &str = "Note: No desktop profile or bundles are selected.\n\n\
+     This will run 'nixos-rebuild switch' with only your custom packages.\n\n\
+     Make sure you have reviewed the preview above.";
+const APPLY_NORMAL_HEADING: &str = "Apply Configuration?";
+const APPLY_NORMAL_BODY: &str =
+    "This will run 'nixos-rebuild switch' with your selected configuration.\n\n\
+     Make sure you have reviewed the preview above.";
+
 impl AppModel {
     /// Reducer. No iced/libcosmic widget types. Exhaustive over [`Message`].
     pub fn apply(&mut self, msg: Message) -> Vec<Intent> {
         match msg {
-            Message::NavSelect(page) => {
-                self.page = page;
-                vec![Intent::SetWindowTitle(self.window_title())]
-            }
+            Message::NavSelect(page) => self.nav_intents(page),
             Message::ToggleAbout => {
                 if self.context_page == ContextPage::About && self.context_open {
                     self.context_open = false;
@@ -39,7 +53,26 @@ impl AppModel {
             Message::SystemDetected(info) => {
                 self.system_info = info;
                 self.refresh_banner();
-                Vec::new()
+                if self.verify_pending {
+                    self.verify_pending = false;
+                    let text = match self.system_info.integration_status {
+                        IntegrationStatus::Integrated => {
+                            "Integration verified! You're ready to use the toolkit.".into()
+                        }
+                        IntegrationStatus::NotIntegrated => {
+                            "Integration not detected. Please add the import and run 'nixos-rebuild switch'.".into()
+                        }
+                        IntegrationStatus::Unknown => {
+                            "Could not verify integration. Please check manually.".into()
+                        }
+                    };
+                    vec![Intent::ShowToast {
+                        text,
+                        timeout_ms: TOAST_MS,
+                    }]
+                } else {
+                    Vec::new()
+                }
             }
             Message::DismissToast => Vec::new(),
             Message::DismissDialog => {
@@ -75,14 +108,18 @@ impl AppModel {
                 ]
             }
             Message::OpenEtcNixos => vec![Intent::OpenPath(PathBuf::from("/etc/nixos"))],
-            Message::VerifyIntegration => vec![Intent::DetectSystem],
+            Message::VerifyIntegration => {
+                self.verify_pending = true;
+                vec![Intent::DetectSystem]
+            }
 
             Message::SelectProfile(id) => {
-                self.state.select_profile(id);
-                Vec::new()
+                self.state.select_profile(id.clone());
+                vec![Intent::LocalProfilePreview { id }]
             }
             Message::ClearProfile => {
                 self.state.clear_profile();
+                self.profile_preview.clear();
                 Vec::new()
             }
             Message::RefreshProfilePreview => {
@@ -334,35 +371,18 @@ impl AppModel {
                 if self.busy != Busy::Idle {
                     return Vec::new();
                 }
-                let empty = self.state.apply_is_empty();
-                self.dialog = Some(if empty {
-                    Dialog::ConfirmApply {
-                        heading: "Apply Empty Configuration?".into(),
-                        body: "This will remove ALL managed software from the generated NixOS configuration.".into(),
-                        destructive: true,
-                    }
-                } else {
-                    Dialog::ConfirmApply {
-                        heading: "Apply Configuration?".into(),
-                        body: "This will run nixos-rebuild switch.".into(),
-                        destructive: false,
-                    }
-                });
+                self.dialog = Some(self.apply_confirm_dialog());
                 Vec::new()
             }
             Message::ConfirmApply => {
                 self.dialog = None;
-                // Apply session is task 12. Do not spawn pkexec here.
-                Vec::new()
+                self.start_rebuild(RebuildType::Switch, true)
             }
             Message::CancelApply => {
                 self.dialog = None;
                 Vec::new()
             }
-            Message::RequestDryRun => {
-                // Dry-run session is task 12.
-                Vec::new()
-            }
+            Message::RequestDryRun => self.start_rebuild(RebuildType::DryBuild, false),
             Message::ApplyFinished { success, message } => {
                 self.busy = Busy::Idle;
                 if success {
@@ -374,10 +394,7 @@ impl AppModel {
                 }]
             }
 
-            Message::LoadGenerations => {
-                // Helper ListGenerations is task 13.
-                Vec::new()
-            }
+            Message::LoadGenerations => self.load_generations_intents(),
             Message::GenerationsLoaded(list) => {
                 self.current_generation = list.iter().find(|g| g.current).map(|g| g.number);
                 self.generations = list;
@@ -390,9 +407,7 @@ impl AppModel {
             }
             Message::ConfirmRollback { generation, mode } => {
                 self.dialog = None;
-                let _ = (generation, mode);
-                // Rollback session is task 13.
-                Vec::new()
+                self.start_rollback(generation, mode)
             }
             Message::RequestDeleteGeneration { generation } => {
                 self.dialog = Some(Dialog::ConfirmDeleteGeneration { generation });
@@ -400,36 +415,22 @@ impl AppModel {
             }
             Message::ConfirmDeleteGeneration { generation } => {
                 self.dialog = None;
-                let _ = generation;
-                Vec::new()
+                self.start_delete_generation(generation)
             }
-            Message::RollbackToPrevious => Vec::new(),
+            Message::RollbackToPrevious => self.rollback_to_previous(),
 
-            Message::LoadDiskUsage => Vec::new(),
+            Message::LoadDiskUsage => self.load_disk_usage_intents(),
             Message::DiskUsageLoaded(info) => {
                 self.disk_usage = Some(info);
-                Vec::new()
-            }
-            Message::RequestMaintenance { id } => {
-                if let Some(action) = common::actions::default_maintenance_actions()
-                    .into_iter()
-                    .find(|a| a.id == id)
-                {
-                    if let Some(warning) = action.warning {
-                        self.dialog = Some(Dialog::ConfirmMaintenance {
-                            id: action.id,
-                            name: action.name,
-                            warning,
-                        });
-                    }
-                    // No warning: run immediately in task 14.
+                if self.busy == Busy::LoadingDisk {
+                    self.busy = Busy::Idle;
                 }
                 Vec::new()
             }
+            Message::RequestMaintenance { id } => self.request_maintenance(id),
             Message::ConfirmMaintenance { id } => {
                 self.dialog = None;
-                let _ = id;
-                Vec::new()
+                self.start_maintenance(&id)
             }
 
             Message::Helper(event) => self.apply_helper(event),
@@ -445,50 +446,49 @@ impl AppModel {
                     self.state_load_warning =
                         Some("Could not load saved state - using defaults".into());
                 }
-                if error.contains("not available") {
+                if error.contains("not available") || error.contains("not found") {
                     self.helper_missing = true;
                 }
+                if matches!(op, HelperOp::Apply { .. }) {
+                    self.apply_log
+                        .push_str(&format!("Failed to start helper: {error}\n"));
+                    self.apply_log.push_str("\nTo apply changes manually:\n");
+                    self.apply_log
+                        .push_str("1. Run: sudo nixos-rebuild switch\n");
+                }
                 self.refresh_banner();
-                Vec::new()
+                vec![Intent::ShowToast {
+                    text: error,
+                    timeout_ms: TOAST_MS,
+                }]
             }
             HelperEvent::Spawned { op } => {
                 self.helper = HelperStatus::Active { op };
                 Vec::new()
             }
-            HelperEvent::Response { op, response } => {
-                match *response {
-                    HelperResponse::State(ipc) => {
-                        self.state = crate::state::AppState::from_ipc_state(ipc);
-                        self.state_load_warning = None;
-                        self.refresh_banner();
-                    }
-                    HelperResponse::Error { message, .. } => {
-                        if matches!(op, HelperOp::ReadState) {
-                            self.state_load_warning = Some(format!("State read error: {message}"));
-                            self.refresh_banner();
-                        }
-                    }
-                    HelperResponse::ApplyComplete { success, message } => {
-                        return self.apply(Message::ApplyFinished { success, message });
-                    }
-                    HelperResponse::Generations(list) => {
-                        return self.apply(Message::GenerationsLoaded(list));
-                    }
-                    HelperResponse::DiskUsage(info) => {
-                        return self.apply(Message::DiskUsageLoaded(info));
-                    }
-                    HelperResponse::Log { message, .. } => {
-                        self.apply_log.push_str(&message);
-                        self.apply_log.push('\n');
-                    }
-                    _ => {}
+            HelperEvent::Response { op, response } => self.apply_helper_response(op, *response),
+            HelperEvent::Closed { op, error } => {
+                self.helper = HelperStatus::Idle;
+                let was_busy = self.busy;
+                self.busy = Busy::Idle;
+                if matches!(op, HelperOp::ReadState) {
+                    self.state_load_warning = Some("State read timeout".into());
+                    self.refresh_banner();
+                    return Vec::new();
                 }
-                if !matches!(op, HelperOp::Apply { .. }) {
-                    self.helper = HelperStatus::Idle;
+                let detail = error.unwrap_or_else(|| "helper stdout closed".into());
+                match op {
+                    HelperOp::Apply { .. } if was_busy != Busy::Idle => {
+                        self.apply_log.push_str(&format!("\n{detail}\n"));
+                        vec![Intent::ShowToast {
+                            text: detail,
+                            timeout_ms: TOAST_MS,
+                        }]
+                    }
+                    _ => Vec::new(),
                 }
-                Vec::new()
             }
-            HelperEvent::Closed { op, .. } | HelperEvent::Timeout { op } => {
+            HelperEvent::Timeout { op } => {
                 self.helper = HelperStatus::Idle;
                 self.busy = Busy::Idle;
                 if matches!(op, HelperOp::ReadState) {
@@ -498,6 +498,368 @@ impl AppModel {
                 Vec::new()
             }
         }
+    }
+
+    fn apply_helper_response(&mut self, op: HelperOp, response: HelperResponse) -> Vec<Intent> {
+        match response {
+            HelperResponse::State(ipc) => {
+                self.state = crate::state::AppState::from_ipc_state(ipc);
+                self.state_load_warning = None;
+                self.helper = HelperStatus::Idle;
+                if self.busy == Busy::LoadingState {
+                    self.busy = Busy::Idle;
+                }
+                self.refresh_banner();
+                Vec::new()
+            }
+            HelperResponse::Error { message, details } => {
+                self.helper = HelperStatus::Idle;
+                if !matches!(op, HelperOp::Apply { .. }) {
+                    self.busy = Busy::Idle;
+                }
+                let detail = details
+                    .as_deref()
+                    .map(|d| format!("\nDetails: {d}"))
+                    .unwrap_or_default();
+                match &op {
+                    HelperOp::ReadState => {
+                        self.state_load_warning = Some(format!("State read error: {message}"));
+                        self.refresh_banner();
+                        Vec::new()
+                    }
+                    HelperOp::Apply { .. } => {
+                        self.busy = Busy::Idle;
+                        self.apply_log
+                            .push_str(&format!("\nError: {message}{detail}\n"));
+                        vec![Intent::ShowToast {
+                            text: message,
+                            timeout_ms: TOAST_MS,
+                        }]
+                    }
+                    HelperOp::RunMaintenance { .. } => {
+                        self.maintenance_log
+                            .push_str(&format!("\nError: {message}{detail}\n"));
+                        vec![Intent::ShowToast {
+                            text: message,
+                            timeout_ms: TOAST_MS,
+                        }]
+                    }
+                    HelperOp::Rollback { .. }
+                    | HelperOp::DeleteGenerations { .. }
+                    | HelperOp::ListGenerations => {
+                        self.generations_log
+                            .push_str(&format!("\nError: {message}{detail}\n"));
+                        vec![Intent::ShowToast {
+                            text: message,
+                            timeout_ms: TOAST_MS,
+                        }]
+                    }
+                    _ => vec![Intent::ShowToast {
+                        text: message,
+                        timeout_ms: TOAST_MS,
+                    }],
+                }
+            }
+            HelperResponse::ApplyComplete { success, message } => {
+                self.helper = HelperStatus::Idle;
+                self.apply(Message::ApplyFinished { success, message })
+            }
+            HelperResponse::Generations(list) => {
+                self.helper = HelperStatus::Idle;
+                self.apply(Message::GenerationsLoaded(list))
+            }
+            HelperResponse::DiskUsage(info) => {
+                self.helper = HelperStatus::Idle;
+                if self.busy == Busy::LoadingDisk {
+                    self.busy = Busy::Idle;
+                }
+                self.apply(Message::DiskUsageLoaded(info))
+            }
+            HelperResponse::Log { message, .. } => {
+                match op {
+                    HelperOp::RunMaintenance { .. } => {
+                        self.maintenance_log.push_str(&message);
+                        self.maintenance_log.push('\n');
+                    }
+                    HelperOp::Rollback { .. }
+                    | HelperOp::DeleteGenerations { .. }
+                    | HelperOp::ListGenerations => {
+                        self.generations_log.push_str(&message);
+                        self.generations_log.push('\n');
+                    }
+                    _ => {
+                        self.apply_log.push_str(&message);
+                        self.apply_log.push('\n');
+                    }
+                }
+                Vec::new()
+            }
+            HelperResponse::MaintenanceOutput {
+                stdout,
+                stderr,
+                success,
+            } => {
+                self.helper = HelperStatus::Idle;
+                self.busy = Busy::Idle;
+                if !stdout.is_empty() {
+                    self.maintenance_log.push_str(&stdout);
+                    if !stdout.ends_with('\n') {
+                        self.maintenance_log.push('\n');
+                    }
+                }
+                if !stderr.is_empty() {
+                    self.maintenance_log.push_str("\nStderr:\n");
+                    self.maintenance_log.push_str(&stderr);
+                    if !stderr.ends_with('\n') {
+                        self.maintenance_log.push('\n');
+                    }
+                }
+                let text = if success {
+                    "Maintenance completed".into()
+                } else {
+                    "Maintenance failed".into()
+                };
+                vec![Intent::ShowToast {
+                    text,
+                    timeout_ms: TOAST_MS,
+                }]
+            }
+            HelperResponse::Ok => {
+                self.helper = HelperStatus::Idle;
+                match op {
+                    HelperOp::Rollback { generation, mode } => {
+                        self.generations_log.push_str("Switch successful!\n");
+                        if mode == RollbackMode::SetForNextBoot {
+                            self.generations_log.push_str(
+                                "The selected generation will be activated on next boot.\n",
+                            );
+                        }
+                        let _ = generation;
+                        self.busy = Busy::Idle;
+                        self.load_generations_intents()
+                    }
+                    HelperOp::DeleteGenerations { generations } => {
+                        if let Some(number) = generations.first() {
+                            self.generations_log
+                                .push_str(&format!("Generation {number} deleted.\n"));
+                        } else {
+                            self.generations_log.push_str("Generation deleted.\n");
+                        }
+                        self.busy = Busy::Idle;
+                        self.load_generations_intents()
+                    }
+                    HelperOp::Apply { .. } => {
+                        // EnsureDirectories Ok is swallowed by the session; keep applying.
+                        self.helper = HelperStatus::Active { op };
+                        Vec::new()
+                    }
+                    _ => {
+                        if self.busy != Busy::Applying && self.busy != Busy::DryRun {
+                            self.busy = Busy::Idle;
+                        }
+                        Vec::new()
+                    }
+                }
+            }
+            _ => {
+                if !matches!(op, HelperOp::Apply { .. }) {
+                    self.helper = HelperStatus::Idle;
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    fn nav_intents(&mut self, page: Page) -> Vec<Intent> {
+        self.page = page;
+        let mut intents = vec![Intent::SetWindowTitle(self.window_title())];
+        match page {
+            Page::Apply => intents.push(Intent::LocalPreview),
+            Page::Generations => intents.extend(self.load_generations_intents()),
+            Page::Maintenance => intents.extend(self.load_disk_usage_intents()),
+            _ => {}
+        }
+        intents
+    }
+
+    fn apply_confirm_dialog(&self) -> Dialog {
+        let no_profile = self.state.selected_profile.is_none();
+        let no_bundles = self.state.enabled_bundles.is_empty();
+        let no_packages = self.state.custom_packages.is_empty();
+        if self.state.apply_is_empty() {
+            Dialog::ConfirmApply {
+                heading: APPLY_EMPTY_HEADING.into(),
+                body: APPLY_EMPTY_BODY.into(),
+                destructive: true,
+            }
+        } else if no_profile && no_bundles && !no_packages {
+            Dialog::ConfirmApply {
+                heading: APPLY_PACKAGES_HEADING.into(),
+                body: APPLY_PACKAGES_BODY.into(),
+                destructive: false,
+            }
+        } else {
+            Dialog::ConfirmApply {
+                heading: APPLY_NORMAL_HEADING.into(),
+                body: APPLY_NORMAL_BODY.into(),
+                destructive: false,
+            }
+        }
+    }
+
+    fn start_rebuild(&mut self, rebuild: RebuildType, then_write_state: bool) -> Vec<Intent> {
+        if self.busy != Busy::Idle {
+            return Vec::new();
+        }
+        self.busy = if matches!(rebuild, RebuildType::DryBuild) {
+            Busy::DryRun
+        } else {
+            Busy::Applying
+        };
+        self.apply_log = if matches!(rebuild, RebuildType::DryBuild) {
+            "Starting nixos-rebuild dry-build...\n\n".into()
+        } else {
+            "Starting nixos-rebuild switch...\n\n".into()
+        };
+        let save = then_write_state.then(|| Box::new(self.state.to_ipc_state()));
+        let request = self.state.to_apply_request(rebuild);
+        vec![Intent::SpawnHelper {
+            op: HelperOp::Apply {
+                rebuild,
+                then_write_state,
+                save,
+            },
+            request,
+        }]
+    }
+
+    fn load_generations_intents(&mut self) -> Vec<Intent> {
+        if self.busy != Busy::Idle {
+            return Vec::new();
+        }
+        self.busy = Busy::LoadingGenerations;
+        self.generations_log.push_str("Loading generations...\n");
+        vec![Intent::SpawnHelper {
+            op: HelperOp::ListGenerations,
+            request: HelperRequest::ListGenerations,
+        }]
+    }
+
+    fn load_disk_usage_intents(&mut self) -> Vec<Intent> {
+        if self.busy != Busy::Idle {
+            return Vec::new();
+        }
+        self.busy = Busy::LoadingDisk;
+        vec![Intent::SpawnHelper {
+            op: HelperOp::GetDiskUsage,
+            request: HelperRequest::GetDiskUsage,
+        }]
+    }
+
+    fn start_rollback(&mut self, generation: u32, mode: RollbackMode) -> Vec<Intent> {
+        if self.busy != Busy::Idle {
+            return Vec::new();
+        }
+        let activate = match mode {
+            RollbackMode::SwitchNow => "switch",
+            RollbackMode::SetForNextBoot => "boot",
+        };
+        self.busy = Busy::RollingBack;
+        self.generations_log
+            .push_str(&format!("Switching to generation {generation}...\n"));
+        vec![Intent::SpawnHelper {
+            op: HelperOp::Rollback { generation, mode },
+            request: HelperRequest::RollbackGeneration {
+                generation,
+                activate: activate.to_string(),
+            },
+        }]
+    }
+
+    fn start_delete_generation(&mut self, generation: u32) -> Vec<Intent> {
+        if self.busy != Busy::Idle {
+            return Vec::new();
+        }
+        self.busy = Busy::DeletingGeneration;
+        self.generations_log
+            .push_str(&format!("Deleting generation {generation}...\n"));
+        vec![Intent::SpawnHelper {
+            op: HelperOp::DeleteGenerations {
+                generations: vec![generation],
+            },
+            request: HelperRequest::DeleteGenerations {
+                generations: vec![generation],
+            },
+        }]
+    }
+
+    fn rollback_to_previous(&mut self) -> Vec<Intent> {
+        if self.busy != Busy::Idle {
+            return Vec::new();
+        }
+        match self.current_generation {
+            Some(current) if current > 1 => self.apply(Message::RequestRollback {
+                generation: current - 1,
+            }),
+            Some(_) => {
+                self.generations_log
+                    .push_str("Cannot rollback: already at the first generation.\n");
+                Vec::new()
+            }
+            None => {
+                self.generations_log
+                    .push_str("Cannot rollback: current generation unknown.\n");
+                Vec::new()
+            }
+        }
+    }
+
+    fn request_maintenance(&mut self, id: String) -> Vec<Intent> {
+        let Some(action) = common::actions::default_maintenance_actions()
+            .into_iter()
+            .find(|action| action.id == id)
+        else {
+            return vec![Intent::ShowToast {
+                text: format!("Unknown maintenance action: {id}"),
+                timeout_ms: TOAST_MS,
+            }];
+        };
+        if let Some(warning) = action.warning {
+            self.dialog = Some(Dialog::ConfirmMaintenance {
+                id: action.id,
+                name: action.name,
+                warning,
+            });
+            Vec::new()
+        } else {
+            self.start_maintenance(&action.id)
+        }
+    }
+
+    fn start_maintenance(&mut self, id: &str) -> Vec<Intent> {
+        if self.busy != Busy::Idle {
+            return Vec::new();
+        }
+        let Some(action) = common::actions::default_maintenance_actions()
+            .into_iter()
+            .find(|action| action.id == id)
+        else {
+            return vec![Intent::ShowToast {
+                text: format!("Unknown maintenance action: {id}"),
+                timeout_ms: TOAST_MS,
+            }];
+        };
+        self.busy = Busy::Maintenance;
+        self.maintenance_log
+            .push_str(&format!("$ {}\n\n", action.command));
+        vec![Intent::SpawnHelper {
+            op: HelperOp::RunMaintenance {
+                command: action.command.clone(),
+            },
+            request: HelperRequest::RunMaintenance {
+                command: action.command,
+            },
+        }]
     }
 
     pub(crate) fn refresh_banner(&mut self) {
@@ -552,14 +914,20 @@ mod tests {
     use crate::config::ColorSchemePreference;
     use crate::message::{Dialog, HelperOp, Page, RollbackMode};
     use common::ipc::{
-        AppState as IpcAppState, DiskUsageInfo, Generation, HardwareConfig, LogLevel,
-        NetworkConfig, RebuildType, ServicesConfig,
+        AppState as IpcAppState, DiskUsageInfo, Generation, HardwareConfig, HelperRequest,
+        LogLevel, NetworkConfig, RebuildType, ServicesConfig,
     };
     use common::SystemInfo;
     use cosmic::Application;
 
     fn test_app() -> AppModel {
-        AppModel::init(cosmic::Core::default(), Flags::for_tests()).0
+        AppModel::test_model()
+    }
+
+    fn spawn_helper(intents: &[Intent]) -> Option<&Intent> {
+        intents
+            .iter()
+            .find(|intent| matches!(intent, Intent::SpawnHelper { .. }))
     }
 
     fn dummy_generation() -> Generation {
@@ -938,7 +1306,7 @@ mod tests {
     }
 
     #[test]
-    fn request_apply_packages_only_shares_non_empty_dialog() {
+    fn request_apply_packages_only_uses_packages_copy() {
         let mut app = test_app();
         app.state.add_custom_package("htop");
         app.apply(Message::RequestApply);
@@ -946,9 +1314,12 @@ mod tests {
             Some(Dialog::ConfirmApply {
                 destructive: false,
                 heading,
-                ..
-            }) => assert_eq!(heading, "Apply Configuration?"),
-            other => panic!("expected non-empty ConfirmApply, got {other:?}"),
+                body,
+            }) => {
+                assert_eq!(heading, APPLY_PACKAGES_HEADING);
+                assert!(body.contains("only your custom packages"));
+            }
+            other => panic!("expected packages-only ConfirmApply, got {other:?}"),
         }
     }
 
@@ -961,20 +1332,264 @@ mod tests {
     }
 
     #[test]
-    fn confirm_and_cancel_apply_dismiss_dialog_without_spawn() {
+    fn confirm_apply_spawns_switch_with_write_state() {
         let mut app = test_app();
+        app.state.select_profile("gnome");
         app.apply(Message::RequestApply);
-        assert!(app.dialog.is_some());
         let intents = app.apply(Message::ConfirmApply);
         assert!(app.dialog.is_none());
-        assert!(!intents
-            .iter()
-            .any(|intent| matches!(intent, Intent::SpawnHelper { .. })));
+        assert_eq!(app.busy, Busy::Applying);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper { op, request }) => {
+                match op {
+                    HelperOp::Apply {
+                        rebuild: RebuildType::Switch,
+                        then_write_state: true,
+                        save: Some(save),
+                    } => {
+                        assert_eq!(save.selected_profile.as_deref(), Some("gnome"));
+                    }
+                    other => panic!("expected Apply Switch write-state, got {other:?}"),
+                }
+                assert!(matches!(
+                    request,
+                    HelperRequest::Apply {
+                        rebuild_type: RebuildType::Switch,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected SpawnHelper, got {other:?}"),
+        }
+    }
 
+    #[test]
+    fn request_dry_run_spawns_dry_build_without_write_state() {
+        let mut app = test_app();
+        let intents = app.apply(Message::RequestDryRun);
+        assert!(app.dialog.is_none());
+        assert_eq!(app.busy, Busy::DryRun);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper { op, request }) => {
+                match op {
+                    HelperOp::Apply {
+                        rebuild: RebuildType::DryBuild,
+                        then_write_state: false,
+                        save,
+                    } => assert!(save.is_none()),
+                    other => panic!("expected DryBuild, got {other:?}"),
+                }
+                assert!(matches!(
+                    request,
+                    HelperRequest::Apply {
+                        rebuild_type: RebuildType::DryBuild,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected SpawnHelper, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancel_apply_dismisses_dialog_without_spawn() {
+        let mut app = test_app();
         app.apply(Message::RequestApply);
         let intents = app.apply(Message::CancelApply);
         assert!(app.dialog.is_none());
         assert!(intents.is_empty());
+    }
+
+    #[test]
+    fn confirm_apply_ignored_when_busy() {
+        let mut app = test_app();
+        app.busy = Busy::Applying;
+        let intents = app.apply(Message::ConfirmApply);
+        assert!(spawn_helper(&intents).is_none());
+    }
+
+    #[test]
+    fn select_profile_requests_local_preview() {
+        let mut app = test_app();
+        let intents = app.apply(Message::SelectProfile("kde".into()));
+        assert!(intents.iter().any(|intent| matches!(
+            intent,
+            Intent::LocalProfilePreview { id } if id == "kde"
+        )));
+    }
+
+    #[test]
+    fn nav_select_apply_refreshes_preview() {
+        let mut app = test_app();
+        let intents = app.apply(Message::NavSelect(Page::Apply));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::LocalPreview)));
+    }
+
+    #[test]
+    fn nav_during_apply_does_not_spawn_or_cancel() {
+        let mut app = test_app();
+        app.busy = Busy::Applying;
+        let intents = app.apply(Message::NavSelect(Page::Generations));
+        assert_eq!(app.page, Page::Generations);
+        assert_eq!(app.busy, Busy::Applying);
+        assert!(spawn_helper(&intents).is_none());
+        assert!(!intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::CloseSession)));
+    }
+
+    #[test]
+    fn verify_integration_toasts_after_detect() {
+        let mut app = test_app();
+        let intents = app.apply(Message::VerifyIntegration);
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::DetectSystem)));
+        let info = common::SystemInfo {
+            integration_status: IntegrationStatus::Integrated,
+            ..common::SystemInfo::default()
+        };
+        let intents = app.apply(Message::SystemDetected(info));
+        assert!(intents.iter().any(|intent| matches!(
+            intent,
+            Intent::ShowToast { text, .. } if text.contains("Integration verified")
+        )));
+    }
+
+    #[test]
+    fn spawn_failed_apply_toasts_and_does_not_hang() {
+        let mut app = test_app();
+        app.busy = Busy::Applying;
+        let intents = app.apply(Message::Helper(HelperEvent::SpawnFailed {
+            op: HelperOp::Apply {
+                rebuild: RebuildType::Switch,
+                then_write_state: true,
+                save: None,
+            },
+            error: "nixos-toolkit-helper is not available".into(),
+        }));
+        assert_eq!(app.busy, Busy::Idle);
+        assert!(app.helper_missing);
+        assert!(app.apply_log.contains("Failed to start helper"));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::ShowToast { .. })));
+    }
+
+    #[test]
+    fn load_generations_spawns_list() {
+        let mut app = test_app();
+        let intents = app.apply(Message::LoadGenerations);
+        assert_eq!(app.busy, Busy::LoadingGenerations);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper {
+                op: HelperOp::ListGenerations,
+                request: HelperRequest::ListGenerations,
+            }) => {}
+            other => panic!("expected ListGenerations, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirm_rollback_switch_vs_boot_requests_differ() {
+        let mut switch_app = test_app();
+        let switch = switch_app.apply(Message::ConfirmRollback {
+            generation: 3,
+            mode: RollbackMode::SwitchNow,
+        });
+        let mut boot_app = test_app();
+        let boot = boot_app.apply(Message::ConfirmRollback {
+            generation: 3,
+            mode: RollbackMode::SetForNextBoot,
+        });
+        let switch_activate = match spawn_helper(&switch) {
+            Some(Intent::SpawnHelper {
+                request: HelperRequest::RollbackGeneration { activate, .. },
+                ..
+            }) => activate.clone(),
+            other => panic!("expected rollback spawn, got {other:?}"),
+        };
+        let boot_activate = match spawn_helper(&boot) {
+            Some(Intent::SpawnHelper {
+                request: HelperRequest::RollbackGeneration { activate, .. },
+                ..
+            }) => activate.clone(),
+            other => panic!("expected rollback spawn, got {other:?}"),
+        };
+        assert_eq!(switch_activate, "switch");
+        assert_eq!(boot_activate, "boot");
+        assert_ne!(switch_activate, boot_activate);
+    }
+
+    #[test]
+    fn rollback_to_previous_opens_dialog_for_current_minus_one() {
+        let mut app = test_app();
+        app.current_generation = Some(5);
+        app.apply(Message::RollbackToPrevious);
+        match &app.dialog {
+            Some(Dialog::ConfirmRollback { generation: 4 }) => {}
+            other => panic!("expected ConfirmRollback 4, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_maintenance_without_warning_spawns_allowlist_command() {
+        let mut app = test_app();
+        let intents = app.apply(Message::RequestMaintenance {
+            id: "gc_unreachable".into(),
+        });
+        assert!(app.dialog.is_none());
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper {
+                request: HelperRequest::RunMaintenance { command },
+                ..
+            }) => assert_eq!(command, "nix-collect-garbage"),
+            other => panic!("expected RunMaintenance, got {other:?}"),
+        }
+        assert!(app.maintenance_log.contains("$ nix-collect-garbage"));
+    }
+
+    #[test]
+    fn request_maintenance_with_warning_opens_dialog() {
+        let mut app = test_app();
+        let intents = app.apply(Message::RequestMaintenance {
+            id: "gc_all".into(),
+        });
+        assert!(intents.is_empty());
+        match &app.dialog {
+            Some(Dialog::ConfirmMaintenance { id, .. }) => assert_eq!(id, "gc_all"),
+            other => panic!("expected ConfirmMaintenance, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirm_maintenance_sends_exact_allowlist_string() {
+        let mut app = test_app();
+        let intents = app.apply(Message::ConfirmMaintenance {
+            id: "gc_all".into(),
+        });
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper {
+                request: HelperRequest::RunMaintenance { command },
+                ..
+            }) => assert_eq!(command, "nix-collect-garbage -d"),
+            other => panic!("expected RunMaintenance, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_disk_usage_spawns_get_disk_usage() {
+        let mut app = test_app();
+        let intents = app.apply(Message::LoadDiskUsage);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper {
+                op: HelperOp::GetDiskUsage,
+                request: HelperRequest::GetDiskUsage,
+            }) => {}
+            other => panic!("expected GetDiskUsage, got {other:?}"),
+        }
     }
 
     #[test]
@@ -996,6 +1611,7 @@ mod tests {
             op: HelperOp::Apply {
                 rebuild: RebuildType::Switch,
                 then_write_state: true,
+                save: None,
             },
             response: Box::new(HelperResponse::Log {
                 level: LogLevel::Info,
@@ -1009,6 +1625,7 @@ mod tests {
             op: HelperOp::Apply {
                 rebuild: RebuildType::Switch,
                 then_write_state: true,
+                save: None,
             },
             response: Box::new(HelperResponse::ApplyComplete {
                 success: true,
@@ -1019,6 +1636,28 @@ mod tests {
         assert!(intents.iter().any(|intent| matches!(
             intent,
             Intent::ShowToast { text, .. } if text == "done"
+        )));
+    }
+
+    #[test]
+    fn maintenance_output_appends_log() {
+        let mut app = test_app();
+        app.busy = Busy::Maintenance;
+        let intents = app.apply(Message::Helper(HelperEvent::Response {
+            op: HelperOp::RunMaintenance {
+                command: "nix-collect-garbage".into(),
+            },
+            response: Box::new(HelperResponse::MaintenanceOutput {
+                stdout: "freed 1M".into(),
+                stderr: String::new(),
+                success: true,
+            }),
+        }));
+        assert!(app.maintenance_log.contains("freed 1M"));
+        assert_eq!(app.busy, Busy::Idle);
+        assert!(intents.iter().any(|intent| matches!(
+            intent,
+            Intent::ShowToast { text, .. } if text == "Maintenance completed"
         )));
     }
 }

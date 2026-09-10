@@ -4,6 +4,7 @@ use crate::actions::{BundleDef, ProfileDef};
 use crate::config::paths;
 use crate::ipc::{HardwareConfig, NetworkConfig, ServicesConfig};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use thiserror::Error;
 
 /// Errors that can occur during Nix generation
@@ -690,23 +691,39 @@ pub fn generate_services_nix(services: &[&str]) -> String {
     )
 }
 
-/// Read a template file from the templates directory
-pub fn read_template(template_path: &str) -> Result<String, NixGenError> {
-    let templates_dir = paths::templates_dir();
+/// Read a template file from an explicit templates root.
+pub fn read_template_from(
+    templates_dir: &Path,
+    template_path: &str,
+) -> Result<String, NixGenError> {
     let full_path = templates_dir.join(template_path);
 
     std::fs::read_to_string(&full_path)
         .map_err(|e| NixGenError::ReadError(format!("{}: {}", full_path.display(), e)))
 }
 
+/// Read a template file from the templates directory
+pub fn read_template(template_path: &str) -> Result<String, NixGenError> {
+    read_template_from(&paths::templates_dir(), template_path)
+}
+
+/// Check if a template exists under an explicit templates root.
+pub fn template_exists_in(templates_dir: &Path, template_path: &str) -> bool {
+    templates_dir.join(template_path).exists()
+}
+
 /// Check if a template exists
 pub fn template_exists(template_path: &str) -> bool {
-    let templates_dir = paths::templates_dir();
-    templates_dir.join(template_path).exists()
+    template_exists_in(&paths::templates_dir(), template_path)
 }
 
 /// Generate a preview of what will be written with full options
 pub fn generate_preview_full(options: &NixGenOptions) -> String {
+    generate_preview_full_from(options, &paths::templates_dir())
+}
+
+/// [`generate_preview_full`] using `templates_dir` instead of the process env.
+pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path) -> String {
     let mut preview = String::new();
 
     preview.push_str("=== Files to be written ===\n\n");
@@ -813,8 +830,8 @@ pub fn generate_preview_full(options: &NixGenOptions) -> String {
 
     // Profile template (if selected and exists)
     if let Some(p) = options.profile {
-        if template_exists(&p.template) {
-            if let Ok(content) = read_template(&p.template) {
+        if template_exists_in(templates_dir, &p.template) {
+            if let Ok(content) = read_template_from(templates_dir, &p.template) {
                 preview.push_str(&format!(
                     "\n--- /etc/nixos/nixos-toolkit/profiles/{}.nix ---\n",
                     p.id
@@ -826,8 +843,8 @@ pub fn generate_preview_full(options: &NixGenOptions) -> String {
 
     // Bundle templates
     for bundle in &options.bundles {
-        if template_exists(&bundle.template) {
-            if let Ok(content) = read_template(&bundle.template) {
+        if template_exists_in(templates_dir, &bundle.template) {
+            if let Ok(content) = read_template_from(templates_dir, &bundle.template) {
                 preview.push_str(&format!(
                     "\n--- /etc/nixos/nixos-toolkit/bundles/{}.nix ---\n",
                     bundle.id
