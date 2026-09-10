@@ -111,6 +111,9 @@ pub mod paths {
     /// Services configuration snippet file
     pub const SERVICES_NIX: &str = "/etc/nixos/nixos-toolkit/state/services.nix";
 
+    /// Allow-unfree snippet imported when generated config needs non-free packages
+    pub const UNFREE_NIX: &str = "/etc/nixos/nixos-toolkit/state/unfree.nix";
+
     /// Get the managed directory path
     pub fn managed_dir() -> PathBuf {
         PathBuf::from(MANAGED_DIR)

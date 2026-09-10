@@ -200,10 +200,13 @@ pub struct ProfileDef {
 /// Definition of a package within a bundle
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageDef {
-    /// Nixpkgs package name (e.g., "vscode")
+    /// Catalog / GUI toggle id (e.g., "bitwarden", "_1password-gui")
     pub id: String,
     /// Human-readable display name (e.g., "Visual Studio Code")
     pub display_name: String,
+    /// nixpkgs attribute path used in generated Nix. Defaults to [`id`](Self::id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nix_attr: Option<String>,
 }
 
 impl PackageDef {
@@ -211,7 +214,24 @@ impl PackageDef {
         Self {
             id: id.into(),
             display_name: display_name.into(),
+            nix_attr: None,
         }
+    }
+
+    /// Override the nixpkgs attribute interpolated into generated Nix.
+    #[must_use]
+    pub fn with_nix_attr(mut self, nix_attr: impl Into<String>) -> Self {
+        self.nix_attr = Some(nix_attr.into());
+        self
+    }
+
+    /// Attribute path to emit in Nix (`nix_attr` if set, otherwise `id`).
+    #[must_use]
+    pub fn resolved_nix_attr(&self) -> &str {
+        self.nix_attr
+            .as_deref()
+            .filter(|attr| !attr.is_empty())
+            .unwrap_or(&self.id)
     }
 }
 
@@ -532,7 +552,7 @@ pub fn default_bundles() -> Vec<BundleDef> {
             template: "bundles/security.nix".into(),
             packages: vec![
                 PackageDef::new("keepassxc", "KeePassXC"),
-                PackageDef::new("bitwarden", "Bitwarden"),
+                PackageDef::new("bitwarden", "Bitwarden").with_nix_attr("bitwarden-desktop"),
                 PackageDef::new("_1password-gui", "1Password"),
                 PackageDef::new("veracrypt", "VeraCrypt"),
                 PackageDef::new("gnupg", "GnuPG"),
@@ -587,7 +607,7 @@ pub fn default_bundles() -> Vec<BundleDef> {
             template: "bundles/science.nix".into(),
             packages: vec![
                 PackageDef::new("octave", "GNU Octave"),
-                PackageDef::new("julia", "Julia"),
+                PackageDef::new("julia", "Julia").with_nix_attr("julia-bin"),
                 PackageDef::new("gnuplot", "Gnuplot"),
             ],
             arm_compat: ArmCompat::Partial,

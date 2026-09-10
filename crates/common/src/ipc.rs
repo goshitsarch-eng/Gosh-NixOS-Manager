@@ -239,7 +239,7 @@ impl LogLevel {
 }
 
 /// Network configuration for firewall, SSH, and VPN
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkConfig {
     /// Enable firewall
     #[serde(default = "default_true")]
@@ -268,6 +268,12 @@ pub struct NetworkConfig {
     /// Enable Tailscale VPN
     #[serde(default)]
     pub tailscale_enabled: bool,
+    /// Enable WireGuard
+    #[serde(default)]
+    pub wireguard_enabled: bool,
+    /// WireGuard listen port (default 51820)
+    #[serde(default = "default_wireguard_port")]
+    pub wireguard_listen_port: u16,
 }
 
 fn default_true() -> bool {
@@ -282,8 +288,30 @@ fn default_root_login() -> String {
     "no".to_string()
 }
 
+fn default_wireguard_port() -> u16 {
+    51820
+}
+
 fn default_switch() -> String {
     "switch".to_string()
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            firewall_enabled: default_true(),
+            allowed_tcp_ports: Vec::new(),
+            allowed_udp_ports: Vec::new(),
+            ssh_enabled: false,
+            ssh_port: default_ssh_port(),
+            ssh_password_auth: false,
+            ssh_root_login: default_root_login(),
+            fail2ban_enabled: false,
+            tailscale_enabled: false,
+            wireguard_enabled: false,
+            wireguard_listen_port: default_wireguard_port(),
+        }
+    }
 }
 
 impl NetworkConfig {
@@ -293,7 +321,12 @@ impl NetworkConfig {
             || !self.allowed_udp_ports.is_empty()
             || self.ssh_enabled
             || self.tailscale_enabled
-            || !self.firewall_enabled // Disabled is non-default
+            || !self.firewall_enabled
+            || self.fail2ban_enabled
+            || self.ssh_port != default_ssh_port()
+            || self.ssh_password_auth
+            || self.ssh_root_login != default_root_login()
+            || self.wireguard_enabled
     }
 }
 
@@ -704,5 +737,47 @@ mod tests {
             }
             other => panic!("expected RollbackGeneration, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn network_has_settings_tracks_fail2ban_ssh_options_and_wireguard() {
+        assert!(!NetworkConfig::default().has_settings());
+
+        let empty: NetworkConfig =
+            serde_json::from_str("{}").expect("empty NetworkConfig JSON should deserialize");
+        assert!(!empty.has_settings());
+        assert_eq!(empty.wireguard_listen_port, 51820);
+        assert!(!empty.wireguard_enabled);
+
+        assert!(NetworkConfig {
+            fail2ban_enabled: true,
+            ..NetworkConfig::default()
+        }
+        .has_settings());
+        assert!(NetworkConfig {
+            ssh_port: 2222,
+            ..NetworkConfig::default()
+        }
+        .has_settings());
+        assert!(NetworkConfig {
+            ssh_password_auth: true,
+            ..NetworkConfig::default()
+        }
+        .has_settings());
+        assert!(NetworkConfig {
+            ssh_root_login: "yes".into(),
+            ..NetworkConfig::default()
+        }
+        .has_settings());
+        assert!(NetworkConfig {
+            wireguard_enabled: true,
+            ..NetworkConfig::default()
+        }
+        .has_settings());
+        assert!(!NetworkConfig {
+            wireguard_listen_port: 51821,
+            ..NetworkConfig::default()
+        }
+        .has_settings());
     }
 }

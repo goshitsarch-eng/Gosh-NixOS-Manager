@@ -1,9 +1,10 @@
 //! Nix code generation utilities
 
-use crate::actions::{BundleDef, ProfileDef};
+use crate::actions::{default_bundles, BundleDef, ProfileDef};
 use crate::config::paths;
 use crate::ipc::{HardwareConfig, NetworkConfig, ServicesConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
@@ -50,10 +51,30 @@ pub fn is_nix_attrpath(name: &str) -> bool {
     }
     let mut chars = name.chars();
     match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() => {}
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && !name.contains("..")
+}
+
+/// Look up a catalog package id and return the nixpkgs attribute to interpolate.
+/// Unknown ids are returned unchanged.
+#[must_use]
+pub fn resolve_nix_attr(pkg_id: &str) -> String {
+    for bundle in default_bundles() {
+        if let Some(pkg) = bundle.packages.iter().find(|p| p.id == pkg_id) {
+            return pkg.resolved_nix_attr().to_string();
+        }
+    }
+    pkg_id.to_string()
+}
+
+fn nix_attrs_for_package_ids(package_ids: &[String]) -> Vec<String> {
+    package_ids
+        .iter()
+        .map(|id| resolve_nix_attr(id))
+        .filter(|attr| is_nix_attrpath(attr))
+        .collect()
 }
 
 fn nix_permit_root_login(value: &str) -> &'static str {
@@ -80,7 +101,7 @@ pub struct NixGenOptions<'a> {
     pub bundles: Vec<&'a BundleDef>,
     /// Per-bundle package selections: bundle_id -> list of enabled package names.
     /// If a bundle is not in this map, all its packages are included.
-    pub bundle_packages: std::collections::HashMap<String, Vec<String>>,
+    pub bundle_packages: HashMap<String, Vec<String>>,
     pub hostname: Option<&'a str>,
     pub dns_servers: Vec<String>,
     pub user_groups: Vec<String>,
@@ -160,6 +181,10 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
     // Add services config if services are configured
     if options.services_config.has_settings() {
         imports.push("    ./services.nix".to_string());
+    }
+
+    if needs_allow_unfree(options) {
+        imports.push("    ./unfree.nix".to_string());
     }
 
     // Build the imports section
@@ -258,12 +283,12 @@ pub fn generate_hostname_nix(hostname: &str) -> String {
     format!(
         r#"# NixOS Toolkit - Hostname Configuration
 # DO NOT EDIT MANUALLY
-# This setting takes precedence - remove networking.hostName from configuration.nix
+# Uses lib.mkDefault so explicit settings in configuration.nix take precedence
 
 {{ config, lib, pkgs, ... }}:
 
 {{
-  networking.hostName = lib.mkForce {};
+  networking.hostName = lib.mkDefault {};
 }}
 "#,
         nix_escape_string(hostname)
@@ -334,9 +359,8 @@ pub fn generate_custom_packages_nix(packages: &[String]) -> String {
         return String::new();
     }
 
-    let packages_str = packages
-        .iter()
-        .filter(|p| is_nix_attrpath(p))
+    let packages_str = nix_attrs_for_package_ids(packages)
+        .into_iter()
         .map(|p| format!("    {p}"))
         .collect::<Vec<_>>()
         .join("\n");
@@ -441,6 +465,79 @@ pub fn generate_ssh_nix(
     config
 }
 
+/// Generate the combined network.nix file (firewall, SSH, Fail2Ban, VPN).
+pub fn generate_network_nix(config: &NetworkConfig) -> String {
+    let mut udp_ports = config.allowed_udp_ports.clone();
+    if config.wireguard_enabled {
+        let wg_port = if config.wireguard_listen_port == 0 {
+            51820
+        } else {
+            config.wireguard_listen_port
+        };
+        if !udp_ports.contains(&wg_port) {
+            udp_ports.push(wg_port);
+        }
+    }
+
+    let tcp_str = config
+        .allowed_tcp_ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let udp_str = udp_ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut content = String::from(
+        "# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n",
+    );
+
+    content.push_str("  # Firewall\n");
+    content.push_str(&format!(
+        "  networking.firewall = {{\n    enable = {};\n    allowedTCPPorts = [ {} ];\n    allowedUDPPorts = [ {} ];\n  }};\n",
+        nix_bool(config.firewall_enabled),
+        tcp_str,
+        udp_str
+    ));
+
+    if config.ssh_enabled {
+        content.push_str("\n  # SSH\n");
+        content.push_str(&format!(
+            "  services.openssh = {{\n    enable = true;\n    ports = [ {} ];\n    settings = {{\n      PasswordAuthentication = {};\n      PermitRootLogin = \"{}\";\n    }};\n  }};\n",
+            config.ssh_port,
+            nix_bool(config.ssh_password_auth),
+            nix_permit_root_login(&config.ssh_root_login)
+        ));
+    }
+
+    if config.fail2ban_enabled {
+        content.push_str("\n  # Fail2ban\n");
+        if config.ssh_enabled {
+            content.push_str(
+                "  services.fail2ban = {\n    enable = true;\n    jails.sshd = {\n      enabled = true;\n    };\n  };\n",
+            );
+        } else {
+            content.push_str("  services.fail2ban.enable = true;\n");
+        }
+    }
+
+    if config.tailscale_enabled {
+        content.push_str("\n  # Tailscale VPN\n");
+        content.push_str("  services.tailscale.enable = true;\n");
+    }
+
+    if config.wireguard_enabled {
+        content.push_str("\n  # WireGuard\n");
+        content.push_str("  networking.wireguard.enable = true;\n");
+    }
+
+    content.push_str("}\n");
+    content
+}
+
 fn nix_bool(value: bool) -> &'static str {
     if value {
         "true"
@@ -515,17 +612,8 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
             );
         }
         _ => {
-            // PipeWire (0). Emit the existing block when the user opted in
-            // via low-latency, so a bluetooth-only apply does not force it.
-            if hw.audio_lowlatency {
-                sections.push(
-                    r#"  # PipeWire Audio
-  services.pipewire = {
-    enable = true;
-    alsa.enable = true;
-    alsa.support32Bit = true;
-    pulse.enable = true;
-    jack.enable = true;
+            let extra = if hw.audio_lowlatency {
+                r#"
     extraConfig.pipewire."92-low-latency" = {
       "context.properties" = {
         "default.clock.rate" = 48000;
@@ -533,12 +621,21 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
         "default.clock.min-quantum" = 32;
         "default.clock.max-quantum" = 32;
       };
-    };
-  };
+    };"#
+            } else {
+                ""
+            };
+            sections.push(format!(
+                r#"  # PipeWire Audio
+  services.pipewire = {{
+    enable = true;
+    alsa.enable = true;
+    alsa.support32Bit = true;
+    pulse.enable = true;
+    jack.enable = true;{extra}
+  }};
   security.rtkit.enable = true;"#
-                        .to_string(),
-                );
-            }
+            ));
         }
     }
 
@@ -759,6 +856,172 @@ pub fn template_exists(template_path: &str) -> bool {
     template_exists_in(&paths::templates_dir(), template_path)
 }
 
+/// Generate a packages-only fallback bundle (catalog selection + module stub).
+pub fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
+    let pkg_list = nix_attrs_for_package_ids(packages)
+        .into_iter()
+        .map(|p| format!("    {p}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let packages_attr = if id == "fonts" {
+        "fonts.packages"
+    } else {
+        "environment.systemPackages"
+    };
+
+    format!(
+        r#"# {} Bundle
+# Generated by NixOS Toolkit
+
+{{ config, lib, pkgs, ... }}:
+
+{{
+{}
+  {packages_attr} = with pkgs; [
+{pkg_list}
+  ];
+}}
+"#,
+        id,
+        bundle_module_stub(id),
+    )
+}
+
+/// Keep service/module enables when a bundle is customized (packages-only fallback).
+pub fn bundle_module_stub(id: &str) -> &'static str {
+    match id {
+        "devtools" => {
+            r#"  programs.git.enable = true;
+  virtualisation.docker = {
+    enable = true;
+    enableOnBoot = true;
+  };
+"#
+        }
+        "gaming" => {
+            r#"  programs.steam = {
+    enable = true;
+    remotePlay.openFirewall = true;
+    dedicatedServer.openFirewall = true;
+    gamescopeSession.enable = true;
+  };
+  hardware.graphics = {
+    enable = true;
+    enable32Bit = true;
+  };
+  programs.gamemode.enable = true;
+"#
+        }
+        "virtualization" => {
+            r#"  boot.kernelModules = [ "kvm-amd" "kvm-intel" ];
+  virtualisation.libvirtd = {
+    enable = true;
+    qemu = {
+      package = pkgs.qemu_kvm;
+      runAsRoot = true;
+      swtpm.enable = true;
+      ovmf.enable = true;
+    };
+  };
+  programs.virt-manager.enable = true;
+"#
+        }
+        "virtualbox" => {
+            r#"  nixpkgs.config.allowUnfree = true;
+  virtualisation.virtualbox.host = {
+    enable = true;
+    enableExtensionPack = true;
+  };
+"#
+        }
+        "containers" => {
+            r#"  virtualisation.podman = {
+    enable = true;
+    dockerCompat = true;
+    defaultNetwork.settings.dns_enabled = true;
+  };
+"#
+        }
+        "flatpak" => {
+            r#"  services.flatpak.enable = true;
+  xdg.portal.enable = true;
+"#
+        }
+        "fonts" => "  fonts.fontconfig.enable = true;\n",
+        _ => "",
+    }
+}
+
+fn attr_needs_unfree(attr: &str) -> bool {
+    matches!(
+        attr,
+        "steam"
+            | "google-chrome"
+            | "_1password-gui"
+            | "corefonts"
+            | "vistafonts"
+            | "discord"
+            | "slack"
+            | "zoom-us"
+            | "virtualbox"
+    )
+}
+
+/// True when generated config needs `nixpkgs.config.allowUnfree`.
+#[must_use]
+pub fn needs_allow_unfree(options: &NixGenOptions<'_>) -> bool {
+    if matches!(options.effective_hardware().nvidia_driver, Some(0..=2)) {
+        return true;
+    }
+
+    for bundle in &options.bundles {
+        match bundle.id.as_str() {
+            "gaming" | "virtualbox" => return true,
+            "fonts" if !options.bundle_packages.contains_key(&bundle.id) => return true,
+            _ => {}
+        }
+        for pkg_id in options.get_bundle_packages(bundle) {
+            if attr_needs_unfree(&pkg_id) || attr_needs_unfree(&resolve_nix_attr(&pkg_id)) {
+                return true;
+            }
+        }
+    }
+
+    options
+        .custom_packages
+        .iter()
+        .any(|pkg| attr_needs_unfree(pkg) || attr_needs_unfree(&resolve_nix_attr(pkg)))
+}
+
+/// Generate the unfree.nix snippet.
+pub fn generate_unfree_nix() -> String {
+    r#"# NixOS Toolkit - Unfree Packages
+# DO NOT EDIT MANUALLY
+
+{ config, lib, pkgs, ... }:
+
+{
+  nixpkgs.config.allowUnfree = true;
+}
+"#
+    .to_string()
+}
+
+fn bundle_preview_content(
+    options: &NixGenOptions<'_>,
+    templates_dir: &Path,
+    bundle: &BundleDef,
+) -> String {
+    let use_fallback = options.bundle_packages.contains_key(&bundle.id);
+    if !use_fallback {
+        if let Ok(content) = read_template_from(templates_dir, &bundle.template) {
+            return content;
+        }
+    }
+    generate_fallback_bundle(&bundle.id, &options.get_bundle_packages(bundle))
+}
+
 /// Generate a preview of what will be written with full options
 pub fn generate_preview_full(options: &NixGenOptions) -> String {
     generate_preview_full_from(options, &paths::templates_dir())
@@ -811,56 +1074,7 @@ pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path)
     // network.nix if network settings are configured
     if options.network_config.has_settings() {
         preview.push_str(&format!("\n--- {} ---\n", paths::NETWORK_NIX));
-        let mut network_preview = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
-
-        // Show firewall settings - generate directly
-        let tcp_str = options
-            .network_config
-            .allowed_tcp_ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let udp_str = options
-            .network_config
-            .allowed_udp_ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        network_preview.push_str("  # Firewall\n");
-        network_preview.push_str(&format!(
-            "  networking.firewall = {{\n    enable = {};\n    allowedTCPPorts = [ {} ];\n    allowedUDPPorts = [ {} ];\n  }};\n",
-            if options.network_config.firewall_enabled { "true" } else { "false" },
-            tcp_str,
-            udp_str
-        ));
-
-        // Show SSH settings - generate directly
-        if options.network_config.ssh_enabled {
-            network_preview.push_str("\n  # SSH\n");
-            network_preview.push_str(&format!(
-                "  services.openssh = {{\n    enable = true;\n    ports = [ {} ];\n    settings = {{\n      PasswordAuthentication = {};\n      PermitRootLogin = \"{}\";\n    }};\n  }};\n",
-                options.network_config.ssh_port,
-                if options.network_config.ssh_password_auth { "true" } else { "false" },
-                nix_permit_root_login(&options.network_config.ssh_root_login)
-            ));
-
-            if options.network_config.fail2ban_enabled {
-                network_preview.push_str("\n  # Fail2ban\n");
-                network_preview.push_str("  services.fail2ban = {\n    enable = true;\n    jails.sshd = {\n      enabled = true;\n    };\n  };\n");
-            }
-        }
-
-        // Show Tailscale
-        if options.network_config.tailscale_enabled {
-            network_preview.push_str("\n  # Tailscale VPN\n");
-            network_preview.push_str("  services.tailscale.enable = true;\n");
-        }
-
-        network_preview.push_str("}\n");
-        preview.push_str(&network_preview);
+        preview.push_str(&generate_network_nix(&options.network_config));
     }
 
     // services.nix if services are configured
@@ -868,6 +1082,11 @@ pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path)
         preview.push_str(&format!("\n--- {} ---\n", paths::SERVICES_NIX));
         let enabled_services: Vec<&str> = options.services_config.enabled_services();
         preview.push_str(&generate_services_nix(&enabled_services));
+    }
+
+    if needs_allow_unfree(options) {
+        preview.push_str(&format!("\n--- {} ---\n", paths::UNFREE_NIX));
+        preview.push_str(&generate_unfree_nix());
     }
 
     // Profile template (if selected and exists)
@@ -883,17 +1102,14 @@ pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path)
         }
     }
 
-    // Bundle templates
+    // Bundle templates (fallback when customized or the template file is missing)
     for bundle in &options.bundles {
-        if template_exists_in(templates_dir, &bundle.template) {
-            if let Ok(content) = read_template_from(templates_dir, &bundle.template) {
-                preview.push_str(&format!(
-                    "\n--- /etc/nixos/nixos-toolkit/bundles/{}.nix ---\n",
-                    bundle.id
-                ));
-                preview.push_str(&content);
-            }
-        }
+        let content = bundle_preview_content(options, templates_dir, bundle);
+        preview.push_str(&format!(
+            "\n--- /etc/nixos/nixos-toolkit/bundles/{}.nix ---\n",
+            bundle.id
+        ));
+        preview.push_str(&content);
     }
 
     preview
@@ -984,6 +1200,8 @@ mod tests {
         assert!(!nix.contains("videoDrivers"));
         assert!(!nix.contains("hardware.nvidia"));
         assert!(!nix.contains("power-profiles-daemon"));
+        assert!(nix.contains("services.pipewire = {"));
+        assert!(!nix.contains("92-low-latency"));
     }
 
     #[test]
@@ -1156,7 +1374,8 @@ mod tests {
     #[test]
     fn hostname_is_quoted_nix_string() {
         let nix = generate_hostname_nix("desk-1");
-        assert!(nix.contains("networking.hostName = lib.mkForce \"desk-1\";"));
+        assert!(nix.contains("networking.hostName = lib.mkDefault \"desk-1\";"));
+        assert!(!nix.contains("mkForce"));
     }
 
     #[test]
@@ -1187,5 +1406,236 @@ mod tests {
         assert!(!evil.contains("pwned"));
         let ok = generate_ssh_nix(true, 22, false, "prohibit-password", false);
         assert!(ok.contains("PermitRootLogin = \"prohibit-password\";"));
+    }
+
+    fn repo_templates() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../nix/templates")
+    }
+
+    fn bundle_by_id(id: &str) -> BundleDef {
+        crate::actions::default_bundles()
+            .into_iter()
+            .find(|b| b.id == id)
+            .unwrap_or_else(|| panic!("missing bundle {id}"))
+    }
+
+    #[test]
+    fn is_nix_attrpath_allows_leading_underscore() {
+        assert!(is_nix_attrpath("_1password-gui"));
+        assert!(!is_nix_attrpath("1password"));
+        assert!(!is_nix_attrpath("foo..bar"));
+    }
+
+    #[test]
+    fn resolve_nix_attr_maps_catalog_ids() {
+        assert_eq!(resolve_nix_attr("bitwarden"), "bitwarden-desktop");
+        assert_eq!(resolve_nix_attr("julia"), "julia-bin");
+        assert_eq!(resolve_nix_attr("htop"), "htop");
+        assert_eq!(resolve_nix_attr("not-in-catalog"), "not-in-catalog");
+    }
+
+    #[test]
+    fn custom_packages_use_resolved_nix_attrs() {
+        let nix = generate_custom_packages_nix(&["bitwarden".into(), "julia".into()]);
+        assert!(nix.contains("bitwarden-desktop"));
+        assert!(nix.contains("julia-bin"));
+        assert!(!nix.contains("    bitwarden\n"));
+        assert!(!nix.contains("    julia\n"));
+    }
+
+    #[test]
+    fn fonts_fallback_uses_fonts_packages() {
+        let nix =
+            generate_fallback_bundle("fonts", &["nerd-fonts.fira-code".into(), "inter".into()]);
+        assert!(nix.contains("fonts.packages"));
+        assert!(nix.contains("fonts.fontconfig.enable = true;"));
+        assert!(nix.contains("nerd-fonts.fira-code"));
+        assert!(!nix.contains("environment.systemPackages"));
+    }
+
+    #[test]
+    fn fallback_bundle_drops_invalid_package_tokens() {
+        let nix = generate_fallback_bundle("utilities", &["htop".into(), "foo; extra".into()]);
+        assert!(nix.contains("htop"));
+        assert!(!nix.contains("foo; extra"));
+    }
+
+    #[test]
+    fn customized_gaming_fallback_keeps_steam_module() {
+        let nix = generate_fallback_bundle("gaming", &["lutris".into(), "mangohud".into()]);
+        assert!(nix.contains("programs.steam"));
+        assert!(nix.contains("lutris"));
+        assert!(nix.contains("mangohud"));
+    }
+
+    #[test]
+    fn preview_customized_bundle_omits_unchecked_packages() {
+        let templates = repo_templates();
+        assert!(templates.join("bundles/gaming.nix").exists());
+        let gaming = bundle_by_id("gaming");
+        let mut bundle_packages = HashMap::new();
+        bundle_packages.insert("gaming".into(), vec!["lutris".into(), "mangohud".into()]);
+        let options = NixGenOptions {
+            bundles: vec![&gaming],
+            bundle_packages,
+            ..Default::default()
+        };
+        let preview = generate_preview_full_from(&options, &templates);
+        assert!(preview.contains("bundles/gaming.nix"));
+        assert!(preview.contains("lutris"));
+        assert!(preview.contains("mangohud"));
+        assert!(preview.contains("programs.steam"));
+        assert!(!preview.contains("heroic"));
+        assert!(!preview.contains("wineWowPackages"));
+        assert!(!preview.contains("bottles"));
+    }
+
+    #[test]
+    fn preview_ai_tools_without_template_emits_fallback() {
+        let templates = repo_templates();
+        assert!(!templates.join("bundles/ai-tools.nix").exists());
+        let ai = bundle_by_id("ai-tools");
+        let options = NixGenOptions {
+            bundles: vec![&ai],
+            ..Default::default()
+        };
+        let preview = generate_preview_full_from(&options, &templates);
+        assert!(preview.contains("bundles/ai-tools.nix"));
+        assert!(preview.contains("ollama"));
+        assert!(preview.contains("environment.systemPackages"));
+    }
+
+    #[test]
+    fn default_pipewire_omits_low_latency() {
+        let nix = generate_hardware_nix(&HardwareConfig::default());
+        assert!(nix.contains("services.pipewire = {"));
+        assert!(nix.contains("alsa.enable = true;"));
+        assert!(nix.contains("pulse.enable = true;"));
+        assert!(nix.contains("jack.enable = true;"));
+        assert!(nix.contains("security.rtkit.enable = true;"));
+        assert!(!nix.contains("92-low-latency"));
+    }
+
+    #[test]
+    fn bluetooth_hardware_still_emits_pipewire() {
+        let nix = generate_hardware_nix(&hw(|c| c.bluetooth_enabled = true));
+        assert!(nix.contains("hardware.bluetooth"));
+        assert!(nix.contains("services.pipewire = {"));
+        assert!(!nix.contains("92-low-latency"));
+    }
+
+    #[test]
+    fn fail2ban_emitted_without_ssh() {
+        let nix = generate_network_nix(&NetworkConfig {
+            fail2ban_enabled: true,
+            ..NetworkConfig::default()
+        });
+        assert!(nix.contains("services.fail2ban.enable = true;"));
+        assert!(!nix.contains("jails.sshd"));
+        assert!(!nix.contains("services.openssh"));
+    }
+
+    #[test]
+    fn wireguard_adds_listen_port_to_udp() {
+        let nix = generate_network_nix(&NetworkConfig {
+            wireguard_enabled: true,
+            wireguard_listen_port: 51820,
+            allowed_udp_ports: vec![53],
+            ..NetworkConfig::default()
+        });
+        assert!(nix.contains("networking.wireguard.enable = true;"));
+        assert!(nix.contains("allowedUDPPorts = [ 53 51820 ];"));
+    }
+
+    #[test]
+    fn needs_allow_unfree_for_gaming_chrome_and_nvidia() {
+        let gaming = bundle_by_id("gaming");
+        let gaming_opts = NixGenOptions {
+            bundles: vec![&gaming],
+            ..Default::default()
+        };
+        assert!(needs_allow_unfree(&gaming_opts));
+        assert!(generate_selected_nix_full(&gaming_opts).contains("./unfree.nix"));
+
+        let browsers = bundle_by_id("browsers");
+        let mut chrome = HashMap::new();
+        chrome.insert("browsers".into(), vec!["google-chrome".into()]);
+        let chrome_opts = NixGenOptions {
+            bundles: vec![&browsers],
+            bundle_packages: chrome,
+            ..Default::default()
+        };
+        assert!(needs_allow_unfree(&chrome_opts));
+
+        let firefox_only = {
+            let mut pkgs = HashMap::new();
+            pkgs.insert("browsers".into(), vec!["firefox".into()]);
+            NixGenOptions {
+                bundles: vec![&browsers],
+                bundle_packages: pkgs,
+                ..Default::default()
+            }
+        };
+        assert!(!needs_allow_unfree(&firefox_only));
+
+        let nvidia = NixGenOptions {
+            hardware_config: hw(|c| c.nvidia_driver = Some(0)),
+            ..Default::default()
+        };
+        assert!(needs_allow_unfree(&nvidia));
+
+        let nouveau = NixGenOptions {
+            hardware_config: hw(|c| c.nvidia_driver = Some(3)),
+            ..Default::default()
+        };
+        assert!(!needs_allow_unfree(&nouveau));
+
+        let security = bundle_by_id("security");
+        let mut one_password = HashMap::new();
+        one_password.insert("security".into(), vec!["_1password-gui".into()]);
+        assert!(needs_allow_unfree(&NixGenOptions {
+            bundles: vec![&security],
+            bundle_packages: one_password,
+            ..Default::default()
+        }));
+
+        let communication = bundle_by_id("communication");
+        let mut discord = HashMap::new();
+        discord.insert("communication".into(), vec!["discord".into()]);
+        assert!(needs_allow_unfree(&NixGenOptions {
+            bundles: vec![&communication],
+            bundle_packages: discord,
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn fallback_security_uses_bitwarden_desktop_attr() {
+        let nix =
+            generate_fallback_bundle("security", &["bitwarden".into(), "_1password-gui".into()]);
+        assert!(nix.contains("bitwarden-desktop"));
+        assert!(nix.contains("_1password-gui"));
+        assert!(!nix.contains("    bitwarden\n"));
+    }
+
+    #[test]
+    fn preview_includes_unfree_when_needed() {
+        let templates = repo_templates();
+        let gaming = bundle_by_id("gaming");
+        let options = NixGenOptions {
+            bundles: vec![&gaming],
+            ..Default::default()
+        };
+        let preview = generate_preview_full_from(&options, &templates);
+        assert!(preview.contains("unfree.nix"));
+        assert!(preview.contains("nixpkgs.config.allowUnfree = true;"));
+    }
+
+    #[test]
+    fn selected_nix_skips_hardware_on_default_even_with_pipewire() {
+        let empty = NixGenOptions::default();
+        assert!(!generate_selected_nix_full(&empty).contains("./hardware.nix"));
+        assert!(HardwareConfig::default().audio_server == 0);
+        assert!(!HardwareConfig::default().has_settings());
     }
 }

@@ -4,13 +4,14 @@ use common::actions::{default_bundles, default_profiles};
 use common::config::paths;
 use common::ipc::{GeneratedFile, HardwareConfig, NetworkConfig, ServicesConfig};
 use common::nix::{
-    generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix, generate_hostname_nix,
-    generate_selected_nix_full, generate_services_nix, generate_user_groups_nix, is_nix_attrpath,
+    generate_custom_packages_nix, generate_dns_nix, generate_fallback_bundle,
+    generate_hardware_nix, generate_hostname_nix, generate_network_nix, generate_selected_nix_full,
+    generate_services_nix, generate_unfree_nix, generate_user_groups_nix, needs_allow_unfree,
     read_template, NixGenOptions,
 };
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// Generate all configuration files
 #[allow(clippy::too_many_arguments)]
@@ -30,6 +31,7 @@ pub fn generate_all_files(
     dry_run: bool,
 ) -> anyhow::Result<Vec<GeneratedFile>> {
     let mut files = Vec::new();
+    let mut keep_snippets: Vec<&'static str> = Vec::new();
 
     let profiles = default_profiles();
     let bundles = default_bundles();
@@ -85,6 +87,7 @@ pub fn generate_all_files(
         if !dry_run {
             atomic_write(paths::HOSTNAME_NIX, &hostname_content)?;
         }
+        keep_snippets.push("hostname.nix");
     }
 
     // Generate dns.nix if DNS servers are configured
@@ -98,6 +101,7 @@ pub fn generate_all_files(
         if !dry_run {
             atomic_write(paths::DNS_NIX, &dns_content)?;
         }
+        keep_snippets.push("dns.nix");
     }
 
     // Generate users.nix if user groups are configured
@@ -112,6 +116,7 @@ pub fn generate_all_files(
             if !dry_run {
                 atomic_write(paths::USERS_NIX, &users_content)?;
             }
+            keep_snippets.push("users.nix");
         }
     }
 
@@ -126,6 +131,7 @@ pub fn generate_all_files(
         if !dry_run {
             atomic_write(paths::HARDWARE_NIX, &hardware_content)?;
         }
+        keep_snippets.push("hardware.nix");
     }
 
     // Copy profile template if selected
@@ -158,17 +164,7 @@ pub fn generate_all_files(
     for bundle in &enabled {
         let dest_path = format!("{}/{}.nix", paths::BUNDLES_DIR, bundle.id);
 
-        // Get the packages to use for this bundle
-        // If bundle_packages has an entry, use that (user customized); otherwise use all packages
-        let packages_to_use: Vec<String> =
-            if let Some(custom_packages) = bundle_packages.get(&bundle.id) {
-                custom_packages.clone()
-            } else {
-                bundle.packages.iter().map(|p| p.id.clone()).collect()
-            };
-
-        // If user has customized packages, always generate a custom template
-        // This ensures the generated Nix file reflects the user's package selection
+        let packages_to_use = options.get_bundle_packages(bundle);
         let has_custom_packages = bundle_packages.contains_key(&bundle.id);
 
         if !has_custom_packages {
@@ -209,62 +205,12 @@ pub fn generate_all_files(
         if !dry_run {
             atomic_write(paths::CUSTOM_PACKAGES_NIX, &custom_content)?;
         }
+        keep_snippets.push("custom-packages.nix");
     }
 
     // Generate network.nix if network settings are configured
     if network_config.has_settings() {
-        // Generate a combined network config that includes firewall, SSH, and VPN settings
-        let mut network_content = String::from("# NixOS Toolkit - Network Configuration\n# DO NOT EDIT MANUALLY\n\n{ config, lib, pkgs, ... }:\n\n{\n");
-
-        // Firewall configuration - generate directly
-        let tcp_str = network_config
-            .allowed_tcp_ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let udp_str = network_config
-            .allowed_udp_ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        network_content.push_str("  # Firewall\n");
-        network_content.push_str(&format!(
-            "  networking.firewall = {{\n    enable = {};\n    allowedTCPPorts = [ {} ];\n    allowedUDPPorts = [ {} ];\n  }};\n",
-            if network_config.firewall_enabled { "true" } else { "false" },
-            tcp_str,
-            udp_str
-        ));
-
-        // SSH configuration - generate directly
-        if network_config.ssh_enabled {
-            network_content.push_str("\n  # SSH\n");
-            network_content.push_str(&format!(
-                "  services.openssh = {{\n    enable = true;\n    ports = [ {} ];\n    settings = {{\n      PasswordAuthentication = {};\n      PermitRootLogin = \"{}\";\n    }};\n  }};\n",
-                network_config.ssh_port,
-                if network_config.ssh_password_auth { "true" } else { "false" },
-                match network_config.ssh_root_login.as_str() {
-                    "yes" => "yes",
-                    "prohibit-password" => "prohibit-password",
-                    _ => "no",
-                }
-            ));
-
-            if network_config.fail2ban_enabled {
-                network_content.push_str("\n  # Fail2ban\n");
-                network_content.push_str("  services.fail2ban = {\n    enable = true;\n    jails.sshd = {\n      enabled = true;\n    };\n  };\n");
-            }
-        }
-
-        // Tailscale VPN
-        if network_config.tailscale_enabled {
-            network_content.push_str("\n  # Tailscale VPN\n");
-            network_content.push_str("  services.tailscale.enable = true;\n");
-        }
-
-        network_content.push_str("}\n");
+        let network_content = generate_network_nix(network_config);
 
         files.push(GeneratedFile {
             path: paths::NETWORK_NIX.to_string(),
@@ -274,6 +220,7 @@ pub fn generate_all_files(
         if !dry_run {
             atomic_write(paths::NETWORK_NIX, &network_content)?;
         }
+        keep_snippets.push("network.nix");
     }
 
     // Generate services.nix if services are configured
@@ -289,28 +236,120 @@ pub fn generate_all_files(
         if !dry_run {
             atomic_write(paths::SERVICES_NIX, &services_content)?;
         }
+        keep_snippets.push("services.nix");
+    }
+
+    if needs_allow_unfree(&options) {
+        let unfree_content = generate_unfree_nix();
+        files.push(GeneratedFile {
+            path: paths::UNFREE_NIX.to_string(),
+            content: unfree_content.clone(),
+        });
+
+        if !dry_run {
+            atomic_write(paths::UNFREE_NIX, &unfree_content)?;
+        }
+        keep_snippets.push("unfree.nix");
+    }
+
+    if !dry_run {
+        cleanup_stale_managed_files(
+            Path::new(paths::PROFILES_DIR),
+            Path::new(paths::BUNDLES_DIR),
+            Path::new(paths::STATE_DIR),
+            selected_profile.as_deref(),
+            enabled_bundles,
+            &keep_snippets,
+        )?;
     }
 
     Ok(files)
 }
 
+const MANAGED_SNIPPETS: &[&str] = &[
+    "hostname.nix",
+    "dns.nix",
+    "users.nix",
+    "custom-packages.nix",
+    "hardware.nix",
+    "network.nix",
+    "services.nix",
+    "unfree.nix",
+];
+
+fn resolve_existing_prefix(path: &Path) -> PathBuf {
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = path.to_path_buf();
+    loop {
+        if current.exists() {
+            if let Ok(canon) = current.canonicalize() {
+                let mut out = canon;
+                for part in suffix.iter().rev() {
+                    out.push(part);
+                }
+                return out;
+            }
+            break;
+        }
+        match current.file_name() {
+            Some(name) => {
+                suffix.push(name.to_os_string());
+                if !current.pop() {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    path.to_path_buf()
+}
+
+/// True when `path` resolves under `/etc/nixos/nixos-toolkit`.
+#[must_use]
+fn is_allowed_managed_path(path: &Path) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+
+    let managed = Path::new(paths::MANAGED_DIR);
+    if !path.starts_with(managed) {
+        return false;
+    }
+
+    let resolved = resolve_existing_prefix(path);
+    let managed_resolved = resolve_existing_prefix(managed);
+    resolved.starts_with(&managed_resolved)
+}
+
 /// Atomic write to a file (write to temp, then rename)
 fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
     let path = Path::new(path);
+    if !is_allowed_managed_path(path) {
+        anyhow::bail!(
+            "Refusing to write outside {}: {}",
+            paths::MANAGED_DIR,
+            path.display()
+        );
+    }
 
-    // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    // Write to temp file
     let temp_path = path.with_extension("tmp");
+    if !is_allowed_managed_path(&temp_path) {
+        anyhow::bail!(
+            "Refusing to write outside {}: {}",
+            paths::MANAGED_DIR,
+            temp_path.display()
+        );
+    }
     fs::write(&temp_path, content)?;
-
-    // Rename to final path
     fs::rename(&temp_path, path)?;
 
-    // Verify the write succeeded by reading back
     let written = fs::read_to_string(path)?;
     if written != content {
         anyhow::bail!(
@@ -320,6 +359,59 @@ fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
     }
 
     tracing::info!("Wrote and verified {}", path.display());
+    Ok(())
+}
+
+fn delete_unlisted_nix(dir: &Path, keep_stems: &[&str]) -> anyhow::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("nix") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if !keep_stems.contains(&stem) {
+            fs::remove_file(&path)?;
+            tracing::info!("Removed stale {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Delete leftover managed `.nix` files that this apply did not generate.
+pub fn cleanup_stale_managed_files(
+    profiles_dir: &Path,
+    bundles_dir: &Path,
+    state_dir: &Path,
+    keep_profile: Option<&str>,
+    keep_bundles: &[String],
+    keep_snippets: &[&str],
+) -> anyhow::Result<()> {
+    let keep_profile: Vec<&str> = keep_profile.into_iter().collect();
+    delete_unlisted_nix(profiles_dir, &keep_profile)?;
+
+    let keep_bundle_stems: Vec<&str> = keep_bundles.iter().map(String::as_str).collect();
+    delete_unlisted_nix(bundles_dir, &keep_bundle_stems)?;
+
+    if state_dir.is_dir() {
+        for snippet in MANAGED_SNIPPETS {
+            if keep_snippets.contains(snippet) {
+                continue;
+            }
+            let path = state_dir.join(snippet);
+            if path.is_file() {
+                fs::remove_file(&path)?;
+                tracing::info!("Removed stale {}", path.display());
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -595,98 +687,6 @@ fn generate_fallback_profile(id: &str) -> String {
     }
 }
 
-/// Generate a fallback bundle
-fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
-    let pkg_list = packages
-        .iter()
-        .filter(|p| is_nix_attrpath(p))
-        .map(|p| format!("    {p}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        r#"# {} Bundle
-# Generated by NixOS Toolkit
-
-{{ config, lib, pkgs, ... }}:
-
-{{
-{}
-  environment.systemPackages = with pkgs; [
-{}
-  ];
-}}
-"#,
-        id,
-        bundle_module_stub(id),
-        pkg_list
-    )
-}
-
-/// Keep service/module enables when a bundle is customized (packages-only fallback).
-fn bundle_module_stub(id: &str) -> &'static str {
-    match id {
-        "devtools" => {
-            r#"  programs.git.enable = true;
-  virtualisation.docker = {
-    enable = true;
-    enableOnBoot = true;
-  };
-"#
-        }
-        "gaming" => {
-            r#"  programs.steam = {
-    enable = true;
-    remotePlay.openFirewall = true;
-    dedicatedServer.openFirewall = true;
-    gamescopeSession.enable = true;
-  };
-  hardware.graphics = {
-    enable = true;
-    enable32Bit = true;
-  };
-  programs.gamemode.enable = true;
-"#
-        }
-        "virtualization" => {
-            r#"  boot.kernelModules = [ "kvm-amd" "kvm-intel" ];
-  virtualisation.libvirtd = {
-    enable = true;
-    qemu = {
-      package = pkgs.qemu_kvm;
-      runAsRoot = true;
-      swtpm.enable = true;
-      ovmf.enable = true;
-    };
-  };
-  programs.virt-manager.enable = true;
-"#
-        }
-        "virtualbox" => {
-            r#"  nixpkgs.config.allowUnfree = true;
-  virtualisation.virtualbox.host = {
-    enable = true;
-    enableExtensionPack = true;
-  };
-"#
-        }
-        "containers" => {
-            r#"  virtualisation.podman = {
-    enable = true;
-    dockerCompat = true;
-    defaultNetwork.settings.dns_enabled = true;
-  };
-"#
-        }
-        "flatpak" => {
-            r#"  services.flatpak.enable = true;
-  xdg.portal.enable = true;
-"#
-        }
-        _ => "",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +731,8 @@ mod tests {
             .find(|f| f.path.contains("selected.nix"))
             .expect("selected.nix");
         assert!(selected.content.contains("./hardware.nix"));
+        assert!(selected.content.contains("./unfree.nix"));
+        assert!(files.iter().any(|f| f.path.contains("unfree.nix")));
     }
 
     #[test]
@@ -765,5 +767,111 @@ mod tests {
         let nix = generate_fallback_bundle("utilities", &["htop".into(), "foo; extra".into()]);
         assert!(nix.contains("htop"));
         assert!(!nix.contains("foo; extra"));
+    }
+
+    #[test]
+    fn dry_run_fail2ban_without_ssh_writes_network() {
+        let files = generate_all_files(
+            &None,
+            &[],
+            &HashMap::new(),
+            None,
+            &[],
+            &[],
+            None,
+            false,
+            &[],
+            &NetworkConfig {
+                fail2ban_enabled: true,
+                ..NetworkConfig::default()
+            },
+            &ServicesConfig::default(),
+            &HardwareConfig::default(),
+            true,
+        )
+        .unwrap();
+        let network = files
+            .iter()
+            .find(|f| f.path.contains("network.nix"))
+            .expect("network.nix");
+        assert!(network.content.contains("services.fail2ban.enable = true;"));
+        assert!(!network.content.contains("services.openssh"));
+        let selected = files
+            .iter()
+            .find(|f| f.path.contains("selected.nix"))
+            .expect("selected.nix");
+        assert!(selected.content.contains("./network.nix"));
+    }
+
+    #[test]
+    fn is_allowed_managed_path_rejects_escape() {
+        assert!(!is_allowed_managed_path(Path::new(
+            "../etc/nixos/nixos-toolkit/state/hostname.nix"
+        )));
+        assert!(!is_allowed_managed_path(Path::new("/tmp/evil")));
+        assert!(!is_allowed_managed_path(Path::new(
+            "/etc/nixos/nixos-toolkit/../../tmp/evil"
+        )));
+        assert!(!is_allowed_managed_path(Path::new(
+            "/etc/nixos/configuration.nix"
+        )));
+        assert!(is_allowed_managed_path(Path::new(
+            "/etc/nixos/nixos-toolkit/state/hostname.nix"
+        )));
+        assert!(is_allowed_managed_path(Path::new(
+            "/etc/nixos/nixos-toolkit/bundles/gaming.nix"
+        )));
+    }
+
+    #[test]
+    fn atomic_write_rejects_path_outside_managed_dir() {
+        let err = atomic_write("/tmp/evil.nix", "nope").unwrap_err();
+        assert!(err.to_string().contains("Refusing to write"));
+    }
+
+    #[test]
+    fn cleanup_removes_stale_profiles_bundles_and_snippets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let profiles = tmp.path().join("profiles");
+        let bundles = tmp.path().join("bundles");
+        let state = tmp.path().join("state");
+        fs::create_dir_all(&profiles).unwrap();
+        fs::create_dir_all(&bundles).unwrap();
+        fs::create_dir_all(&state).unwrap();
+
+        fs::write(profiles.join("gnome.nix"), "keep").unwrap();
+        fs::write(profiles.join("kde.nix"), "stale").unwrap();
+        fs::write(bundles.join("gaming.nix"), "keep").unwrap();
+        fs::write(bundles.join("office.nix"), "stale").unwrap();
+        fs::write(state.join("hostname.nix"), "stale").unwrap();
+        fs::write(state.join("network.nix"), "keep").unwrap();
+        fs::write(state.join("unfree.nix"), "stale").unwrap();
+        fs::write(state.join("selected.nix"), "keep-selected").unwrap();
+        fs::write(state.join("state.json"), "{}").unwrap();
+        fs::write(state.join("notes.txt"), "not-nix").unwrap();
+
+        cleanup_stale_managed_files(
+            &profiles,
+            &bundles,
+            &state,
+            Some("gnome"),
+            &["gaming".into()],
+            &["network.nix"],
+        )
+        .unwrap();
+
+        assert!(profiles.join("gnome.nix").exists());
+        assert!(!profiles.join("kde.nix").exists());
+        assert!(bundles.join("gaming.nix").exists());
+        assert!(!bundles.join("office.nix").exists());
+        assert!(!state.join("hostname.nix").exists());
+        assert!(state.join("network.nix").exists());
+        assert!(!state.join("unfree.nix").exists());
+        assert_eq!(
+            fs::read_to_string(state.join("selected.nix")).unwrap(),
+            "keep-selected"
+        );
+        assert!(state.join("state.json").exists());
+        assert!(state.join("notes.txt").exists());
     }
 }
