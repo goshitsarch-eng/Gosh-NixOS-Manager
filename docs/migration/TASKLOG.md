@@ -2,6 +2,105 @@
 
 Short plans and DA notes for Phase 2. Newest first.
 
+## Phase 3 DA
+
+**CLEAN** `a45894a` `bf3c05b` `b60213f` `3b4112a` on `cosmic-migration`.
+
+Re-checked the six Phase 3 blockers in current `crates/gui` (HEAD `b60213f`). They are closed in source. Spot-check: `rg pkexec crates/gui` is `helper/spawn.rs` only; `rg nix-env crates/gui` empty. `cargo test -p gui --offline --lib --` the 14 named tests below **14 passed**. Did not re-run `scripts/verify.sh` or Flatpak/weston. Production skip envs are still smoke-only.
+
+### Pass (the six)
+
+1. **`detect_system` / `detect_gpu` host-spawn in Flatpak.** `integration.rs`: `host_path_exists` / `host_read_to_string` / `host_command_output` / `lspci_command` all `flatpak-spawn --host` when `in_flatpak()`. `is_nixos` is host `test -e /etc/NIXOS`; hostname is host `cat /etc/hostname` then host `hostname`; GPU is host `lspci`. Host `os-release` is read via spawn for `VERSION_ID` only (comment: do not bind-mount). `init` still calls `detect_system()` when `!skip_host_probes` so `refresh_banner` is honest before the async task. Tests: `host_path_helpers_use_local_fs_outside_flatpak`, `gpu_from_lspci_prefers_nvidia_on_hybrid`.
+
+2. **`init` emits `DetectGpu`.** `AppModel::startup_intents` queues `DetectSystem` and `DetectGpu` (no helper). `intents_to_task` runs `integration::detect_gpu()` unless `skip_host_probes`. `RefreshSystem` emits both. First `NavSelect(Hardware)` emits `DetectGpu` while `gpu_vendor` is `None`. Tests: `init_queues_detect_system_and_gpu_without_helper`, `refresh_system_detects_system_and_gpu_without_helper`, `nav_hardware_queues_detect_gpu_once`, `gpu_detected_populates_vendor`.
+
+3. **Username seeded from `$USER`.** `init` and `SystemDetected` / helper `State` call `seed_username_from_host`. Direct assign (not `set_username`) so seed does not dirty `has_changes`. `default_username` takes trimmed `$USER` when `!skip_host_probes` and charset `[A-Za-z0-9_-]`. Tests: `default_username_from_user_env`, `skip_host_probes_does_not_seed_username`. Groups + seeded name now reach `users.nix` (`username.is_some() && !user_groups.is_empty()`).
+
+4. **Hostname charset rejected.** `HostnameChanged` trims; empty clears; invalid `[A-Za-z0-9-]` / length > 63 sets `field_errors.hostname` and does **not** `set_hostname`; match vs `system_info.hostname` is a no-op. View shows the error. Test: `hostname_rejects_invalid_charset_and_matches_system_noop` (`nixo_`, `bad.host` stay at last valid).
+
+5. **`helper_missing` does not `SpawnHelper` on nav.** `helper_can_spawn()` is `helper_available && !helper_missing`. `nav_intents` → `load_generations_intents` / `load_disk_usage_intents`, plus `LoadGenerations` / `LoadDiskUsage` / `start_rebuild` / rollback / delete / maintenance, all return `Vec::new()` when it is false. `startup_intents` still skips ReadState when the helper is unavailable. Test: `helper_missing_does_not_spawn_on_nav_or_refresh_loaders` (nav Generations/Maintenance, loaders, Apply/Dry Run). Fail-fast `spawn_helper_task` remains.
+
+6. **DNS/TCP raw buffers; TCP replace not merge.** Model has `dns_input` / `custom_tcp_input`. System DNS and Network custom TCP bind those strings (`view/system.rs`, `view/network.rs`). `DnsServersChanged` always stores the raw field; `parse_and_set_dns` only updates `state.dns_servers` on full IPv4s (`"1.1.1.1, 8"` keeps `"1.1.1.1"` + error, widget does not snap). `CustomTcpPortsChanged` always stores raw; `parse_and_set_custom_tcp_ports` **replaces** extras and keeps preset chips (`"9"`→`"90"`→`"9090"` → `[22, 9090]`, not 9+90+909+9090). Tests: `dns_partial_keeps_input_and_does_not_clobber_servers`, `custom_tcp_replace_does_not_accumulate_prefixes`, `custom_tcp_replace_keeps_presets_and_drops_prefixes`.
+
+### Non-blocking (do not re-open 1–6)
+
+- `GpuDetected` still only stores `gpu_vendor`. `hardware_for_nix()` patches NVIDIA `Some(0)` for Apply/preview; `apply_is_empty()` / WriteState snapshot do not. NVIDIA-only box can still get the destructive empty dialog while Nix emits Stable. GPU detect itself runs.
+- Generations / Maintenance **Refresh** still attach `on_press` when `idle` (not `buttons_enabled`). Reducer no-ops, so no spawn and no helper-missing toast.
+- `UsernameChanged` does not re-check charset (seed does).
+- Custom TCP still parses on every keystroke; a prefix like `9` is live in state until the next digit (replace, not union).
+- Manifest still lists `/etc/NIXOS:ro` binds Flatpak refuses — unused now that host-spawn exists.
+- `parse_and_add_tcp_ports` merge helper remains for tests only.
+
+Phase 3 REPORT may close on these six. Prior writeup kept below.
+
+## Phase 3 DA (pre a45894a)
+
+**FAILURES:** remaining flow breaks that should block `REPORT.md` (verify.sh 0 / smoke 124 / no pkexec do **not** cover these). Named greps that are clean are listed under Pass.
+
+Walked `PLAN.md` parity ticks, `DECISIONS.md` C3/C9–C11/C19, `845cd84` + `b83ff31` + `2af80e6`, `crates/gui` / `crates/helper` / `crates/common`, and the installed Flatpak `io.github.goshitsarch_eng.NixosToolkit` (`flatpak --user run --command=sh` and `--command=printenv`). Did not re-run `scripts/verify.sh`. Spot-check: `cargo test -p common --offline --lib -- power_profile_maps bluetooth_audio_nvidia` **2 passed**; `cargo test -p gui --offline --lib -- nvidia_gpu_apply request_dry_run request_apply_empty confirm_apply_spawns` **6 passed**; `cargo test -p gui --offline --test state_mutations` **9 passed**.
+
+### FAILURES (new tasks)
+
+1. **Host-spawn NixOS / integration detection — Flatpak `/etc` binds are no-ops.**  
+   Manifest finish-args `--filesystem=/etc/NIXOS:ro`, `/etc/nixos:ro`, `/etc/hostname:ro` print `F: Not sharing "/etc/hostname" with sandbox: Path "/etc" is reserved by Flatpak`. Inside the app sandbox: `/etc/NIXOS`, `/etc/nixos`, `/etc/hostname` **do not exist**; `/etc/os-release` is Freedesktop SDK 25.08. `integration::detect_system` (`crates/gui/src/integration.rs`) uses sandbox `Path::exists` / `read_to_string`, never `flatpak-spawn --host`, never `HelperOp::GetSystemInfo` (that variant is **dead** — only declared in `message.rs`). Production metadata has **no** `NIXOS_TOOLKIT_SKIP_*` (only smoke sets them). `refresh_banner` priority is Not NixOS first (`apply.rs`), so a NixOS user running the Flatpak gets a non-dismissible **"Not running on NixOS"** error, Getting Started stays “Not NixOS”, Verify Integration re-runs the same probe. Host `flatpak-spawn --host -- test -e /etc/NIXOS` exits 0 on this machine — the host is NixOS, the GUI cannot see it. Smoke hides this with `SKIP_HOST_PROBES=1`. PLAN ticks for the status banner and onboarding status row are false for the shipping app. **Task:** detect `/etc/NIXOS`, `/etc/nixos/{configuration,flake}.nix`, and hostname via `flatpak-spawn --host` (no pkexec), or document as a hard limitation and **untick** those checklist rows. Do not overlay host `os-release`.
+
+2. **`Intent::DetectGpu` is never emitted — NVIDIA page is dead even though sandbox `lspci` works.**  
+   Handler exists (`app.rs` `intents_to_task`). `rg Intent::DetectGpu crates/gui/src` is that arm only. `init` sets `gpu_vendor: None` and does not queue DetectGpu / DetectSystem (architecture.md §5.7 step 6; GTK ran lspci in `HardwarePage::setup_ui`). `NavSelect(Hardware)` and `RefreshSystem` (`Intent::DetectSystem` only) also skip it. Hardware view: `gpu_vendor` None → `hardware-gpu-unknown`, `show_nvidia` false. This Flatpak **has** `/usr/bin/lspci` and lists `NVIDIA Corporation GB205M [GeForce RTX 5070 Ti Mobile]` plus Intel VGA — widgets still never appear. Tests pass only because they assign `app.gpu_vendor` by hand (`nvidia_gpu_apply_defaults_unwritten_driver_to_stable`). Related: `apply_is_empty()` ignores `hardware_for_nix()`’s NVIDIA `Some(0)` patch, so a detected NVIDIA box with no other selections still gets the **destructive empty** dialog while Apply/preview emit Stable NVIDIA. **Task:** emit `DetectGpu` on init (and RefreshSystem / first Hardware nav per ux.md §6.14); on NVIDIA x86 set `nvidia_driver = Some(0)` in state (or make `apply_is_empty` / preview / WriteState snapshot use the same `hardware_for_nix()` value).
+
+3. **User groups are a no-op unless the username field is edited.**  
+   `view/system.rs` displays `$USER` / Fluent default when `state.username` is `None`. `UsernameChanged` is the only writer. `generate_selected_nix_full` / helper `generate_all_files` emit `users.nix` only when `username.is_some() && !user_groups.is_empty()`. Toggle libvirtd/docker/vboxusers with the prefilled name → Apply silently drops groups. GTK scraped the EntryRow. **Task:** seed `state.username` from `$USER` (and Flatpak host user) in `init` / `SystemDetected`; keep charset `[A-Za-z0-9_-]`.
+
+4. **DNS and custom TCP cannot be typed; TCP merge-add opens extra ports.**  
+   Both fields are controlled `text_input` bound to parsed `AppState`. `DnsServersChanged` → `parse_and_set_dns` requires a full `u8.u8.u8.u8` on **every** keystroke (`state.rs` `is_ipv4`). Replica: `"1"`, `"1.1"`, `"1.1.1"` fail; `"1.1.1.1, 8"` fails on `"8"` and the widget snaps back to the last valid join. Paste-only works. `CustomTcpPortsChanged` → `parse_and_add_tcp_ports` **merges** any `u16` (`"9090"` adds 9, 90, 909, 9090; no remove-by-edit). PLAN ticks “DNS comma-separated IPv4” / “preset vs custom TCP split” tested the parser, not the iced binding. **Task:** keep a draft string in the model (like `package_input`); parse on submit / trailing apply; TCP edits must replace the custom-port set, not union keystroke prefixes.
+
+5. **Hostname charset is not enforced (false PLAN tick).**  
+   ux.md / PLAN: `[A-Za-z0-9-]`, no-op vs `/etc/hostname`. `HostnameChanged` only trims and compares; `field_errors.hostname` is never set. Helper `validate()` would reject `_` / `.` but Apply never sends `Validate`. Invalid names go straight into `hostname.nix`. **Task:** reject live like helper (`A-Za-z0-9-`, length), surface `field_errors.hostname`, do not `set_hostname` on invalid input.
+
+6. **`helper_missing` still fires helper sessions from nav and Refresh.**  
+   Apply / Dry Run / rollback / per-generation switch-delete / maintenance **Run** check `!helper_missing` (`view/apply.rs`, `generations.rs`, `maintenance.rs`). Generations **Refresh** is `if idle` only (not `buttons_enabled`). Maintenance disk Refresh same. `nav_intents` always `load_generations_intents` / `load_disk_usage_intents` when idle. Reducer `RequestApply` / `start_rebuild` / `LoadGenerations` do not consult `helper_missing` (`test_app()` is helper-missing and still expects SpawnHelper). Flatpak: `spawn_helper_task` yields `SpawnFailed` (no pkexec) — visiting Generations still toasts the helper-missing wall of text. **Task:** treat helper-missing like busy in those loaders and Refresh `on_press`; keep the fail-fast spawn as belt-and-suspenders.
+
+### Pass (named checks)
+
+- **`pkexec` / `nix-env` in `crates/gui` besides `spawn.rs`:** `rg pkexec crates/gui` is `helper/spawn.rs` only; `rg nix-env crates/gui` empty. Views have no `Command`.
+- **No UDP widget:** `view/network.rs` is firewall + TCP chips `{22,80,443,8080}` + custom TCP + SSH + Tailscale. No `SetUdp*`. `allowed_udp_ports` still round-trips (`state_mutations.rs`).
+- **PPD not always-on:** `generate_hardware_nix` emits PPD only when `!tlp_enabled && power_profile != 0` (`crates/common/src/nix.rs`). Tests `power_profile_maps_when_tlp_off` + `bluetooth_audio_nvidia_only_omit_power_profiles_daemon` passed. TLP still forces `power-profiles-daemon.enable = false`.
+- **Apply button when `helper_missing`:** Apply/Dry Run `on_press` omitted (`buttons_enabled = idle && !helper_missing`). Session `run_blocking` / `HelperClient::spawn` refuse unavailable specs (no pkexec). Incomplete — see failure 6.
+- **WriteState on dry-run (GUI session):** `RequestDryRun` → `then_write_state: false`, `save: None`. Session tests `dry_run_does_not_write_state` / `request_dry_run_spawns_dry_build_without_write_state` passed. **Caveat (non-blocking, GTK-era helper):** `commands::apply` always `generate_all_files(..., false)` then `nixos-rebuild dry-build`, so Dry Run **does write** `/etc/nixos/nixos-toolkit/*.nix`; only `state.json` is skipped.
+- **GTK leftover in gui crate:** `crates/gui/Cargo.toml` is libcosmic only; `rg gtk4|libadwaita|adw:: crates/gui` empty; `Cargo.lock` has no `gtk4`. `sctk-adwaita` is winit/wayland, not GTK. `flake.nix` GUI package has no wrapGApps/gtk4.
+
+### Non-blocking (do not block REPORT if 1–6 land or are explicitly accepted)
+
+- Apply logs still batched (`session::stream` = `run_blocking` then iter) — already in REPORT.
+- `Intent::SendOnSession` / `CloseSession` still no-ops.
+- `OpenPath` failure is `tracing::warn` only (C11 asked for a toast).
+- Copy snippet toasts success before clipboard completes; `ClipboardCopied { ok: false }` is unreachable.
+- `ai-tools` still has no template (15 bundle files vs 16 catalog ids) — in-scope exception.
+- Host `SpawnSpec::from_parts` always `helper_available: true` (falls back to the helper **name**). C9 host path; C10 “refuse pkexec if not executable” is Flatpak-only. Native `cargo run` without helper can still pkexec-hang.
+- Reconstruct-from-Nix / old `state.json` with `enabled_bundles` and no `bundle_packages` shows all checkboxes unchecked; checking one package first inserts an empty set (`ToggleBundlePackage`) and drops the rest.
+
+Do not APPROVE Phase 3 / close REPORT until (1) Flatpak detection is honest on NixOS, (2) GPU detect actually runs, (3–5) System Settings groups/DNS/TCP/hostname match the ticked parity rows, (6) helper-missing does not spawn on nav.
+
+## Task 12-14 DA
+
+**APPROVE** `e01d7d4` (`feat: run local Nix preview and helper apply on the same session`)
+
+Reviewed that commit snapshot on `cosmic-migration` (later `2af80e6` only disables helper-missing buttons). The six checks pass. Spot-check: `cargo test -p gui --lib --offline -- session::tests` → **4 passed**; `core::apply::tests` → **32 passed**; common rollback serde + helper `rollback_rejects_unknown_activate` passed. Did not re-run `scripts/verify.sh` or Flatpak/weston.
+
+### Pass
+
+- **Apply+WriteState is one helper process.** `crates/gui/src/helper/session.rs` `run_blocking` spawns `HelperClient` once. `HelperOp::Apply` runs `run_apply_chain` on that client: `EnsureDirectories` → `Apply` (recv until `ApplyComplete`) → `WriteState` on the same stdin when `success && then_write_state` and `save` is `Some`. GUI `ConfirmApply` emits a single `Intent::SpawnHelper`; `ApplyComplete` does not spawn a second save. Test `apply_plus_save_is_one_spawn_and_writes_state` asserts spawn count **1** and request types `EnsureDirectories`, `Apply`, `WriteState`. Helper `main` keeps reading stdin, so the chain is one process.
+- **DryRun no WriteState.** `RequestDryRun` → `start_rebuild(DryBuild, false)` → `save: None`, `then_write_state: false`. Session writes state only when `success && then_write_state`. Tests: `request_dry_run_spawns_dry_build_without_write_state`, `dry_run_does_not_write_state` (even with a dummy `save`), `failed_apply_does_not_write_state`.
+- **Rollback activate switch/boot.** `HelperRequest::RollbackGeneration.activate` defaults to `"switch"` (old JSON). Helper `rollback_generation` rejects anything else, then `switch-to-configuration` gets `switch` or `boot`. Dialog is Cancel / Set for Next Boot / Switch Now; `ConfirmRollback` maps `SwitchNow`→`"switch"`, `SetForNextBoot`→`"boot"`. Tests cover serde default, boot round-trip, GUI request difference, and unknown activate.
+- **No `pkexec`/`nix-env` in `crates/gui` except `spawn.rs`.** `rg pkexec crates/gui` is `helper/spawn.rs` only. `rg nix-env crates/gui` is empty. Generations/maintenance go through `ListGenerations` / `RollbackGeneration` / `DeleteGenerations` / `GetDiskUsage` / allowlisted `RunMaintenance`. Maintenance log is `$ {command}`, not pkexec.
+- **Nav does not cancel apply.** `nav_intents` changes `page` and title; it does not clear `busy` or emit `CloseSession`. `NavSelect(Generations|Maintenance)` while busy returns no spawn (`load_*` early-out). Test `nav_during_apply_does_not_spawn_or_cancel` keeps `Busy::Applying`. Helper session is a `Task::stream`, not a nav-keyed subscription.
+- **Local preview no helper.** `SelectProfile` / `RefreshProfilePreview` → `Intent::LocalProfilePreview`; `NavSelect(Apply)` / `RefreshPreview` → `Intent::LocalPreview`. `app.rs` runs `generate_preview_full_from` / `read_template_from` on `Flags.templates_dir`. No `SpawnHelper`.
+
+### Non-blocking
+
+- `session::stream` is `stream::once(run_blocking).flat_map(iter)`: Log lines are read live on the helper pipe, then delivered to iced in one batch after the chain finishes. Spinner/busy still work; live log view does not. Not a second pkexec.
+- `e01d7d4` Apply/Dry Run/rollback/maintenance buttons still armed when `helper_missing` (`busy == Idle` only). Click still cannot hang: unavailable spec → `SpawnFailed`, banner + toast, no pkexec. `2af80e6` disables those actions.
+- `Intent::SendOnSession` / `CloseSession` remain no-ops (`// Session chaining is task 12.`). Chaining lives in `session.rs`; leave the stubs or delete them.
+
 ## Task 12–14 — Architecture plan
 
 Make apply/preview/generations/maintenance actually run without a second pkexec.
@@ -16,6 +115,46 @@ Local preview uses Flags `templates_dir` (`generate_preview_full_from` / `read_t
 
 `RollbackGeneration.activate` defaults to `"switch"` (old JSON). Helper `switch-to-configuration` uses `switch`|`boot`. ListGenerations fills nixos/kernel from `system-N-link` (two reads). Maintenance looks up `default_maintenance_actions()` and sends the exact allowlist string; log prints `$ {command}` (not pkexec). `rg pkexec crates/gui` is `spawn.rs` only. `AppModel::test_model()` uses `Core::default()`.
 
+
+## Pages + hardware DA
+
+**REQUEST CHANGES** `3d1d37c` (package parser), `7062ae6` (HardwareConfig Nix), `2a5d568` (AppState tests), `1914e54` (libcosmic settings pages)
+
+Reviewed the four commit snapshots on `cosmic-migration` (HEAD = `1914e54`). Parser matches GTK. Views do not spawn `pkexec`. No UDP widget. NVIDIA widgets are **absent** (not insensitive); Thermald stays present + `toggler_maybe`. Those checks pass. Do not land: hardware.nix still hardcodes power-profiles-daemon, and the NVIDIA `None` vs shown-Stable / modesetting-default contract is wrong.
+
+### Pass
+
+- **Parser = GTK `PackagesPage`.** `crates/gui/src/core/packages.rs` is the GTK methods (`parse_package_input` / `clean_package_name` / `is_valid_package_name` / all-bundles map) with the same branch order. Unit tests cover brackets, commas, newlines, `with pkgs;`, `pkgs.` / `nixpkgs#`, ASCII ident 1–128, `pkgs.foo pkgs.bar` not split (GTK skips the space branch when the string starts with `pkgs.`), and in-bundle toasts against **all** catalog bundles (`git` → Development Tools). `AddPackagesFromInput` toasts match GTK copy and timeouts (3s / 4s).
+- **No UDP widget.** `view/network.rs` is firewall + TCP chips `{22,80,443,8080}` + custom TCP + SSH + Tailscale. No UDP row, no `SetUdp*` message (C19). `allowed_udp_ports` still round-trips in `state_mutations.rs`.
+- **No `pkexec` in views.** `rg pkexec crates/gui/src/view crates/gui/src/widget` is empty. No `Command` / `std::process` / `spawn` there. Hardware GPU string is `app.gpu_vendor` (architecture `Intent::DetectGpu` → `integration::detect_gpu`). Generations/maintenance emit `Message::*` only.
+- **NVIDIA absent vs Thermald insensitive (the widgets).** `view/hardware.rs`: `show_nvidia = !is_arm && gpu_vendor.contains("nvidia")`; the four NVIDIA controls are not built otherwise. Thermald row is always built; ARM uses `toggler_maybe(..., (!is_arm).then_some(SetThermaldEnabled))` plus `hardware-thermald-arm` (GTK `.sensitive(!is_arm)` + “Intel-only…”). ARM banner copy matches ux.md.
+- **C3 IPC shape.** `Generate`/`Apply` take `#[serde(default)] hardware_config`. Old GTK Apply JSON without the field deserializes. `generate_hardware_nix(&HardwareConfig)` consumes driver index 0–3, modesetting, NVIDIA PM, open, PulseAudio/None, low-latency, `powerOnBoot` from autopower. Import when `has_settings()`, not bluetooth-only. Sibling bluetooth is OR-ed. NVIDIA `powerManagement.enable` is **not** the old hardcoded `true` — it follows `hw.nvidia_powermanagement` (review-phase1 §0.4).
+- **FTL.** `gui.ftl` and `nixos_toolkit.ftl` are byte-identical after `1914e54`.
+
+### Blockers
+
+1. **hardware.nix hardcodes power-profiles-daemon.** `generate_hardware_nix` (`crates/common/src/nix.rs`): if `tlp_enabled` write TLP and `power-profiles-daemon.enable = false`; **else always** write PPD enable + a oneshot `powerprofilesctl set {balanced|performance|power-saver}`. Tests lock that in (`power_profile_maps_when_tlp_off` asserts `HardwareConfig::default()` contains `power-profiles-daemon.enable = true`). GTK’s generator only emitted TLP when `tlp_enabled`; with TLP off it wrote **no** power section. `has_settings()` is false for default, so the file is skipped until any other field is set — then bluetooth-only / PulseAudio-only / NVIDIA-only apply **also** enables PPD. That is the C3 footgun with a new name: not NVIDIA `powerManagement.enable = true`, but system PM enabled as a stowaway. PipeWire (audio default 0) is omitted unless low-latency; Balanced PPD (power default 0) is not. Pick one rule: emit a section only when that field is non-default, or admit that Balanced is an applied default and make `has_settings()` agree (every apply writes hardware.nix).
+
+2. **NVIDIA `None` vs shown Stable; modesetting default off.** GTK built the NVIDIA combo at selected 0 and Modesetting **on**; `get_hardware_config` then returned `Some(selected)` / `is_active()`. Cosmic:
+   - `GpuDetected` only stores `gpu_vendor` (`apply.rs`). It does not `SetNvidiaDriver(Some(0))` or turn modesetting on.
+   - The dropdown uses `hw.nvidia_driver.unwrap_or(0)` so the UI shows Stable while state stays `None`.
+   - `HardwareConfig` Default has `nvidia_modesetting: false` (GTK widget default was `active(true)`).
+   - `generate_hardware_nix` skips the GPU section when `nvidia_driver` is `None` (test `nvidia_none_omits_gpu_section`).
+   Detected NVIDIA, user never touches the combo, Apply → no `videoDrivers`, modesetting would have been off anyway. `SetNvidiaDriver(Option<u8>)` means **absent widgets ⇒ None**, not “visible combo, None in state”. On detect (x86 NVIDIA): set `Some(0)` and `nvidia_modesetting = true`. ARM / non-NVIDIA: keep `None` and do not build the widgets (already done). Packaging still has no test that ARM/non-NVIDIA ⇒ `nvidia_driver is None` (PLAN task 10).
+
+3. **Empty-apply tests lie.** `AppState::apply_is_empty()` (7062ae6) counts non-default hardware (bluetooth-only is **not** empty). `crates/gui/tests/gui_state.rs` (2a5d568) reimplements the old profile+bundles+packages predicate and asserts `set_bluetooth_enabled(true)` is still empty. That file does not call `AppState::apply_is_empty()`. Fix the integration test or it will keep passing while documenting the GTK toy.
+
+### Other parity gaps (fix with the blockers or tick as task 5/8/12)
+
+- **Profiles preview is dead.** `SelectProfile` only mutates state (`Vec::new()`). `RefreshProfilePreview` is never emitted from `view/profiles.rs`. `Intent::LocalProfilePreview` is a comment in `app.rs` (“task 12 / 5”). Radio select leaves `# Select a profile to see preview`.
+- **Apply not disabled when helper-missing.** `view/apply.rs` enables Apply/Dry Run on `busy == Idle` only. PLAN: helper-missing ⇒ Apply disabled + banner, no pkexec. Banner exists; the buttons do not check `helper_missing`.
+- **Hostname charset.** ux.md / GTK: `[A-Za-z0-9-]`. `HostnameChanged` trims, no-ops vs `system_info.hostname`, does not validate charset (`nixo_` can sit in state).
+- **PackagesOnly vs Normal.** `RequestApply` is still a bool empty/not. `gui_state.rs` records that; PLAN three copies are not done (task 12).
+- **Switch generation dialog** has no Boot vs Switch Now in `Dialog::ConfirmRollback { generation }` (task 13 / C4). View only emits `RequestRollback`.
+
+Non-blocking: service names stay English in `view/services.rs` (GTK catalog); 21 ids + rustdesk info + Nix-option tooltip are there. Bundle `ArmCompat::None` uses `on_toggle_maybe` / `on_press_maybe` (insensitive, not missing). Custom TCP field shows non-preset ports only. `on_input` merge-add matches GTK `connect_changed` on the EntryRow (also only-add).
+
+Do not APPROVE until (1) PPD is not a stowaway on every hardware.nix, (2) NVIDIA detect writes `Some(0)` + modesetting on and Apply actually emits the NVIDIA block, (3) `gui_state.rs` uses `AppState::apply_is_empty()`.
 
 ## Task 2 — Packaging tests (landed)
 

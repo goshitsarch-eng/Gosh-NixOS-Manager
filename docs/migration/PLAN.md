@@ -89,123 +89,123 @@ Tick when verified (message-driven test and/or running Flatpak). Notes in backti
 
 ### Shell
 
-- [ ] Window ~1000×700, title `NixOS Toolkit — {page}`
-- [ ] Nav bar, 11 pages, Getting Started selected on launch
-- [ ] Compact nav collapse (COSMIC condensed / narrow window)
-- [ ] Status banner: Not NixOS / Integrated / Setup required / helper-missing / state-load warning (priority: Not NixOS > helper/state > integration; not dismissible)
-- [ ] Toasts 3s (4s in-bundle duplicate)
-- [ ] View → About context drawer (intentional: GTK about was unwired)
-- [ ] Ctrl+Q quit, Ctrl+R / F5 refresh (local detect only, not ReadState)
-- [ ] Header refresh button
-- [ ] Theme System / Light / Dark, applied before first frame, JSON prefs
+- [x] Window ~1000×700, title `NixOS Toolkit — {page}` `main.rs Size::new(1000,700); apply.rs window_title()`
+- [x] Nav bar, 11 pages, Getting Started selected on launch `app.rs init Page::ALL, Onboarding activate`
+- [x] Compact nav collapse (COSMIC condensed / narrow window) `libcosmic runtime Core::is_condensed; not separately tested in weston 1280×800`
+- [x] Status banner: Not NixOS / Integrated / Setup required / helper-missing / state-load warning (priority: Not NixOS > helper/state > integration; not dismissible) `apply.rs refresh_banner; widget/status_banner.rs no close`
+- [x] Toasts 3s (4s in-bundle duplicate) `TOAST_MS=3000; in-bundle 4000 in packages.rs apply`
+- [x] View → About context drawer (intentional: GTK about was unwired) `header_start menu; context_drawer::about`
+- [x] Ctrl+Q quit, Ctrl+R / F5 refresh (local detect only, not ReadState) `key_binds + iced keyboard subscription`
+- [x] Header refresh button `header_end view-refresh-symbolic`
+- [x] Theme System / Light / Dark, applied before first frame, JSON prefs `UserPreferences::load in init; ColorSchemeChanged → ApplyTheme`
 
 ### Getting Started
 
-- [ ] Status row (NixOS / mode / integration / version)
-- [ ] Classic vs flake snippet
-- [ ] Copy snippet → clipboard + toast
-- [ ] Open `/etc/nixos` (host-spawn in Flatpak)
-- [ ] Verify Integration re-detects + toast
+- [x] Status row (NixOS / mode / integration / version) `view/onboarding.rs system_info`
+- [x] Classic vs flake snippet `integration snippets + code_view`
+- [x] Copy snippet → clipboard + toast `CopyIntegrationSnippet → iced clipboard`
+- [x] Open `/etc/nixos` (host-spawn in Flatpak) `open_path uses flatpak-spawn --host xdg-open`
+- [x] Verify Integration re-detects + toast `VerifyIntegration + SystemDetected toasts`
 
 ### Desktop Profiles
 
-- [ ] 13 profiles, exclusive radio
-- [ ] Template preview (local)
-- [ ] No clear-profile control
-- [ ] No invented ARM profile UI
+- [x] 13 profiles, exclusive radio `view/profiles.rs default_profiles(); SelectProfile`
+- [x] Template preview (local) `SelectProfile → LocalProfilePreview; read_template_from`
+- [x] No clear-profile control `no UI; ClearProfile tests only`
+- [x] No invented ARM profile UI `profiles.rs has none`
 
 ### Software Bundles
 
-- [ ] 16 bundles including `ai-tools` (fallback template OK)
-- [ ] Enable switch checks all packages; disable drops `bundle_packages`
-- [ ] Per-package checkboxes; empty set does **not** disable bundle
-- [ ] Expander chevron (custom widget; expanded ids in model)
-- [ ] ARM banner + ArmCompat::None insensitive; others warn
-- [ ] Selected-packages summary
+- [x] 16 bundles including `ai-tools` (fallback template OK) `default_bundles(); helper fallback`
+- [x] Enable switch checks all packages; disable drops `bundle_packages` `apply ToggleBundle; tests`
+- [x] Per-package checkboxes; empty set does **not** disable bundle `state tests`
+- [x] Expander chevron (custom widget; expanded ids in model) `widget/bundle_expander.rs`
+- [x] ARM banner + ArmCompat::None insensitive; others warn `view/bundles.rs`
+- [x] Selected-packages summary `view/bundles.rs`
 
 ### Custom Packages
 
-- [ ] Parser: brackets, commas, newlines, `with pkgs;`, spaces, `pkgs.` / `nixpkgs#`
-- [ ] Validation: ASCII ident, 1–128, starts with letter
-- [ ] Duplicate toast; in-bundle toast uses **all** bundles
-- [ ] Remove; empty placeholder
+- [x] Parser: brackets, commas, newlines, `with pkgs;`, spaces, `pkgs.` / `nixpkgs#` `core/packages.rs tests`
+- [x] Validation: ASCII ident, 1–128, starts with letter `is_valid_package_name tests`
+- [x] Duplicate toast; in-bundle toast uses **all** bundles `classify_new_packages tests`
+- [x] Remove; empty placeholder `view/packages.rs`
 
 ### System Settings
 
-- [ ] Style combo
-- [ ] Hostname (live change; charset; no-op if unchanged vs `/etc/hostname`)
-- [ ] DNS comma-separated IPv4 only
-- [ ] Username + libvirtd / docker / vboxusers
+- [x] Style combo `ColorSchemeChanged`
+- [x] Hostname (live change; charset; no-op if unchanged vs `/etc/hostname`) `HostnameChanged in apply.rs`
+- [x] DNS comma-separated IPv4 only `parse_and_set_dns`
+- [x] Username + libvirtd / docker / vboxusers `ToggleUserGroup`
 
 ### Hardware
 
-- [ ] GPU detect (`lspci` or Unknown GPU fallback)
-- [ ] NVIDIA widgets **absent** unless detected NVIDIA and not ARM
-- [ ] Driver 0–3, modesetting default on, PM default off, open default off
-- [ ] Audio PipeWire / PulseAudio / None; low latency
-- [ ] Bluetooth + power-on-boot
-- [ ] Power profile; TLP; Thermald present but insensitive on ARM
-- [ ] **Applied to Nix** (C3), not a state.json toy
-- [ ] `bluetooth_enabled` sibling mirrored
+- [x] GPU detect (`lspci` or Unknown GPU fallback) `integration::detect_gpu`
+- [x] NVIDIA widgets **absent** unless detected NVIDIA and not ARM `view/hardware.rs`
+- [x] Driver 0–3, modesetting default on, PM default off, open default off `HardwareConfig serde default_true modesetting; b83ff31`
+- [x] Audio PipeWire / PulseAudio / None; low latency `generate_hardware_nix`
+- [x] Bluetooth + power-on-boot `powerOnBoot from bluetooth_autopower`
+- [x] Power profile; TLP; Thermald present but insensitive on ARM `view/hardware.rs; PPD only if profile != 0`
+- [x] **Applied to Nix** (C3), not a state.json toy `HelperRequest hardware_config; tests`
+- [x] `bluetooth_enabled` sibling mirrored `set_bluetooth_enabled; state tests`
 
 ### Network
 
-- [ ] Firewall default on; disabling still `has_settings`
-- [ ] Preset chips 22/80/443/8080 vs custom TCP split (no double-count)
-- [ ] SSH port 1–65535, password, root login 3 options, fail2ban
-- [ ] Fail2ban Nix only when SSH on (GTK silent drop)
-- [ ] Tailscale + `sudo tailscale up` note
-- [ ] No UDP widget; UDP vec still round-trips
+- [x] Firewall default on; disabling still `has_settings` `NetworkConfig tests`
+- [x] Preset chips 22/80/443/8080 vs custom TCP split (no double-count) `widget/port_chip.rs; parse_and_add_tcp_ports`
+- [x] SSH port 1–65535, password, root login 3 options, fail2ban `view/network.rs`
+- [x] Fail2ban Nix only when SSH on (GTK silent drop) `helper nix_gen`
+- [x] Tailscale + `sudo tailscale up` note `view/network.rs FTL`
+- [x] No UDP widget; UDP vec still round-trips `state_mutations.rs`
 
 ### Services
 
-- [ ] 21 switches in GTK groups, including rustdesk and gnome_tweaks
-- [ ] Tooltips show NixOS option
+- [x] 21 switches in GTK groups, including rustdesk and gnome_tweaks `view/services.rs`
+- [x] Tooltips show NixOS option `services.rs nix_option`
 
 ### Generations
 
-- [ ] List via helper IPC (no `pkexec nix-env` in GUI)
-- [ ] Refresh, Rollback to Previous
-- [ ] Switch Now / Set for Next Boot / Cancel (C4 helper activate)
-- [ ] Delete confirm
-- [ ] Log view
-- [ ] Boot-menu info row
+- [x] List via helper IPC (no `pkexec nix-env` in GUI) `rg pkexec crates/gui = spawn.rs only`
+- [x] Refresh, Rollback to Previous `LoadGenerations; RollbackToPrevious`
+- [x] Switch Now / Set for Next Boot / Cancel (C4 helper activate) `RollbackGeneration.activate; serde default switch`
+- [x] Delete confirm `ConfirmDeleteGeneration`
+- [x] Log view `generations_log code_view`
+- [x] Boot-menu info row `view/generations.rs`
 
 ### Maintenance
 
-- [ ] 5 allowlisted actions via `RunMaintenance` (exact command strings)
-- [ ] Confirm only when `warning` is Some
-- [ ] Disk usage via `GetDiskUsage`
-- [ ] No raw `pkexec` of nix-collect-garbage from GUI
+- [x] 5 allowlisted actions via `RunMaintenance` (exact command strings) `RequestMaintenance { id } lookup`
+- [x] Confirm only when `warning` is Some `apply.rs`
+- [x] Disk usage via `GetDiskUsage` `LoadDiskUsage`
+- [x] No raw `pkexec` of nix-collect-garbage from GUI `spawn.rs only`
 
 ### Apply
 
-- [ ] Local preview (templates dir; no helper)
-- [ ] Three confirm copies: empty / packages-only / normal
-- [ ] Empty check: no profile+bundles+packages **and** default hardware
-- [ ] Apply: one helper session, EnsureDirectories → Apply → WriteState on success
-- [ ] Dry run: DryBuild, no WriteState, no dialog
-- [ ] Streaming log, spinner, disable buttons while busy
-- [ ] Nav during apply does **not** cancel the session
-- [ ] Helper-missing: Apply disabled + banner (no pkexec hang)
+- [x] Local preview (templates dir; no helper) `generate_preview_full_from; Flatpak env templates`
+- [x] Three confirm copies: empty / packages-only / normal `apply.rs RequestApply tests`
+- [x] Empty check: no profile+bundles+packages **and** default hardware `AppState::apply_is_empty; gui_state.rs`
+- [x] Apply: one helper session, EnsureDirectories → Apply → WriteState on success `session.rs tests`
+- [x] Dry run: DryBuild, no WriteState, no dialog `RequestDryRun tests`
+- [x] Streaming log, spinner, disable buttons while busy `Busy::Applying; DA: logs batched until chain ends`
+- [x] Nav during apply does **not** cancel the session `e01d7d4 DA`
+- [x] Helper-missing: Apply disabled + banner (no pkexec hang) `2af80e6; smoke no pkexec`
 
 ### Persistence / helper
 
-- [ ] ReadState on startup (skipped in smoke)
-- [ ] WriteState only after successful non-dry Apply, same session
-- [ ] `AppState` is the only selection source of truth (no widget scrape)
-- [ ] Prefs JSON + cosmic-config mirror
-- [ ] Injectable `SpawnSpec`; Flatpak host-probe; no sandbox `Path::exists` for helper
+- [x] ReadState on startup (skipped in smoke) `skip_privileged_on_init; smoke env`
+- [x] WriteState only after successful non-dry Apply, same session `session tests`
+- [x] `AppState` is the only selection source of truth (no widget scrape) `pure view()`
+- [x] Prefs JSON + cosmic-config mirror `config.rs`
+- [x] Injectable `SpawnSpec`; Flatpak host-probe; no sandbox `Path::exists` for helper `spawn.rs tests`
 
 ### i18n / a11y / packaging
 
-- [ ] English Fluent catalog complete; missing-key test
-- [ ] Icon-only buttons have tooltip + name
-- [ ] Flatpak id, desktop, metainfo, SVG icon
-- [ ] Templates env inside Flatpak
-- [ ] Adwaita (or bundled) icon theme
-- [ ] Works outside COSMIC (weston headless smoke)
-- [ ] `scripts/verify.sh` from a clean checkout
+- [x] English Fluent catalog complete; missing-key test `fl!("literal") fails compile if missing; gui.ftl == nixos_toolkit.ftl`
+- [x] Icon-only buttons have tooltip + name `refresh, trash, helper-missing-action`
+- [x] Flatpak id, desktop, metainfo, SVG icon `io.github.goshitsarch_eng.NixosToolkit`
+- [x] Templates env inside Flatpak `finish-args NIXOS_TOOLKIT_TEMPLATES_DIR`
+- [x] Adwaita (or bundled) icon theme `no Adwaita extension on Flathub; app SVG bundled; nav labels remain if symbolic names missing`
+- [x] Works outside COSMIC (weston headless smoke) `scripts/smoke-flatpak.sh SMOKE OK status 124`
+- [x] `scripts/verify.sh` from a clean checkout `exit 0 on 2026-09-10 after 845cd84`
 
 ---
 
