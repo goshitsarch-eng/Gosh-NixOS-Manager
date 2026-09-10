@@ -203,6 +203,23 @@ impl AppModel {
         }
     }
 
+    pub(crate) fn seed_username_from_host(&mut self) {
+        if self.state.username.is_some() {
+            return;
+        }
+        self.state.username = default_username(
+            self.flags.skip_host_probes,
+            None,
+            std::env::var("USER").ok().as_deref(),
+        );
+    }
+
+    pub(crate) fn sync_draft_inputs(&mut self) {
+        self.dns_input = self.state.dns_servers.join(", ");
+        self.custom_tcp_input =
+            crate::state::custom_tcp_input_from_ports(&self.state.network_config.allowed_tcp_ports);
+    }
+
     #[must_use]
     pub(crate) fn helper_can_spawn(&self) -> bool {
         self.flags.spawn.helper_available && !self.helper_missing
@@ -224,6 +241,31 @@ impl AppModel {
         }
         intents
     }
+}
+
+#[must_use]
+pub(crate) fn default_username(
+    skip_host_probes: bool,
+    existing: Option<&str>,
+    user_env: Option<&str>,
+) -> Option<String> {
+    if let Some(user) = existing {
+        return Some(user.to_string());
+    }
+    if skip_host_probes {
+        return None;
+    }
+    user_env
+        .map(str::trim)
+        .filter(|s| is_valid_username(s))
+        .map(ToString::to_string)
+}
+
+#[must_use]
+pub(crate) fn is_valid_username(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 impl Application for AppModel {
@@ -336,6 +378,8 @@ impl Application for AppModel {
             verify_pending: false,
         };
 
+        app.seed_username_from_host();
+        app.sync_draft_inputs();
         if helper_missing {
             app.banner = Some(Banner {
                 kind: BannerKind::Warning,

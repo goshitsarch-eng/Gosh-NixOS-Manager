@@ -9,6 +9,9 @@ use common::nix::NixGenOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// TCP ports owned by the network chips, not the custom-ports field.
+pub const PRESET_TCP_PORTS: [u16; 4] = [22, 80, 443, 8080];
+
 /// Current application state (GUI model).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppState {
@@ -246,6 +249,42 @@ impl AppState {
             if port == 0 {
                 return Err(format!("invalid TCP port: {s}"));
             }
+            if !ports.contains(&port) {
+                ports.push(port);
+            }
+        }
+        self.network_config.allowed_tcp_ports = ports;
+        self.has_changes = true;
+        Ok(())
+    }
+
+    /// Replace custom TCP extras. Preset chips stay; parsed extras replace the rest.
+    pub fn parse_and_set_custom_tcp_ports(&mut self, raw: &str) -> Result<(), String> {
+        let mut extras = Vec::new();
+        for part in raw.split([',', ' ', '\n']) {
+            let s = part.trim();
+            if s.is_empty() {
+                continue;
+            }
+            let port: u16 = s.parse().map_err(|_| format!("invalid TCP port: {s}"))?;
+            if port == 0 {
+                return Err(format!("invalid TCP port: {s}"));
+            }
+            if PRESET_TCP_PORTS.contains(&port) {
+                continue;
+            }
+            if !extras.contains(&port) {
+                extras.push(port);
+            }
+        }
+        let mut ports: Vec<u16> = self
+            .network_config
+            .allowed_tcp_ports
+            .iter()
+            .copied()
+            .filter(|port| PRESET_TCP_PORTS.contains(port))
+            .collect();
+        for port in extras {
             if !ports.contains(&port) {
                 ports.push(port);
             }
@@ -528,6 +567,17 @@ impl AppState {
             parts.join("\n")
         }
     }
+}
+
+/// Comma-separated extra TCP ports (excludes the preset chips).
+#[must_use]
+pub fn custom_tcp_input_from_ports(ports: &[u16]) -> String {
+    ports
+        .iter()
+        .filter(|port| !PRESET_TCP_PORTS.contains(port))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn is_ipv4(s: &str) -> bool {

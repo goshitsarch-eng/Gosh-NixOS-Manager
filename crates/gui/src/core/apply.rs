@@ -52,6 +52,7 @@ impl AppModel {
             Message::RefreshSystem => vec![Intent::DetectSystem, Intent::DetectGpu],
             Message::SystemDetected(info) => {
                 self.system_info = info;
+                self.seed_username_from_host();
                 self.refresh_banner();
                 if self.verify_pending {
                     self.verify_pending = false;
@@ -221,9 +222,17 @@ impl AppModel {
             Message::HostnameChanged(hostname) => {
                 let trimmed = hostname.trim().to_string();
                 if trimmed.is_empty() {
+                    self.field_errors.hostname = None;
                     self.state.hostname = None;
                     self.state.has_changes = true;
-                } else if self.system_info.hostname.as_deref() == Some(trimmed.as_str()) {
+                    return Vec::new();
+                }
+                if let Some(err) = hostname_charset_error(&trimmed) {
+                    self.field_errors.hostname = Some(err);
+                    return Vec::new();
+                }
+                self.field_errors.hostname = None;
+                if self.system_info.hostname.as_deref() == Some(trimmed.as_str()) {
                     self.state.hostname = None;
                 } else {
                     self.state.set_hostname(trimmed);
@@ -231,10 +240,9 @@ impl AppModel {
                 Vec::new()
             }
             Message::DnsServersChanged(raw) => {
-                if let Err(err) = self.state.parse_and_set_dns(&raw) {
-                    self.field_errors.dns = Some(err);
-                } else {
-                    self.field_errors.dns = None;
+                match self.state.parse_and_set_dns(&raw) {
+                    Ok(()) => self.field_errors.dns = None,
+                    Err(err) => self.field_errors.dns = Some(err),
                 }
                 self.dns_input = raw;
                 Vec::new()
@@ -321,7 +329,7 @@ impl AppModel {
                 Vec::new()
             }
             Message::CustomTcpPortsChanged(raw) => {
-                if let Err(err) = self.state.parse_and_add_tcp_ports(&raw) {
+                if let Err(err) = self.state.parse_and_set_custom_tcp_ports(&raw) {
                     tracing::debug!(err, "invalid custom TCP ports");
                 }
                 self.custom_tcp_input = raw;
@@ -506,6 +514,8 @@ impl AppModel {
         match response {
             HelperResponse::State(ipc) => {
                 self.state = crate::state::AppState::from_ipc_state(ipc);
+                self.sync_draft_inputs();
+                self.seed_username_from_host();
                 self.state_load_warning = None;
                 self.helper = HelperStatus::Idle;
                 if self.busy == Busy::LoadingState {
@@ -938,6 +948,20 @@ impl AppModel {
     }
 }
 
+/// GTK hostname charset `[A-Za-z0-9-]`, max 63 characters. Empty is handled by the caller.
+fn hostname_charset_error(hostname: &str) -> Option<String> {
+    if !hostname
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Some("Hostname contains invalid characters".into());
+    }
+    if hostname.len() > 63 {
+        return Some("Hostname too long (max 63 characters)".into());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1281,11 +1305,9 @@ mod tests {
             port: 22,
             enabled: true,
         });
-        app.apply(Message::CustomTcpPortsChanged("80, 443".into()));
-        assert_eq!(
-            app.state.network_config.allowed_tcp_ports,
-            vec![22, 80, 443]
-        );
+        app.apply(Message::CustomTcpPortsChanged("9090".into()));
+        assert_eq!(app.custom_tcp_input, "9090");
+        assert_eq!(app.state.network_config.allowed_tcp_ports, vec![22, 9090]);
 
         app.apply(Message::ToggleService {
             id: "printing".into(),
@@ -1779,6 +1801,7 @@ mod tests {
     #[test]
     fn refresh_system_detects_system_and_gpu_without_helper() {
         let mut app = test_app();
+        assert!(app.helper_missing);
         let intents = app.apply(Message::RefreshSystem);
         assert!(intents
             .iter()
@@ -1836,5 +1859,120 @@ mod tests {
         let intents = app.apply(Message::RequestDryRun);
         assert!(spawn_helper(&intents).is_none());
         assert_eq!(app.busy, Busy::Idle);
+    }
+
+    #[test]
+    fn hostname_rejects_invalid_charset_and_matches_system_noop() {
+        let mut app = test_app();
+        app.system_info.hostname = Some("nixos".into());
+
+        app.apply(Message::HostnameChanged("desk-1".into()));
+        assert_eq!(app.state.hostname.as_deref(), Some("desk-1"));
+        assert!(app.field_errors.hostname.is_none());
+
+        app.apply(Message::HostnameChanged("nixo_".into()));
+        assert_eq!(app.state.hostname.as_deref(), Some("desk-1"));
+        assert!(app.field_errors.hostname.is_some());
+
+        app.apply(Message::HostnameChanged("bad.host".into()));
+        assert_eq!(app.state.hostname.as_deref(), Some("desk-1"));
+
+        app.apply(Message::HostnameChanged("nixos".into()));
+        assert!(app.state.hostname.is_none());
+        assert!(app.field_errors.hostname.is_none());
+
+        app.apply(Message::HostnameChanged("".into()));
+        assert!(app.state.hostname.is_none());
+        assert!(app.field_errors.hostname.is_none());
+    }
+
+    #[test]
+    fn dns_partial_keeps_input_and_does_not_clobber_servers() {
+        let mut app = test_app();
+        app.apply(Message::DnsServersChanged("1.1.1.1".into()));
+        assert_eq!(app.dns_input, "1.1.1.1");
+        assert_eq!(app.state.dns_servers, ["1.1.1.1"]);
+        assert!(app.field_errors.dns.is_none());
+
+        app.apply(Message::DnsServersChanged("1.1.1.1, 8".into()));
+        assert_eq!(app.dns_input, "1.1.1.1, 8");
+        assert_eq!(app.state.dns_servers, ["1.1.1.1"]);
+        assert!(app.field_errors.dns.is_some());
+
+        app.apply(Message::DnsServersChanged("1.1.1.1, 8.8.8.8".into()));
+        assert_eq!(app.dns_input, "1.1.1.1, 8.8.8.8");
+        assert_eq!(app.state.dns_servers, ["1.1.1.1", "8.8.8.8"]);
+        assert!(app.field_errors.dns.is_none());
+    }
+
+    #[test]
+    fn custom_tcp_replace_does_not_accumulate_prefixes() {
+        let mut app = test_app();
+        app.apply(Message::ToggleTcpPort {
+            port: 22,
+            enabled: true,
+        });
+        app.apply(Message::CustomTcpPortsChanged("9".into()));
+        app.apply(Message::CustomTcpPortsChanged("90".into()));
+        app.apply(Message::CustomTcpPortsChanged("909".into()));
+        app.apply(Message::CustomTcpPortsChanged("9090".into()));
+        assert_eq!(app.custom_tcp_input, "9090");
+        assert_eq!(app.state.network_config.allowed_tcp_ports, vec![22, 9090]);
+
+        app.apply(Message::CustomTcpPortsChanged("9090, abc".into()));
+        assert_eq!(app.custom_tcp_input, "9090, abc");
+        assert_eq!(app.state.network_config.allowed_tcp_ports, vec![22, 9090]);
+
+        app.apply(Message::CustomTcpPortsChanged(String::new()));
+        assert!(app.custom_tcp_input.is_empty());
+        assert_eq!(app.state.network_config.allowed_tcp_ports, vec![22]);
+    }
+
+    #[test]
+    fn skip_host_probes_does_not_seed_username() {
+        let app = test_app();
+        assert!(app.flags.skip_host_probes);
+        assert!(app.state.username.is_none());
+    }
+
+    #[test]
+    fn default_username_from_user_env() {
+        assert_eq!(crate::app::default_username(true, None, Some("gosh")), None);
+        assert_eq!(
+            crate::app::default_username(false, Some("kept"), Some("other")),
+            Some("kept".into())
+        );
+        assert_eq!(
+            crate::app::default_username(false, None, Some("gosh")),
+            Some("gosh".into())
+        );
+        assert_eq!(
+            crate::app::default_username(false, None, Some("bad user")),
+            None
+        );
+        assert!(crate::app::is_valid_username("gosh"));
+        assert!(crate::app::is_valid_username("gosh_1"));
+        assert!(!crate::app::is_valid_username("bad user"));
+        assert!(!crate::app::is_valid_username(""));
+    }
+
+    #[test]
+    fn helper_state_syncs_dns_and_tcp_drafts_and_seeds_username() {
+        let mut app = test_app();
+        let ipc = IpcAppState {
+            dns_servers: vec!["1.1.1.1".into()],
+            network_config: NetworkConfig {
+                allowed_tcp_ports: vec![22, 9090],
+                ..NetworkConfig::default()
+            },
+            ..IpcAppState::default()
+        };
+        app.apply(Message::Helper(HelperEvent::Response {
+            op: HelperOp::ReadState,
+            response: Box::new(HelperResponse::State(ipc)),
+        }));
+        assert_eq!(app.dns_input, "1.1.1.1");
+        assert_eq!(app.custom_tcp_input, "9090");
+        assert!(app.state.username.is_none());
     }
 }
