@@ -257,12 +257,9 @@ pub fn apply(
     hardware_config: HardwareConfig,
     rebuild_type: RebuildType,
 ) -> HelperResponse {
-    // Ensure directories exist before generating files
-    if let HelperResponse::Error { message, details } = ensure_directories() {
-        return HelperResponse::Error { message, details };
-    }
-
     let dry = matches!(rebuild_type, RebuildType::DryBuild);
+    // Snapshot before EnsureDirectories so a first-time dry-build can restore
+    // "managed dir did not exist" instead of leaving the placeholder tree.
     let snapshot = if dry {
         match snapshot_managed_dir() {
             Ok(snap) => Some(snap),
@@ -276,6 +273,14 @@ pub fn apply(
     } else {
         None
     };
+
+    if let HelperResponse::Error { message, details } = ensure_directories() {
+        let ensure_err = HelperResponse::Error { message, details };
+        if let Some(snapshot) = snapshot {
+            return dry_build_response(ensure_err, restore_managed_snapshot(snapshot));
+        }
+        return ensure_err;
+    }
 
     // Dry-build still writes so nixos-rebuild can evaluate the proposed tree;
     // the snapshot is restored afterwards so nothing is left on disk.
@@ -305,10 +310,14 @@ pub fn apply(
             );
         }
         Err(e) => {
-            return HelperResponse::Error {
+            let generate_err = HelperResponse::Error {
                 message: "Failed to generate configuration".into(),
                 details: Some(e.to_string()),
             };
+            if let Some(snapshot) = snapshot {
+                return dry_build_response(generate_err, restore_managed_snapshot(snapshot));
+            }
+            return generate_err;
         }
     }
 
@@ -320,28 +329,30 @@ pub fn apply(
     };
 
     let response = rebuild::run_rebuild(rebuild_type, config_mode);
-    if dry {
-        if let Some(snapshot) = snapshot {
-            let restore_err = match snapshot.restore() {
-                Ok(()) => {
-                    send_log(
-                        LogLevel::Info,
-                        "Dry-build finished; previous managed configuration restored.".into(),
-                    );
-                    None
-                }
-                Err(e) => {
-                    send_log(
-                        LogLevel::Error,
-                        format!("Dry-build finished but restoring managed files failed: {e}"),
-                    );
-                    Some(e.to_string())
-                }
-            };
-            return dry_build_response(response, restore_err);
-        }
+    if let Some(snapshot) = snapshot {
+        return dry_build_response(response, restore_managed_snapshot(snapshot));
     }
     response
+}
+
+/// Restore a dry-build snapshot. Returns the restore error, if any.
+fn restore_managed_snapshot(snapshot: ManagedDirSnapshot) -> Option<String> {
+    match snapshot.restore() {
+        Ok(()) => {
+            send_log(
+                LogLevel::Info,
+                "Previous managed configuration restored.".into(),
+            );
+            None
+        }
+        Err(e) => {
+            send_log(
+                LogLevel::Error,
+                format!("Restoring managed files failed: {e}"),
+            );
+            Some(e.to_string())
+        }
+    }
 }
 
 /// Combine a dry-build rebuild result with snapshot restore outcome.
@@ -916,11 +927,23 @@ fn parse_hardware_snippet(content: &str) -> HardwareConfig {
     hw
 }
 
+fn parse_wireguard_listen_port_marker(line: &str) -> Option<u16> {
+    let rest = line
+        .trim()
+        .strip_prefix("# nixos-toolkit.wireguardListenPort =")?;
+    let port: u16 = rest.trim().trim_end_matches(';').trim().parse().ok()?;
+    (port != 0).then_some(port)
+}
+
 fn parse_network_snippet(content: &str) -> NetworkConfig {
     let mut cfg = NetworkConfig::default();
     let mut context = String::new();
 
     for line in content.lines() {
+        if let Some(port) = parse_wireguard_listen_port_marker(line) {
+            cfg.wireguard_listen_port = port;
+            continue;
+        }
         update_nix_context(&mut context, line);
         let Some(line) = skip_nix_comment(line) else {
             continue;
@@ -1425,7 +1448,8 @@ mod tests {
     use super::*;
     use common::nix::{
         generate_custom_packages_nix, generate_dns_nix, generate_hardware_nix,
-        generate_hostname_nix, generate_services_nix, generate_user_groups_nix,
+        generate_hostname_nix, generate_network_nix, generate_services_nix,
+        generate_user_groups_nix,
     };
 
     #[test]
@@ -1684,6 +1708,21 @@ mod tests {
         assert!(parsed.fail2ban_enabled);
         assert!(parsed.tailscale_enabled);
         assert!(parsed.wireguard_enabled);
+        assert_eq!(parsed.wireguard_listen_port, 51820);
+    }
+
+    #[test]
+    fn parse_network_snippet_round_trips_generated_wireguard_listen_port() {
+        let cfg = NetworkConfig {
+            wireguard_enabled: true,
+            wireguard_listen_port: 51821,
+            allowed_udp_ports: vec![53],
+            ..NetworkConfig::default()
+        };
+        let parsed = parse_network_snippet(&generate_network_nix(&cfg));
+        assert!(parsed.wireguard_enabled);
+        assert_eq!(parsed.wireguard_listen_port, 51821);
+        assert_eq!(parsed.allowed_udp_ports, vec![53, 51821]);
     }
 
     #[test]

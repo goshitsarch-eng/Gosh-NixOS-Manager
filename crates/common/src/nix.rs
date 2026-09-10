@@ -468,15 +468,13 @@ pub fn generate_ssh_nix(
 /// Generate the combined network.nix file (firewall, SSH, Fail2Ban, VPN).
 pub fn generate_network_nix(config: &NetworkConfig) -> String {
     let mut udp_ports = config.allowed_udp_ports.clone();
-    if config.wireguard_enabled {
-        let wg_port = if config.wireguard_listen_port == 0 {
-            51820
-        } else {
-            config.wireguard_listen_port
-        };
-        if !udp_ports.contains(&wg_port) {
-            udp_ports.push(wg_port);
-        }
+    let wg_listen_port = if config.wireguard_listen_port == 0 {
+        51820
+    } else {
+        config.wireguard_listen_port
+    };
+    if config.wireguard_enabled && !udp_ports.contains(&wg_listen_port) {
+        udp_ports.push(wg_listen_port);
     }
 
     let tcp_str = config
@@ -531,6 +529,10 @@ pub fn generate_network_nix(config: &NetworkConfig) -> String {
 
     if config.wireguard_enabled {
         content.push_str("\n  # WireGuard\n");
+        // Parsed by reconstruct; NixOS has no global listenPort without interfaces.
+        content.push_str(&format!(
+            "  # nixos-toolkit.wireguardListenPort = {wg_listen_port};\n"
+        ));
         content.push_str("  networking.wireguard.enable = true;\n");
     }
 
@@ -1548,6 +1550,20 @@ mod tests {
         });
         assert!(nix.contains("networking.wireguard.enable = true;"));
         assert!(nix.contains("allowedUDPPorts = [ 53 51820 ];"));
+        assert!(nix.contains("# nixos-toolkit.wireguardListenPort = 51820;"));
+    }
+
+    #[test]
+    fn wireguard_custom_listen_port_is_marked_for_reconstruct() {
+        let nix = generate_network_nix(&NetworkConfig {
+            wireguard_enabled: true,
+            wireguard_listen_port: 51821,
+            allowed_udp_ports: vec![53],
+            ..NetworkConfig::default()
+        });
+        assert!(nix.contains("# nixos-toolkit.wireguardListenPort = 51821;"));
+        assert!(nix.contains("allowedUDPPorts = [ 53 51821 ];"));
+        assert!(!nix.contains("nixos-toolkit.wireguardListenPort = 51820;"));
     }
 
     #[test]
