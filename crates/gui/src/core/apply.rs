@@ -262,6 +262,9 @@ impl AppModel {
 
             Message::SetNvidiaDriver(driver) => {
                 self.state.hardware_config.nvidia_driver = driver;
+                if driver == Some(2) {
+                    self.state.hardware_config.nvidia_open = true;
+                }
                 self.state.has_changes = true;
                 Vec::new()
             }
@@ -1066,14 +1069,11 @@ impl AppModel {
 
 /// GTK hostname charset `[A-Za-z0-9-]`, max 63 characters. Empty is handled by the caller.
 fn hostname_charset_error(hostname: &str) -> Option<String> {
-    if !hostname
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
+    if !common::validate::hostname_is_valid(hostname) {
+        if hostname.len() > common::validate::MAX_HOSTNAME_LEN {
+            return Some(crate::fl!("error-hostname-too-long"));
+        }
         return Some(crate::fl!("error-hostname-invalid"));
-    }
-    if hostname.len() > 63 {
-        return Some(crate::fl!("error-hostname-too-long"));
     }
     None
 }
@@ -1604,6 +1604,18 @@ mod tests {
         assert!(app.state.hardware_config.nvidia_driver.is_none());
         assert!(app.hardware_for_nix().nvidia_driver.is_none());
         assert!(app.state.apply_is_empty());
+    }
+
+    #[test]
+    fn nvidia_open_combo_sets_open_flag() {
+        let mut app = test_app();
+        app.apply(Message::SetNvidiaDriver(Some(2)));
+        assert_eq!(app.state.hardware_config.nvidia_driver, Some(2));
+        assert!(app.state.hardware_config.nvidia_open);
+        assert!(
+            app.hardware_for_nix().nvidia_open
+                || app.state.hardware_config.nvidia_driver == Some(2)
+        );
     }
 
     #[test]

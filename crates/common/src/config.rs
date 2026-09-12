@@ -65,9 +65,7 @@ pub fn detect_integration_status(
 fn file_imports_selected_nix(content: Option<&str>) -> bool {
     content.is_some_and(|c| {
         let code = strip_nix_comments(c);
-        SELECTED_NIX_IMPORT_MARKERS
-            .iter()
-            .any(|m| code.contains(m))
+        SELECTED_NIX_IMPORT_MARKERS.iter().any(|m| code.contains(m))
     })
 }
 
@@ -399,8 +397,7 @@ mod tests {
 
     #[test]
     fn import_with_trailing_comment_is_integrated() {
-        let configuration =
-            r#"imports = [ ./nixos-toolkit/state/selected.nix ]; # toolkit"#;
+        let configuration = r#"imports = [ ./nixos-toolkit/state/selected.nix ]; # toolkit"#;
         assert_eq!(
             detect_integration_status(Some(configuration), None),
             IntegrationStatus::Integrated

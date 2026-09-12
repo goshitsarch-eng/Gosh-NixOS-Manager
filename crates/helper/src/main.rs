@@ -13,6 +13,7 @@ mod rebuild;
 
 use anyhow::Result;
 use common::ipc::{HelperRequest, HelperResponse};
+use common::validate::MAX_HELPER_JSON_LINE;
 use std::io::{self, BufRead, Write};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -32,6 +33,19 @@ fn main() -> Result<()> {
         match line {
             Ok(line) => {
                 if line.is_empty() {
+                    continue;
+                }
+
+                if line.len() > MAX_HELPER_JSON_LINE {
+                    let response = HelperResponse::Error {
+                        message: "Request too large".into(),
+                        details: Some(format!("JSON line exceeded {MAX_HELPER_JSON_LINE} bytes")),
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        if writeln!(stdout, "{json}").is_err() || stdout.flush().is_err() {
+                            break;
+                        }
+                    }
                     continue;
                 }
 

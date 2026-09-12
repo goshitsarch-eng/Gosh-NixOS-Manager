@@ -43,6 +43,24 @@ pub fn nix_escape_string(s: &str) -> String {
     out
 }
 
+/// Make `s` safe to interpolate after `# ` in generated Nix.
+///
+/// Newlines would terminate the comment and let the rest of the string become
+/// live Nix (selected.nix is imported by the host). Control characters and `#`
+/// are flattened so a payload cannot smuggle extra comment structure.
+#[must_use]
+pub fn sanitize_nix_comment(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\n' | '\r' => ' ',
+            '#' => '*',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .take(512)
+        .collect()
+}
+
 /// True when `name` is a safe nixpkgs attribute path (dots allowed).
 #[must_use]
 pub fn is_nix_attrpath(name: &str) -> bool {
@@ -218,8 +236,8 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
   ];
 }}
 "#,
-        options.profile.map(|p| p.name.as_str()).unwrap_or("None"),
-        if options.bundles.is_empty() {
+        sanitize_nix_comment(options.profile.map(|p| p.name.as_str()).unwrap_or("None")),
+        sanitize_nix_comment(&if options.bundles.is_empty() {
             "None".to_string()
         } else {
             options
@@ -228,37 +246,37 @@ pub fn generate_selected_nix_full(options: &NixGenOptions) -> String {
                 .map(|b| b.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
-        },
-        if options.dns_servers.is_empty() {
+        }),
+        sanitize_nix_comment(&if options.dns_servers.is_empty() {
             "None".to_string()
         } else {
             options.dns_servers.join(", ")
-        },
-        if options.user_groups.is_empty() {
+        }),
+        sanitize_nix_comment(&if options.user_groups.is_empty() {
             "None".to_string()
         } else {
             options.user_groups.join(", ")
-        },
+        }),
         if options.effective_hardware().bluetooth_enabled {
             "Enabled"
         } else {
             "Disabled"
         },
-        if options.custom_packages.is_empty() {
+        sanitize_nix_comment(&if options.custom_packages.is_empty() {
             "None".to_string()
         } else {
             options.custom_packages.join(", ")
-        },
+        }),
         if options.network_config.has_settings() {
             "Configured"
         } else {
             "Default"
         },
-        if options.services_config.has_settings() {
+        sanitize_nix_comment(&if options.services_config.has_settings() {
             options.services_config.enabled_services().join(", ")
         } else {
             "None".to_string()
-        },
+        }),
         imports_str,
     )
 }
@@ -379,7 +397,7 @@ pub fn generate_custom_packages_nix(packages: &[String]) -> String {
   ];
 }}
 "#,
-        packages.join(", "),
+        sanitize_nix_comment(&packages.join(", ")),
         packages_str
     )
 }
@@ -571,14 +589,24 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
             );
         }
         Some(index) => {
-            let (label, package) = match index {
-                1 => ("beta", "config.boot.kernelPackages.nvidiaPackages.beta"),
+            let (label, package, force_open) = match index {
+                1 => (
+                    "beta",
+                    "config.boot.kernelPackages.nvidiaPackages.beta",
+                    false,
+                ),
                 2 => (
                     "nvidia-open",
                     "config.boot.kernelPackages.nvidiaPackages.latest",
+                    true,
                 ),
-                _ => ("stable", "config.boot.kernelPackages.nvidiaPackages.stable"),
+                _ => (
+                    "stable",
+                    "config.boot.kernelPackages.nvidiaPackages.stable",
+                    false,
+                ),
             };
+            let open = force_open || hw.nvidia_open;
             sections.push(format!(
                 r#"  # NVIDIA GPU ({label})
   services.xserver.videoDrivers = [ "nvidia" ];
@@ -591,7 +619,7 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
   hardware.graphics.enable = true;"#,
                 nix_bool(hw.nvidia_modesetting),
                 nix_bool(hw.nvidia_powermanagement),
-                nix_bool(hw.nvidia_open),
+                nix_bool(open),
             ));
         }
     }
@@ -885,38 +913,58 @@ pub fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
   ];
 }}
 "#,
-        id,
-        bundle_module_stub(id),
+        sanitize_nix_comment(id),
+        bundle_module_stub(id, packages),
     )
 }
 
-/// Keep service/module enables when a bundle is customized (packages-only fallback).
-pub fn bundle_module_stub(id: &str) -> &'static str {
+fn package_selected(packages: &[String], id: &str) -> bool {
+    packages.iter().any(|package| package == id)
+}
+
+/// Keep service/module enables for the packages still selected in a fallback bundle.
+#[must_use]
+pub fn bundle_module_stub(id: &str, packages: &[String]) -> String {
     match id {
         "devtools" => {
-            r#"  programs.git.enable = true;
-  virtualisation.docker = {
-    enable = true;
-    enableOnBoot = true;
-  };
-"#
+            let mut stub = String::new();
+            if package_selected(packages, "git") {
+                stub.push_str("  programs.git.enable = true;\n");
+            }
+            if package_selected(packages, "docker") {
+                stub.push_str(
+                    "  virtualisation.docker = {\n    enable = true;\n    enableOnBoot = true;\n  };\n",
+                );
+            }
+            stub
         }
         "gaming" => {
-            r#"  programs.steam = {
+            let mut stub = String::new();
+            if package_selected(packages, "steam") {
+                stub.push_str(
+                    r#"  programs.steam = {
     enable = true;
     remotePlay.openFirewall = true;
     dedicatedServer.openFirewall = true;
     gamescopeSession.enable = true;
   };
-  hardware.graphics = {
-    enable = true;
-    enable32Bit = true;
-  };
-  programs.gamemode.enable = true;
-"#
+"#,
+                );
+            }
+            stub.push_str(
+                "  hardware.graphics = {\n    enable = true;\n    enable32Bit = true;\n  };\n",
+            );
+            if package_selected(packages, "gamemode") {
+                stub.push_str("  programs.gamemode.enable = true;\n");
+            }
+            stub
         }
         "virtualization" => {
-            r#"  boot.kernelModules = [ "kvm-amd" "kvm-intel" ];
+            if package_selected(packages, "virt-manager")
+                || package_selected(packages, "qemu")
+                || package_selected(packages, "spice-gtk")
+            {
+                r#"  boot.kernelModules = [ "kvm-amd" "kvm-intel" ];
   virtualisation.libvirtd = {
     enable = true;
     qemu = {
@@ -928,30 +976,46 @@ pub fn bundle_module_stub(id: &str) -> &'static str {
   };
   programs.virt-manager.enable = true;
 "#
+                .to_string()
+            } else {
+                String::new()
+            }
         }
         "virtualbox" => {
-            r#"  nixpkgs.config.allowUnfree = true;
+            if package_selected(packages, "virtualbox") {
+                r#"  nixpkgs.config.allowUnfree = true;
   virtualisation.virtualbox.host = {
     enable = true;
     enableExtensionPack = true;
   };
 "#
+                .to_string()
+            } else {
+                String::new()
+            }
         }
         "containers" => {
-            r#"  virtualisation.podman = {
+            if package_selected(packages, "podman") {
+                r#"  virtualisation.podman = {
     enable = true;
     dockerCompat = true;
     defaultNetwork.settings.dns_enabled = true;
   };
 "#
+                .to_string()
+            } else {
+                String::new()
+            }
         }
         "flatpak" => {
-            r#"  services.flatpak.enable = true;
-  xdg.portal.enable = true;
-"#
+            if package_selected(packages, "flatpak") {
+                "  services.flatpak.enable = true;\n  xdg.portal.enable = true;\n".to_string()
+            } else {
+                String::new()
+            }
         }
-        "fonts" => "  fonts.fontconfig.enable = true;\n",
-        _ => "",
+        "fonts" => "  fonts.fontconfig.enable = true;\n".to_string(),
+        _ => String::new(),
     }
 }
 
@@ -1466,11 +1530,56 @@ mod tests {
     }
 
     #[test]
-    fn customized_gaming_fallback_keeps_steam_module() {
+    fn customized_gaming_fallback_drops_steam_module_without_steam() {
         let nix = generate_fallback_bundle("gaming", &["lutris".into(), "mangohud".into()]);
-        assert!(nix.contains("programs.steam"));
+        assert!(!nix.contains("programs.steam"));
+        assert!(nix.contains("hardware.graphics"));
         assert!(nix.contains("lutris"));
         assert!(nix.contains("mangohud"));
+    }
+
+    #[test]
+    fn customized_gaming_fallback_keeps_steam_module_when_selected() {
+        let nix = generate_fallback_bundle("gaming", &["steam".into(), "lutris".into()]);
+        assert!(nix.contains("programs.steam"));
+        assert!(nix.contains("lutris"));
+    }
+
+    #[test]
+    fn selected_nix_comments_cannot_break_out() {
+        let options = NixGenOptions {
+            dns_servers: vec!["1.1.1.1\n};\n  users.users.root.hashedPassword = \"x\";".into()],
+            custom_packages: vec!["htop\n};\n#".into()],
+            user_groups: vec!["docker\n  extraGroups".into()],
+            ..Default::default()
+        };
+        let nix = generate_selected_nix_full(&options);
+        let live: String = nix
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#') && !line.trim().is_empty())
+            .collect();
+        assert!(live.contains("imports"));
+        assert!(!live.contains("hashedPassword"));
+        assert!(!live.contains("users.users.root"));
+        for line in nix.lines() {
+            if line.contains("hashedPassword") || line.contains("users.users.root") {
+                assert!(
+                    line.trim_start().starts_with('#'),
+                    "payload escaped the comment: {line}"
+                );
+                assert!(!line.contains('\n'));
+            }
+        }
+    }
+
+    #[test]
+    fn nvidia_open_combo_forces_open_modules() {
+        let nix = generate_hardware_nix(&hw(|c| {
+            c.nvidia_driver = Some(2);
+            c.nvidia_open = false;
+        }));
+        assert!(nix.contains("# NVIDIA GPU (nvidia-open)"));
+        assert!(nix.contains("open = true;"));
     }
 
     #[test]
@@ -1489,7 +1598,7 @@ mod tests {
         assert!(preview.contains("bundles/gaming.nix"));
         assert!(preview.contains("lutris"));
         assert!(preview.contains("mangohud"));
-        assert!(preview.contains("programs.steam"));
+        assert!(!preview.contains("programs.steam"));
         assert!(!preview.contains("heroic"));
         assert!(!preview.contains("wineWowPackages"));
         assert!(!preview.contains("bottles"));

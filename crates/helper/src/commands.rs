@@ -8,9 +8,36 @@ use common::ipc::{
     AppState, Generation, HardwareConfig, HelperResponse, LogLevel, NetworkConfig, RebuildType,
     ServicesConfig,
 };
+use common::validate::{hostname_is_valid, validate_apply_fields};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+
+fn invalid_payload(
+    selected_profile: Option<&str>,
+    enabled_bundles: &[String],
+    hostname: Option<&str>,
+    dns_servers: &[String],
+    user_groups: &[String],
+    username: Option<&str>,
+    custom_packages: &[String],
+) -> Option<HelperResponse> {
+    match validate_apply_fields(
+        selected_profile,
+        enabled_bundles,
+        hostname,
+        dns_servers,
+        user_groups,
+        username,
+        custom_packages,
+    ) {
+        Ok(()) => None,
+        Err(message) => Some(HelperResponse::Error {
+            message,
+            details: None,
+        }),
+    }
+}
 
 /// Send a log message to the GUI
 fn send_log(level: LogLevel, message: String) {
@@ -162,12 +189,8 @@ pub fn validate(
 
     // Validate hostname
     if let Some(ref h) = hostname {
-        if h.is_empty() {
-            errors.push("Hostname cannot be empty".into());
-        } else if !h.chars().all(|c| c.is_alphanumeric() || c == '-') {
-            errors.push("Hostname contains invalid characters".into());
-        } else if h.len() > 63 {
-            errors.push("Hostname too long (max 63 characters)".into());
+        if !hostname_is_valid(h) {
+            errors.push("Hostname contains invalid characters or is too long".into());
         }
     }
 
@@ -200,6 +223,18 @@ pub fn generate(
     hardware_config: HardwareConfig,
     dry_run: bool,
 ) -> HelperResponse {
+    if let Some(err) = invalid_payload(
+        selected_profile.as_deref(),
+        &enabled_bundles,
+        hostname.as_deref(),
+        &dns_servers,
+        &user_groups,
+        username.as_deref(),
+        &custom_packages,
+    ) {
+        return err;
+    }
+
     // First ensure directories exist
     if !dry_run {
         if let HelperResponse::Error { message, details } = ensure_directories() {
@@ -257,6 +292,18 @@ pub fn apply(
     hardware_config: HardwareConfig,
     rebuild_type: RebuildType,
 ) -> HelperResponse {
+    if let Some(err) = invalid_payload(
+        selected_profile.as_deref(),
+        &enabled_bundles,
+        hostname.as_deref(),
+        &dns_servers,
+        &user_groups,
+        username.as_deref(),
+        &custom_packages,
+    ) {
+        return err;
+    }
+
     let dry = matches!(rebuild_type, RebuildType::DryBuild);
     // Snapshot before EnsureDirectories so a first-time dry-build can restore
     // "managed dir did not exist" instead of leaving the placeholder tree.
@@ -1173,6 +1220,18 @@ fn parse_services_snippet(content: &str) -> ServicesConfig {
 
 /// Write application state to state.json
 pub fn write_state(state: AppState) -> HelperResponse {
+    if let Some(err) = invalid_payload(
+        state.selected_profile.as_deref(),
+        &state.enabled_bundles,
+        state.hostname.as_deref(),
+        &state.dns_servers,
+        &state.user_groups,
+        state.username.as_deref(),
+        &state.custom_packages,
+    ) {
+        return err;
+    }
+
     // Ensure directory exists
     if let Err(e) = fs::create_dir_all(paths::STATE_DIR) {
         return HelperResponse::Error {
@@ -1508,14 +1567,38 @@ mod tests {
     use super::*;
     use common::nix::{
         generate_custom_packages_nix, generate_dns_nix, generate_fallback_bundle,
-        generate_hardware_nix, generate_hostname_nix, generate_network_nix,
-        generate_services_nix, generate_user_groups_nix,
+        generate_hardware_nix, generate_hostname_nix, generate_network_nix, generate_services_nix,
+        generate_user_groups_nix,
     };
 
     #[test]
     fn kernel_version_from_store_path() {
         let path = Path::new("/nix/store/xxx-linux-6.1.0/bzImage");
         assert_eq!(kernel_version_from_link(path).as_deref(), Some("6.1.0"));
+    }
+
+    #[test]
+    fn apply_rejects_newline_in_dns() {
+        match apply(
+            None,
+            Vec::new(),
+            Default::default(),
+            None,
+            vec!["1.1.1.1\n};".into()],
+            Vec::new(),
+            None,
+            false,
+            Vec::new(),
+            NetworkConfig::default(),
+            ServicesConfig::default(),
+            HardwareConfig::default(),
+            RebuildType::DryBuild,
+        ) {
+            HelperResponse::Error { message, .. } => {
+                assert!(message.contains("DNS"), "{message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod actions;
 pub mod config;
 pub mod ipc;
 pub mod nix;
+pub mod validate;
 
 pub use actions::{
     ActionCategory, ActionConfig, ActionId, ActionMetadata, ArmCompat, BundleDef, CpuArch,

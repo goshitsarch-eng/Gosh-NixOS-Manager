@@ -709,9 +709,9 @@ mod tests {
     }
 
     #[test]
-    fn customized_gaming_fallback_keeps_steam_module() {
+    fn customized_gaming_fallback_drops_steam_module_without_steam() {
         let nix = generate_fallback_bundle("gaming", &["lutris".into(), "mangohud".into()]);
-        assert!(nix.contains("programs.steam"));
+        assert!(!nix.contains("programs.steam"));
         assert!(nix.contains("lutris"));
         assert!(nix.contains("mangohud"));
     }

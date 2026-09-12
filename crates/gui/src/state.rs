@@ -152,7 +152,7 @@ impl AppState {
             if s.is_empty() {
                 continue;
             }
-            if !is_ipv4(s) {
+            if !common::validate::is_ipv4(s) {
                 return Err(crate::fl!("error-dns-invalid", address = s));
             }
             if !servers.contains(&s.to_string()) {
@@ -654,31 +654,6 @@ fn set_listed_port(ports: &mut Vec<u16>, port: u16, enabled: bool) {
     } else {
         ports.retain(|p| *p != port);
     }
-}
-
-fn is_ipv4(s: &str) -> bool {
-    let mut parts = s.split('.');
-    let mut count = 0;
-    for part in parts.by_ref() {
-        count += 1;
-        if count > 4 {
-            return false;
-        }
-        if part.is_empty() || part.len() > 3 {
-            return false;
-        }
-        if !part.bytes().all(|b| b.is_ascii_digit()) {
-            return false;
-        }
-        if part.len() > 1 && part.starts_with('0') {
-            return false;
-        }
-        match part.parse::<u8>() {
-            Ok(_) => {}
-            Err(_) => return false,
-        }
-    }
-    count == 4
 }
 
 #[cfg(test)]
