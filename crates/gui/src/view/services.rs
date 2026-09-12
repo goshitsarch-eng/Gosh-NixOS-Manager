@@ -9,8 +9,6 @@ use cosmic::Element;
 
 struct ServiceDef {
     id: &'static str,
-    name: &'static str,
-    description: &'static str,
     icon: &'static str,
     nix_option: &'static str,
 }
@@ -62,8 +60,8 @@ fn service_row<'a>(service: &ServiceDef, config: &ServicesConfig) -> Element<'a,
     let enabled = service_enabled(config, service.id);
     let id = service.id.to_owned();
     widget::tooltip(
-        settings::item::builder(service.name)
-            .description(service.description)
+        settings::item::builder(service_name(service.id))
+            .description(service_description(service.id))
             .icon(super::icon(service.icon))
             .control(
                 widget::toggler(enabled)
@@ -80,6 +78,60 @@ fn service_row<'a>(service: &ServiceDef, config: &ServicesConfig) -> Element<'a,
         widget::tooltip::Position::Bottom,
     )
     .into()
+}
+
+fn service_name(id: &str) -> String {
+    match id {
+        "printing" => crate::fl!("service-printing"),
+        "avahi" => crate::fl!("service-avahi"),
+        "fwupd" => crate::fl!("service-fwupd"),
+        "upower" => crate::fl!("service-upower"),
+        "networkmanager" => crate::fl!("service-networkmanager"),
+        "resolved" => crate::fl!("service-resolved"),
+        "rustdesk" => crate::fl!("service-rustdesk"),
+        "syncthing" => crate::fl!("service-syncthing"),
+        "locate" => crate::fl!("service-locate"),
+        "flatpak" => crate::fl!("service-flatpak"),
+        "gnome_keyring" => crate::fl!("service-gnome-keyring"),
+        "gnome_tweaks" => crate::fl!("service-gnome-tweaks"),
+        "dconf" => crate::fl!("service-dconf"),
+        "docker" => crate::fl!("service-docker"),
+        "libvirtd" => crate::fl!("service-libvirtd"),
+        "postgresql" => crate::fl!("service-postgresql"),
+        "redis" => crate::fl!("service-redis"),
+        "earlyoom" => crate::fl!("service-earlyoom"),
+        "auto_upgrade" => crate::fl!("service-auto-upgrade"),
+        "auto_gc" => crate::fl!("service-auto-gc"),
+        "store_optimize" => crate::fl!("service-store-optimize"),
+        other => other.to_string(),
+    }
+}
+
+fn service_description(id: &str) -> String {
+    match id {
+        "printing" => crate::fl!("service-printing-desc"),
+        "avahi" => crate::fl!("service-avahi-desc"),
+        "fwupd" => crate::fl!("service-fwupd-desc"),
+        "upower" => crate::fl!("service-upower-desc"),
+        "networkmanager" => crate::fl!("service-networkmanager-desc"),
+        "resolved" => crate::fl!("service-resolved-desc"),
+        "rustdesk" => crate::fl!("service-rustdesk-desc"),
+        "syncthing" => crate::fl!("service-syncthing-desc"),
+        "locate" => crate::fl!("service-locate-desc"),
+        "flatpak" => crate::fl!("service-flatpak-desc"),
+        "gnome_keyring" => crate::fl!("service-gnome-keyring-desc"),
+        "gnome_tweaks" => crate::fl!("service-gnome-tweaks-desc"),
+        "dconf" => crate::fl!("service-dconf-desc"),
+        "docker" => crate::fl!("service-docker-desc"),
+        "libvirtd" => crate::fl!("service-libvirtd-desc"),
+        "postgresql" => crate::fl!("service-postgresql-desc"),
+        "redis" => crate::fl!("service-redis-desc"),
+        "earlyoom" => crate::fl!("service-earlyoom-desc"),
+        "auto_upgrade" => crate::fl!("service-auto-upgrade-desc"),
+        "auto_gc" => crate::fl!("service-auto-gc-desc"),
+        "store_optimize" => crate::fl!("service-store-optimize-desc"),
+        _ => String::new(),
+    }
 }
 
 fn service_enabled(config: &ServicesConfig, id: &str) -> bool {
@@ -117,29 +169,21 @@ fn service_groups() -> [ServiceGroup; 7] {
             services: &[
                 ServiceDef {
                     id: "printing",
-                    name: "Printing (CUPS)",
-                    description: "Enable printing support via CUPS",
                     icon: "printer-symbolic",
                     nix_option: "services.printing.enable",
                 },
                 ServiceDef {
                     id: "avahi",
-                    name: "Avahi/mDNS",
-                    description: "Enable network service discovery (Bonjour compatible)",
                     icon: "network-workgroup-symbolic",
                     nix_option: "services.avahi.enable",
                 },
                 ServiceDef {
                     id: "fwupd",
-                    name: "Firmware Updates",
-                    description: "Enable fwupd for firmware updates (LVFS)",
                     icon: "software-update-available-symbolic",
                     nix_option: "services.fwupd.enable",
                 },
                 ServiceDef {
                     id: "upower",
-                    name: "UPower",
-                    description: "Power management service for laptops",
                     icon: "battery-symbolic",
                     nix_option: "services.upower.enable",
                 },
@@ -152,15 +196,11 @@ fn service_groups() -> [ServiceGroup; 7] {
             services: &[
                 ServiceDef {
                     id: "networkmanager",
-                    name: "NetworkManager",
-                    description: "Modern network configuration manager",
                     icon: "network-wired-symbolic",
                     nix_option: "networking.networkmanager.enable",
                 },
                 ServiceDef {
                     id: "resolved",
-                    name: "systemd-resolved",
-                    description: "System DNS resolver with caching",
                     icon: "network-server-symbolic",
                     nix_option: "services.resolved.enable",
                 },
@@ -172,8 +212,6 @@ fn service_groups() -> [ServiceGroup; 7] {
             description: crate::fl!("services-remote-desc"),
             services: &[ServiceDef {
                 id: "rustdesk",
-                name: "RustDesk",
-                description: "Open-source remote desktop (like TeamViewer/AnyDesk)",
                 icon: "computer-symbolic",
                 nix_option: "environment.systemPackages (rustdesk)",
             }],
@@ -189,15 +227,11 @@ fn service_groups() -> [ServiceGroup; 7] {
             services: &[
                 ServiceDef {
                     id: "syncthing",
-                    name: "Syncthing",
-                    description: "Continuous file synchronization (runs as user service)",
                     icon: "emblem-synchronizing-symbolic",
                     nix_option: "services.syncthing.enable",
                 },
                 ServiceDef {
                     id: "locate",
-                    name: "Locate Database",
-                    description: "Enable mlocate/plocate for fast file searching",
                     icon: "system-search-symbolic",
                     nix_option: "services.locate.enable",
                 },
@@ -210,29 +244,21 @@ fn service_groups() -> [ServiceGroup; 7] {
             services: &[
                 ServiceDef {
                     id: "flatpak",
-                    name: "Flatpak",
-                    description: "Enable Flatpak application support",
                     icon: "package-x-generic-symbolic",
                     nix_option: "services.flatpak.enable",
                 },
                 ServiceDef {
                     id: "gnome_keyring",
-                    name: "GNOME Keyring",
-                    description: "Secure storage for passwords and keys",
                     icon: "channel-secure-symbolic",
                     nix_option: "services.gnome.gnome-keyring.enable",
                 },
                 ServiceDef {
                     id: "gnome_tweaks",
-                    name: "GNOME Tweaks",
-                    description: "Advanced GNOME desktop customization tool",
                     icon: "preferences-other-symbolic",
                     nix_option: "environment.systemPackages.gnome-tweaks",
                 },
                 ServiceDef {
                     id: "dconf",
-                    name: "dconf",
-                    description: "Configuration system for GNOME/GTK apps",
                     icon: "preferences-system-symbolic",
                     nix_option: "programs.dconf.enable",
                 },
@@ -245,29 +271,21 @@ fn service_groups() -> [ServiceGroup; 7] {
             services: &[
                 ServiceDef {
                     id: "docker",
-                    name: "Docker",
-                    description: "Container runtime daemon",
                     icon: "application-x-executable-symbolic",
                     nix_option: "virtualisation.docker.enable",
                 },
                 ServiceDef {
                     id: "libvirtd",
-                    name: "libvirtd",
-                    description: "Virtualization management daemon for KVM/QEMU",
                     icon: "computer-symbolic",
                     nix_option: "virtualisation.libvirtd.enable",
                 },
                 ServiceDef {
                     id: "postgresql",
-                    name: "PostgreSQL",
-                    description: "PostgreSQL database server",
                     icon: "drive-harddisk-symbolic",
                     nix_option: "services.postgresql.enable",
                 },
                 ServiceDef {
                     id: "redis",
-                    name: "Redis",
-                    description: "In-memory data structure store",
                     icon: "drive-harddisk-symbolic",
                     nix_option: r#"services.redis.servers."".enable"#,
                 },
@@ -280,29 +298,21 @@ fn service_groups() -> [ServiceGroup; 7] {
             services: &[
                 ServiceDef {
                     id: "earlyoom",
-                    name: "Early OOM",
-                    description: "Kill processes early when system runs low on memory",
                     icon: "dialog-warning-symbolic",
                     nix_option: "services.earlyoom.enable",
                 },
                 ServiceDef {
                     id: "auto_upgrade",
-                    name: "Auto Upgrade",
-                    description: "Automatically upgrade NixOS (use with caution)",
                     icon: "software-update-available-symbolic",
                     nix_option: "system.autoUpgrade.enable",
                 },
                 ServiceDef {
                     id: "auto_gc",
-                    name: "Auto Garbage Collect",
-                    description: "Automatically clean up old Nix store paths",
                     icon: "user-trash-symbolic",
                     nix_option: "nix.gc.automatic",
                 },
                 ServiceDef {
                     id: "store_optimize",
-                    name: "Store Optimization",
-                    description: "Automatically optimize Nix store (deduplication)",
                     icon: "drive-harddisk-symbolic",
                     nix_option: "nix.settings.auto-optimise-store",
                 },

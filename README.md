@@ -182,7 +182,7 @@ The GUI and the helper share `detect_integration_status` in `crates/common/src/c
 - `/etc/nixos/nixos-toolkit/state/selected.nix`
 - `nixos-toolkit/state/selected.nix`
 
-A bare `nixos-toolkit` mention does **not** count. Comments are not stripped, so a comment that contains one of those exact strings is treated as integrated. The status does not require `selected.nix` to exist yet.
+A bare `nixos-toolkit` mention does **not** count. `#` line comments and `/* */` blocks are ignored. The status does not require `selected.nix` to exist yet.
 
 After setup, rebuild once and use **Verify integration**.
 
@@ -404,17 +404,15 @@ Full contributor notes: [docs/development.md](docs/development.md).
 
 ## Known limitations
 
-- i18n is English Fluent only (`crates/gui/i18n/en/`). Catalog names in `actions.rs` and service row labels/descriptions in `view/services.rs` stay English.
+- i18n is English Fluent only (`crates/gui/i18n/en/`). Catalog names in `actions.rs` stay English; service rows and the channel/flake maintenance labels are Fluent.
 - GitHub Actions on PR runs cargo build/clippy/test **and** flake `fmt`/`audit`. Flatpak smoke is still `workflow_dispatch` (disk). No Cachix / binary cache in this flake.
-- The write jail is a path-prefix check under `/etc/nixos/nixos-toolkit`, not a kernel sandbox. The helper still writes constant managed paths (`EnsureDirectories` placeholder and `WriteState` are not the jailed `atomic_write`).
-- Reconstruct-from-Nix is line-oriented, not a Nix parser. Unusual hand-edited modules may be missed. `bundle_packages` is not reconstructed (legacy template copy may run on the next apply).
+- The write jail is a path-prefix check under `/etc/nixos/nixos-toolkit`, not a kernel sandbox. `atomic_write` covers generated Nix, the `selected.nix` placeholder, and `state.json`.
+- Reconstruct-from-Nix is line-oriented, not a Nix parser. Unusual hand-edited modules may be missed. Generated fallback bundles restore `bundle_packages`; copied templates do not (so the next apply can still copy the template).
 - Unfree is an allowlist of known attrs/bundles, not nixpkgs `meta.unfree`. Unknown unfree attrs can still fail eval.
 - WireGuard UI enables the module and opens the listen UDP port. It does not write peers, addresses, or private keys.
-- Preview vs apply: bundle generation now matches apply. Profile templates are still inlined when present (apply copies the same file, or a fallback if the file is missing — preview omits a missing profile template). File order in the preview dump can differ from the helper write order.
+- Preview vs apply: bundle generation and file order now match apply. A missing **profile** template is omitted from preview; apply still writes the helper fallback.
 - The GUI never sends `CheckPermissions` / `GetSystemInfo` / `Validate` / `Generate`; detection is local (and `flatpak-spawn --host` inside the sandbox).
-- Integration: a comment containing the exact `selected.nix` path still counts as integrated.
 - Hostname `lib.mkDefault` still sets the hostname when the user has no explicit `networking.hostName`.
-- The Maintenance catalog name is still **Update Channels**; on flake hosts the helper runs `nix flake update --flake /etc/nixos` instead.
 
 More: [docs/reference.md](docs/reference.md#known-limitations).
 
@@ -426,7 +424,7 @@ More: [docs/reference.md](docs/reference.md#known-limitations).
 
 **`syntax error, unexpected PATH`** — the import path is outside the `imports = [ … ];` list.
 
-**Not integrated** — confirm the import uses one of the `nixos-toolkit/state/selected.nix` path forms in `configuration.nix` or `flake.nix`, rebuild, then Verify integration. A comment with that path is a false positive. A flake-only import is enough for both GUI and helper.
+**Not integrated** — confirm the import uses one of the `nixos-toolkit/state/selected.nix` path forms in `configuration.nix` or `flake.nix`, rebuild, then Verify integration. A comment with that path is not enough. A flake-only import is enough for both GUI and helper.
 
 **Privileged helper not found** — install `nixos-toolkit-helper` on the host (NixOS module). Flatpak cannot apply without it.
 

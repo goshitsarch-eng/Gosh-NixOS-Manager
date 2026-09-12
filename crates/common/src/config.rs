@@ -37,9 +37,9 @@ pub enum IntegrationStatus {
 
 /// Path fragments that mean `selected.nix` is imported.
 ///
-/// Matching is substring-based: a comment that contains one of these exact
-/// strings is treated as [`IntegrationStatus::Integrated`] (false positive
-/// is acceptable). A bare `nixos-toolkit` mention is not enough.
+/// Matching is substring-based on uncommented source. A `#` line comment or
+/// `/* */` block that contains one of these strings is **not** integration.
+/// A bare `nixos-toolkit` mention is not enough.
 const SELECTED_NIX_IMPORT_MARKERS: &[&str] = &[
     "./nixos-toolkit/state/selected.nix",
     "/etc/nixos/nixos-toolkit/state/selected.nix",
@@ -63,7 +63,77 @@ pub fn detect_integration_status(
 }
 
 fn file_imports_selected_nix(content: Option<&str>) -> bool {
-    content.is_some_and(|c| SELECTED_NIX_IMPORT_MARKERS.iter().any(|m| c.contains(m)))
+    content.is_some_and(|c| {
+        let code = strip_nix_comments(c);
+        SELECTED_NIX_IMPORT_MARKERS
+            .iter()
+            .any(|m| code.contains(m))
+    })
+}
+
+/// Drop `#` line comments and `/* */` blocks. Strings (`"..."` / `''...''`) are kept.
+fn strip_nix_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    let mut in_dquote = false;
+    let mut in_indented = false;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if in_dquote {
+            out.push(c);
+            if c == '\\' && i + 1 < bytes.len() {
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if c == '"' {
+                in_dquote = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_indented {
+            out.push(c);
+            if c == '\'' && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                out.push('\'');
+                in_indented = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_dquote = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '\'' && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+            in_indented = true;
+            out.push_str("''");
+            i += 2;
+            continue;
+        }
+        if c == '#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 /// System information detected at runtime
@@ -101,7 +171,7 @@ impl Default for SystemInfo {
 
 /// Paths used by the toolkit
 pub mod paths {
-    use std::path::PathBuf;
+    use std::path::{Component, Path, PathBuf};
 
     /// Base directory for managed NixOS configuration
     pub const MANAGED_DIR: &str = "/etc/nixos/nixos-toolkit";
@@ -165,6 +235,53 @@ pub mod paths {
         std::env::var("NIXOS_TOOLKIT_TEMPLATES_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("./nix/templates"))
+    }
+
+    /// True when `path` resolves under [`MANAGED_DIR`] (write jail).
+    #[must_use]
+    pub fn is_allowed_managed_path(path: &Path) -> bool {
+        if !path.is_absolute() {
+            return false;
+        }
+        if path.components().any(|c| matches!(c, Component::ParentDir)) {
+            return false;
+        }
+
+        let managed = Path::new(MANAGED_DIR);
+        if !path.starts_with(managed) {
+            return false;
+        }
+
+        let resolved = resolve_existing_prefix(path);
+        let managed_resolved = resolve_existing_prefix(managed);
+        resolved.starts_with(&managed_resolved)
+    }
+
+    fn resolve_existing_prefix(path: &Path) -> PathBuf {
+        let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+        let mut current = path.to_path_buf();
+        loop {
+            if current.exists() {
+                if let Ok(canon) = current.canonicalize() {
+                    let mut out = canon;
+                    for part in suffix.iter().rev() {
+                        out.push(part);
+                    }
+                    return out;
+                }
+                break;
+            }
+            match current.file_name() {
+                Some(name) => {
+                    suffix.push(name.to_os_string());
+                    if !current.pop() {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        path.to_path_buf()
     }
 }
 
@@ -262,12 +379,53 @@ mod tests {
     }
 
     #[test]
-    fn comment_with_exact_import_path_is_integrated() {
-        // Documented false positive: comments are not stripped.
-        let configuration = r#"# ./nixos-toolkit/state/selected.nix"#;
+    fn comment_with_exact_import_path_is_not_integrated() {
+        let line = r#"# ./nixos-toolkit/state/selected.nix"#;
+        let block = r#"
+            { config, pkgs, ... }: {
+              /* /etc/nixos/nixos-toolkit/state/selected.nix */
+              networking.hostName = "box";
+            }
+        "#;
+        assert_eq!(
+            detect_integration_status(Some(line), None),
+            IntegrationStatus::NotIntegrated
+        );
+        assert_eq!(
+            detect_integration_status(Some(block), None),
+            IntegrationStatus::NotIntegrated
+        );
+    }
+
+    #[test]
+    fn import_with_trailing_comment_is_integrated() {
+        let configuration =
+            r#"imports = [ ./nixos-toolkit/state/selected.nix ]; # toolkit"#;
         assert_eq!(
             detect_integration_status(Some(configuration), None),
             IntegrationStatus::Integrated
         );
+    }
+
+    #[test]
+    fn is_allowed_managed_path_rejects_escape() {
+        use super::paths;
+        use std::path::Path;
+        assert!(!paths::is_allowed_managed_path(Path::new(
+            "../etc/nixos/nixos-toolkit/state/hostname.nix"
+        )));
+        assert!(!paths::is_allowed_managed_path(Path::new("/tmp/evil")));
+        assert!(!paths::is_allowed_managed_path(Path::new(
+            "/etc/nixos/nixos-toolkit/../../tmp/evil"
+        )));
+        assert!(!paths::is_allowed_managed_path(Path::new(
+            "/etc/nixos/configuration.nix"
+        )));
+        assert!(paths::is_allowed_managed_path(Path::new(
+            "/etc/nixos/nixos-toolkit/state/hostname.nix"
+        )));
+        assert!(paths::is_allowed_managed_path(Path::new(
+            "/etc/nixos/nixos-toolkit/state/state.json.tmp"
+        )));
     }
 }

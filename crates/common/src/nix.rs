@@ -1063,35 +1063,11 @@ pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path)
         }
     }
 
-    // custom-packages.nix if needed
-    if !options.custom_packages.is_empty() {
-        preview.push_str(&format!("\n--- {} ---\n", paths::CUSTOM_PACKAGES_NIX));
-        preview.push_str(&generate_custom_packages_nix(&options.custom_packages));
-    }
-
     // hardware.nix when any non-default hardware setting is set
     let hardware = options.effective_hardware();
     if hardware.has_settings() {
         preview.push_str(&format!("\n--- {} ---\n", paths::HARDWARE_NIX));
         preview.push_str(&generate_hardware_nix(&hardware));
-    }
-
-    // network.nix if network settings are configured
-    if options.network_config.has_settings() {
-        preview.push_str(&format!("\n--- {} ---\n", paths::NETWORK_NIX));
-        preview.push_str(&generate_network_nix(&options.network_config));
-    }
-
-    // services.nix if services are configured
-    if options.services_config.has_settings() {
-        preview.push_str(&format!("\n--- {} ---\n", paths::SERVICES_NIX));
-        let enabled_services: Vec<&str> = options.services_config.enabled_services();
-        preview.push_str(&generate_services_nix(&enabled_services));
-    }
-
-    if needs_allow_unfree(options) {
-        preview.push_str(&format!("\n--- {} ---\n", paths::UNFREE_NIX));
-        preview.push_str(&generate_unfree_nix());
     }
 
     // Profile template (if selected and exists)
@@ -1115,6 +1091,30 @@ pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path)
             bundle.id
         ));
         preview.push_str(&content);
+    }
+
+    // custom-packages.nix if needed
+    if !options.custom_packages.is_empty() {
+        preview.push_str(&format!("\n--- {} ---\n", paths::CUSTOM_PACKAGES_NIX));
+        preview.push_str(&generate_custom_packages_nix(&options.custom_packages));
+    }
+
+    // network.nix if network settings are configured
+    if options.network_config.has_settings() {
+        preview.push_str(&format!("\n--- {} ---\n", paths::NETWORK_NIX));
+        preview.push_str(&generate_network_nix(&options.network_config));
+    }
+
+    // services.nix if services are configured
+    if options.services_config.has_settings() {
+        preview.push_str(&format!("\n--- {} ---\n", paths::SERVICES_NIX));
+        let enabled_services: Vec<&str> = options.services_config.enabled_services();
+        preview.push_str(&generate_services_nix(&enabled_services));
+    }
+
+    if needs_allow_unfree(options) {
+        preview.push_str(&format!("\n--- {} ---\n", paths::UNFREE_NIX));
+        preview.push_str(&generate_unfree_nix());
     }
 
     preview

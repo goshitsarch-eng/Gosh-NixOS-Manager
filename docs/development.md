@@ -146,7 +146,7 @@ Apply copies the template file. Preview shows the same file when it exists.
 
 ## i18n
 
-Fluent, fallback `en`. Files: `crates/gui/i18n/en/gui.ftl` and `nixos_toolkit.ftl` (overlapping keys — keep them in sync). `fl!` in views. Apply confirm dialogs in `core/apply.rs` use Fluent (`apply-empty-*`, `apply-packages-*`, `apply-normal-*`). Catalog names in `actions.rs` are English by design. Service **row** names and descriptions in `view/services.rs` are still hardcoded English; group titles on that page are Fluent.
+Fluent, fallback `en`. Files: `crates/gui/i18n/en/gui.ftl` and `nixos_toolkit.ftl` (overlapping keys — keep them in sync). `fl!` in views. Apply confirm dialogs in `core/apply.rs` use Fluent (`apply-empty-*`, `apply-packages-*`, `apply-normal-*`). Service row names/descriptions and the channel vs flake maintenance labels are Fluent. Catalog names in `actions.rs` are English by design.
 
 ## Project layout
 

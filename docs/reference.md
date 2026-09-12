@@ -294,22 +294,20 @@ GitHub Actions: cargo job (build/clippy/test) and flake job (`fmt` + `audit` che
 
 ## Integration
 
-`common::config::detect_integration_status` (GUI and helper). Markers: `./nixos-toolkit/state/selected.nix`, `/etc/nixos/nixos-toolkit/state/selected.nix`, `nixos-toolkit/state/selected.nix`. Either `configuration.nix` or `flake.nix` is enough. Comments are not stripped.
+`common::config::detect_integration_status` (GUI and helper). Markers: `./nixos-toolkit/state/selected.nix`, `/etc/nixos/nixos-toolkit/state/selected.nix`, `nixos-toolkit/state/selected.nix`. Either `configuration.nix` or `flake.nix` is enough. `#` line comments and `/* */` blocks are stripped.
 
 ## Reconstruct
 
-`reconstruct_state_from_nix` in `crates/helper/src/commands.rs` is line-oriented. It reads `selected.nix`, `custom-packages.nix`, `hostname.nix`, `dns.nix`, `users.nix`, `hardware.nix`, `network.nix` (including WireGuard enable + `# nixos-toolkit.wireguardListenPort =`), `services.nix`. It does not fill `bundle_packages`.
+`reconstruct_state_from_nix` in `crates/helper/src/commands.rs` is line-oriented. It reads `selected.nix`, generated fallback `bundles/<id>.nix` (`bundle_packages`), `custom-packages.nix`, `hostname.nix`, `dns.nix`, `users.nix`, `hardware.nix`, `network.nix` (including WireGuard enable + `# nixos-toolkit.wireguardListenPort =`), `services.nix`. Copied templates do not fill `bundle_packages`.
 
 ## Known limitations
 
-1. i18n is English Fluent only (`crates/gui/i18n/en/`). Catalog names in `actions.rs` and service row names/descriptions in `view/services.rs` are English. Apply dialogs are Fluent.
+1. i18n is English Fluent only (`crates/gui/i18n/en/`). Catalog names in `actions.rs` stay English. Service rows and the channel/flake maintenance labels are Fluent. Apply dialogs are Fluent.
 2. GitHub Actions Flatpak job is `workflow_dispatch` only (disk). Flake `fmt`/`audit` run on PRs. No Cachix / binary cache.
-3. Write jail is a path-prefix check under `/etc/nixos/nixos-toolkit`, not a kernel sandbox. `EnsureDirectories` placeholder and `WriteState` use plain/`state.json.tmp` writes.
-4. Reconstruct is line-oriented, not a Nix parser. Unusual hand-edited modules may be missed. `bundle_packages` is not reconstructed.
+3. Write jail is a path-prefix check under `/etc/nixos/nixos-toolkit`, not a kernel sandbox. `atomic_write` covers generated Nix, the `selected.nix` placeholder, and `state.json`.
+4. Reconstruct is line-oriented, not a Nix parser. Unusual hand-edited modules may be missed. Generated fallback bundles restore `bundle_packages`; copied templates do not.
 5. Unfree is an allowlist of known attrs/bundles, not nixpkgs `meta.unfree`. Unknown unfree attrs can still fail eval.
 6. WireGuard UI enables `networking.wireguard.enable` and opens the listen UDP port. It does not write peers, addresses, or private keys.
-7. Preview vs apply: bundle path matches apply. Profile templates are inlined when present; a missing profile template is omitted from preview and still gets a helper fallback on apply. File order in the preview dump can differ from apply.
+7. Preview vs apply: bundle generation and dump order match apply. A missing profile template is omitted from preview; apply still writes the helper fallback.
 8. GUI never sends `CheckPermissions` / `GetSystemInfo` / `Validate` / `Generate`.
-9. Integration: a comment containing the exact `selected.nix` path still counts as integrated.
-10. Hostname `lib.mkDefault` still sets the hostname when the user has no explicit `networking.hostName`.
-11. Maintenance catalog name remains **Update Channels**; on flake hosts the helper runs `nix flake update --flake /etc/nixos`.
+9. Hostname `lib.mkDefault` still sets the hostname when the user has no explicit `networking.hostName`.

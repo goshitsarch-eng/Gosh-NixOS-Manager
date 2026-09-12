@@ -2,6 +2,7 @@
 
 use crate::app::{AppModel, Busy};
 use crate::message::Message;
+use common::config::ConfigMode;
 use cosmic::iced::Length;
 use cosmic::widget::{self, settings};
 use cosmic::Element;
@@ -27,9 +28,24 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         if buttons_enabled {
             run = run.on_press(Message::RequestMaintenance { id });
         }
+        let (name, description) = if action.id == "update_channels" {
+            if app.system_info.config_mode == ConfigMode::Flake {
+                (
+                    crate::fl!("maintenance-update-flake"),
+                    crate::fl!("maintenance-update-flake-desc"),
+                )
+            } else {
+                (
+                    crate::fl!("maintenance-update-channels"),
+                    crate::fl!("maintenance-update-channels-desc"),
+                )
+            }
+        } else {
+            (action.name.clone(), action.description.clone())
+        };
         actions = actions.add(
-            settings::item::builder(action.name.as_str())
-                .description(action.description.as_str())
+            settings::item::builder(name)
+                .description(description)
                 .icon(super::icon(action.icon.as_str()))
                 .control(run),
         );

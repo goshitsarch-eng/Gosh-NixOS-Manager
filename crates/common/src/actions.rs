@@ -796,8 +796,8 @@ pub fn default_maintenance_actions() -> Vec<MaintenanceActionDef> {
         },
         MaintenanceActionDef {
             id: "update_channels".into(),
-            name: "Update Channels".into(),
-            description: "Runs nix-channel --update, or nix flake update --flake /etc/nixos when that flake exists".into(),
+            name: "Update Nix Inputs".into(),
+            description: "Update nix-channel, or flake inputs at /etc/nixos when that flake exists".into(),
             icon: "software-update-available-symbolic".into(),
             warning: None,
             command: "nix-channel --update".into(),

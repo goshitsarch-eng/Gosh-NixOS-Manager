@@ -90,7 +90,7 @@ There is no `window.rs` and no `pages/` directory. UI is `crates/gui/src/view/*.
 - Apply rebuild dropdown: Switch / Boot / Test / Build; Dry Run is a separate button
 - `NetworkConfig` also has `wireguard_enabled` and `wireguard_listen_port`
 
-Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. Preview and apply then generate a fallback module (resolved catalog attrs + `bundle_module_stub` in `crates/common/src/nix.rs`) instead of copying `nix/templates/bundles/*.nix`. Template copy still happens if the id is missing from `bundle_packages` (reconstructed or old state). Profile templates **are** copied. Preview inlines the same profile file when it exists; file order in the preview dump can still differ from apply.
+Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. Preview and apply then generate a fallback module (resolved catalog attrs + `bundle_module_stub` in `crates/common/src/nix.rs`) instead of copying `nix/templates/bundles/*.nix`. Template copy still happens if the id is missing from `bundle_packages` (old state, or a reconstructed copied template). Generated fallback files restore `bundle_packages` on reconstruct. Profile templates **are** copied. Preview dump order matches apply.
 
 ### Key files
 
@@ -128,7 +128,7 @@ Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. Pr
 - Hostname and DNS Nix use `lib.mkDefault` (explicit user settings win)
 - `atomic_write` refuses paths outside `/etc/nixos/nixos-toolkit` (prefix check)
 
-GUI and helper integration detection share `detect_integration_status`. Either `configuration.nix` or `flake.nix` importing `nixos-toolkit/state/selected.nix` (or `./` / absolute variants) counts. A comment containing that exact path is a false positive. Bare `nixos-toolkit` is not enough.
+GUI and helper integration detection share `detect_integration_status`. Either `configuration.nix` or `flake.nix` importing `nixos-toolkit/state/selected.nix` (or `./` / absolute variants) counts. `#` line comments and `/* */` blocks are stripped first. Bare `nixos-toolkit` is not enough.
 
 NixOS module: `programs.nixos-toolkit.enable`, `.package` (GUI), `.helperPackage` (helper). Polkit actions `manage-system`, `write-config`, and `rebuild` all set `exec.path`.
 

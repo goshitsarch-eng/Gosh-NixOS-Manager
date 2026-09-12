@@ -11,7 +11,7 @@ use common::nix::{
 };
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 /// Generate all configuration files
 #[allow(clippy::too_many_arguments)]
@@ -277,57 +277,11 @@ const MANAGED_SNIPPETS: &[&str] = &[
     "unfree.nix",
 ];
 
-fn resolve_existing_prefix(path: &Path) -> PathBuf {
-    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
-    let mut current = path.to_path_buf();
-    loop {
-        if current.exists() {
-            if let Ok(canon) = current.canonicalize() {
-                let mut out = canon;
-                for part in suffix.iter().rev() {
-                    out.push(part);
-                }
-                return out;
-            }
-            break;
-        }
-        match current.file_name() {
-            Some(name) => {
-                suffix.push(name.to_os_string());
-                if !current.pop() {
-                    break;
-                }
-            }
-            None => break,
-        }
-    }
-    path.to_path_buf()
-}
-
-/// True when `path` resolves under `/etc/nixos/nixos-toolkit`.
-#[must_use]
-fn is_allowed_managed_path(path: &Path) -> bool {
-    if !path.is_absolute() {
-        return false;
-    }
-    if path.components().any(|c| matches!(c, Component::ParentDir)) {
-        return false;
-    }
-
-    let managed = Path::new(paths::MANAGED_DIR);
-    if !path.starts_with(managed) {
-        return false;
-    }
-
-    let resolved = resolve_existing_prefix(path);
-    let managed_resolved = resolve_existing_prefix(managed);
-    resolved.starts_with(&managed_resolved)
-}
-
-/// Atomic write to a file (write to temp, then rename)
-fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
+/// Atomic write to a file (write to temp, then rename). Refuses paths outside
+/// [`paths::MANAGED_DIR`].
+pub(crate) fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
     let path = Path::new(path);
-    if !is_allowed_managed_path(path) {
+    if !paths::is_allowed_managed_path(path) {
         anyhow::bail!(
             "Refusing to write outside {}: {}",
             paths::MANAGED_DIR,
@@ -340,7 +294,7 @@ fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
     }
 
     let temp_path = path.with_extension("tmp");
-    if !is_allowed_managed_path(&temp_path) {
+    if !paths::is_allowed_managed_path(&temp_path) {
         anyhow::bail!(
             "Refusing to write outside {}: {}",
             paths::MANAGED_DIR,
@@ -805,20 +759,20 @@ mod tests {
 
     #[test]
     fn is_allowed_managed_path_rejects_escape() {
-        assert!(!is_allowed_managed_path(Path::new(
+        assert!(!paths::is_allowed_managed_path(Path::new(
             "../etc/nixos/nixos-toolkit/state/hostname.nix"
         )));
-        assert!(!is_allowed_managed_path(Path::new("/tmp/evil")));
-        assert!(!is_allowed_managed_path(Path::new(
+        assert!(!paths::is_allowed_managed_path(Path::new("/tmp/evil")));
+        assert!(!paths::is_allowed_managed_path(Path::new(
             "/etc/nixos/nixos-toolkit/../../tmp/evil"
         )));
-        assert!(!is_allowed_managed_path(Path::new(
+        assert!(!paths::is_allowed_managed_path(Path::new(
             "/etc/nixos/configuration.nix"
         )));
-        assert!(is_allowed_managed_path(Path::new(
+        assert!(paths::is_allowed_managed_path(Path::new(
             "/etc/nixos/nixos-toolkit/state/hostname.nix"
         )));
-        assert!(is_allowed_managed_path(Path::new(
+        assert!(paths::is_allowed_managed_path(Path::new(
             "/etc/nixos/nixos-toolkit/bundles/gaming.nix"
         )));
     }
