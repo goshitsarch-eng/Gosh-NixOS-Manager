@@ -11,6 +11,7 @@ use common::nix::{
 };
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 /// Generate all configuration files
@@ -289,20 +290,28 @@ pub(crate) fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
         );
     }
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let parent = path.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Refusing to write without a parent directory: {}",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent)?;
 
-    let temp_path = path.with_extension("tmp");
-    if !paths::is_allowed_managed_path(&temp_path) {
+    let mut tmp = tempfile::Builder::new()
+        .prefix("nixos-toolkit-")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    if !paths::is_allowed_managed_path(tmp.path()) {
         anyhow::bail!(
             "Refusing to write outside {}: {}",
             paths::MANAGED_DIR,
-            temp_path.display()
+            tmp.path().display()
         );
     }
-    fs::write(&temp_path, content)?;
-    fs::rename(&temp_path, path)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(path).map_err(|err| err.error)?;
 
     let written = fs::read_to_string(path)?;
     if written != content {

@@ -28,24 +28,25 @@ fn main() -> Result<()> {
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
+    let mut input = stdin.lock();
 
-    for line in stdin.lock().lines() {
-        match line {
-            Ok(line) => {
-                if line.is_empty() {
-                    continue;
-                }
-
-                if line.len() > MAX_HELPER_JSON_LINE {
-                    let response = HelperResponse::Error {
-                        message: "Request too large".into(),
-                        details: Some(format!("JSON line exceeded {MAX_HELPER_JSON_LINE} bytes")),
-                    };
-                    if let Ok(json) = serde_json::to_string(&response) {
-                        if writeln!(stdout, "{json}").is_err() || stdout.flush().is_err() {
-                            break;
-                        }
+    loop {
+        match read_json_line(&mut input, MAX_HELPER_JSON_LINE) {
+            Ok(None) => break,
+            Ok(Some(Err(()))) => {
+                let response = HelperResponse::Error {
+                    message: "Request too large".into(),
+                    details: Some(format!("JSON line exceeded {MAX_HELPER_JSON_LINE} bytes")),
+                };
+                if let Ok(json) = serde_json::to_string(&response) {
+                    if writeln!(stdout, "{json}").is_err() || stdout.flush().is_err() {
+                        break;
                     }
+                }
+                continue;
+            }
+            Ok(Some(Ok(line))) => {
+                if line.is_empty() {
                     continue;
                 }
 
@@ -84,6 +85,31 @@ fn main() -> Result<()> {
 
     tracing::info!("NixOS Toolkit Helper shutting down");
     Ok(())
+}
+
+/// Read one stdin line without growing past `max` bytes.
+fn read_json_line(reader: &mut impl BufRead, max: usize) -> io::Result<Option<Result<String, ()>>> {
+    let mut buf = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        let n = reader.read(&mut byte)?;
+        if n == 0 {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        if buf.len() >= max {
+            let mut rest = Vec::new();
+            let _ = reader.read_until(b'\n', &mut rest);
+            return Ok(Some(Err(())));
+        }
+        buf.push(byte[0]);
+    }
+    Ok(Some(Ok(String::from_utf8_lossy(&buf).into_owned())))
 }
 
 fn handle_request(request: HelperRequest) -> HelperResponse {

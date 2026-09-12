@@ -181,21 +181,6 @@ sudo nixos-rebuild switch --flake .#"#
         .to_string()
 }
 
-/// Check if we can write to the managed directory.
-#[must_use]
-pub fn can_write_managed_dir() -> bool {
-    let dir = Path::new("/etc/nixos/nixos-toolkit");
-    if dir.exists() {
-        fs::metadata(dir)
-            .map(|m| !m.permissions().readonly())
-            .unwrap_or(false)
-    } else {
-        fs::metadata("/etc/nixos")
-            .map(|m| !m.permissions().readonly())
-            .unwrap_or(false)
-    }
-}
-
 fn lspci_command() -> Command {
     if in_flatpak() {
         let mut cmd = Command::new("flatpak-spawn");

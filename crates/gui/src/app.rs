@@ -151,6 +151,8 @@ pub struct AppModel {
     pub(crate) field_errors: FieldErrors,
     pub(crate) verify_pending: bool,
     pub(crate) helper_cancel: Arc<AtomicBool>,
+    /// When true, Apply helper events from a cancelled run are ignored.
+    pub(crate) discard_apply_events: bool,
     /// UDP port opened automatically for WireGuard (moved/removed with the toggle).
     pub(crate) wg_auto_udp: Option<u16>,
 }
@@ -388,6 +390,7 @@ impl Application for AppModel {
             field_errors: FieldErrors::default(),
             verify_pending: false,
             helper_cancel: Arc::new(AtomicBool::new(false)),
+            discard_apply_events: false,
             wg_auto_udp: None,
         };
 
@@ -603,7 +606,8 @@ impl AppModel {
                 Intent::None => {}
                 Intent::SpawnHelper { op, request } => {
                     self.helper_cancel
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.helper_cancel = Arc::new(AtomicBool::new(false));
                     tasks.push(spawn_helper_task(
                         self.flags.spawn.clone(),
                         op,

@@ -429,8 +429,12 @@ impl AppModel {
                     self.custom_udp_input = crate::state::custom_udp_input_from_ports(
                         &self.state.network_config.allowed_udp_ports,
                     );
-                } else if let Some(port) = self.wg_auto_udp.take() {
-                    self.state.set_udp_port(port, false);
+                } else {
+                    if let Some(port) = self.wg_auto_udp.take() {
+                        self.state.set_udp_port(port, false);
+                    }
+                    let listen = self.state.wireguard_listen_port();
+                    self.state.set_udp_port(listen, false);
                     self.custom_udp_input = crate::state::custom_udp_input_from_ports(
                         &self.state.network_config.allowed_udp_ports,
                     );
@@ -505,6 +509,7 @@ impl AppModel {
                 ) {
                     self.helper_cancel
                         .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.discard_apply_events = true;
                     self.busy = Busy::Idle;
                     self.helper = HelperStatus::Idle;
                     self.apply_log
@@ -585,6 +590,27 @@ impl AppModel {
     }
 
     fn apply_helper(&mut self, event: HelperEvent) -> Vec<Intent> {
+        if self.discard_apply_events {
+            match &event {
+                HelperEvent::Response {
+                    op: HelperOp::Apply { .. },
+                    ..
+                }
+                | HelperEvent::Timeout {
+                    op: HelperOp::Apply { .. },
+                }
+                | HelperEvent::Closed {
+                    op: HelperOp::Apply { .. },
+                    ..
+                }
+                | HelperEvent::Spawned {
+                    op: HelperOp::Apply { .. },
+                } => {
+                    return Vec::new();
+                }
+                _ => {}
+            }
+        }
         match event {
             HelperEvent::SpawnFailed { op, error } => {
                 self.helper = HelperStatus::Idle;
@@ -773,18 +799,15 @@ impl AppModel {
             HelperResponse::Log { message, .. } => {
                 match op {
                     HelperOp::RunMaintenance { .. } => {
-                        self.maintenance_log.push_str(&message);
-                        self.maintenance_log.push('\n');
+                        append_capped_log(&mut self.maintenance_log, &message);
                     }
                     HelperOp::Rollback { .. }
                     | HelperOp::DeleteGenerations { .. }
                     | HelperOp::ListGenerations => {
-                        self.generations_log.push_str(&message);
-                        self.generations_log.push('\n');
+                        append_capped_log(&mut self.generations_log, &message);
                     }
                     _ => {
-                        self.apply_log.push_str(&message);
-                        self.apply_log.push('\n');
+                        append_capped_log(&mut self.apply_log, &message);
                     }
                 }
                 Vec::new()
@@ -948,6 +971,7 @@ impl AppModel {
         if self.busy != Busy::Idle || !self.helper_can_spawn() {
             return Vec::new();
         }
+        self.discard_apply_events = false;
         self.busy = if matches!(rebuild, RebuildType::DryBuild) {
             Busy::DryRun
         } else {
@@ -1853,9 +1877,22 @@ mod tests {
         let intents = app.apply(Message::CancelApply);
         assert_eq!(app.busy, Busy::Idle);
         assert!(app.helper_cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(app.discard_apply_events);
         assert!(intents
             .iter()
             .any(|intent| matches!(intent, Intent::ShowToast { .. })));
+        let late = app.apply(Message::Helper(HelperEvent::Response {
+            op: HelperOp::Apply {
+                rebuild: RebuildType::Switch,
+                then_write_state: true,
+                save: None,
+            },
+            response: Box::new(HelperResponse::ApplyComplete {
+                success: true,
+                message: "late".into(),
+            }),
+        }));
+        assert!(late.is_empty());
     }
 
     #[test]
