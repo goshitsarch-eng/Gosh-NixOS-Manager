@@ -15,11 +15,9 @@ finish-args:
   # Host helper: flatpak-spawn --host pkexec nixos-toolkit-helper.
   # flathub-linter: skip=finish-args-flatpak-spawn-access
   - --talk-name=org.freedesktop.Flatpak
-  # Unprivileged NixOS detection without a pkexec prompt on startup.
-  # Sandbox /etc/os-release is the runtime, not the host — do not overlay it.
+  # Unprivileged NixOS detection uses flatpak-spawn --host (see integration.rs).
+  # Do not bind-mount /etc/nixos (host secrets). /etc/NIXOS is a stamp file.
   - --filesystem=/etc/NIXOS:ro
-  - --filesystem=/etc/nixos:ro
-  - --filesystem=/etc/hostname:ro
   # Preview templates shipped in /app. Do not set SKIP_PRIVILEGED_INIT here:
   # production NixOS should still ReadState on startup (smoke sets it at run).
   - --env=NIXOS_TOOLKIT_TEMPLATES_DIR=/app/share/nixos-toolkit/templates
