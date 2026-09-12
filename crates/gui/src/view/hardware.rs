@@ -154,7 +154,11 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
             ))
             .add(
                 settings::item::builder(crate::fl!("hardware-power-profile"))
-                    .description(crate::fl!("hardware-power-profile-desc"))
+                    .description(if hw.tlp_enabled {
+                        crate::fl!("hardware-power-profile-tlp")
+                    } else {
+                        crate::fl!("hardware-power-profile-desc")
+                    })
                     .icon(super::icon("power-profile-balanced-symbolic"))
                     .control(widget::dropdown(power_options, Some(power_idx), |index| {
                         Message::SetPowerProfile(index as u8)

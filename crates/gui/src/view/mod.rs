@@ -20,7 +20,7 @@ use common::actions::{
 use common::{BundleDef, MaintenanceActionDef, ProfileDef, SystemActionDef};
 use cosmic::iced::Length;
 use cosmic::widget::{self, settings};
-use cosmic::{theme, Apply, Element};
+use cosmic::{theme, Element};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -38,12 +38,15 @@ pub fn root<'a>(app: &'a AppModel) -> Element<'a, Message> {
             banner.text.as_str(),
         ));
     }
-    children.push(page(app));
+    children.push(
+        widget::scrollable(page(app))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+    );
 
     settings::view_column(children)
         .padding(spacing.space_m)
-        .width(Length::Fill)
-        .apply(widget::scrollable)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

@@ -27,12 +27,7 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
 
     match config_mode {
         ConfigMode::Flake => {
-            // Get hostname for flake reference
-            let hostname = std::fs::read_to_string("/etc/hostname")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| "nixos".to_string());
-
-            cmd.arg("--flake").arg(format!("/etc/nixos#{}", hostname));
+            cmd.arg("--flake").arg("/etc/nixos");
         }
         ConfigMode::Classic | ConfigMode::Unknown => {
             // Classic mode uses default paths

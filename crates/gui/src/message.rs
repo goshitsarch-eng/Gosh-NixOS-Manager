@@ -25,6 +25,10 @@ pub enum Message {
     ClipboardCopied {
         ok: bool,
     },
+    /// Generic failure toast (open path/URL, etc.).
+    Notify {
+        text: String,
+    },
 
     // ── Onboarding ────────────────────────────────────────────────────────
     CopyIntegrationSnippet,

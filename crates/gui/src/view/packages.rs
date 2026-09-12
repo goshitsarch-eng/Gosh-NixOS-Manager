@@ -8,18 +8,17 @@ use cosmic::{theme, Element};
 
 pub fn view(app: &AppModel) -> Element<'_, Message> {
     let spacing = theme::spacing();
+    let add_input = widget::text_input(
+        crate::fl!("packages-placeholder"),
+        app.package_input.as_str(),
+    )
+    .on_input(Message::PackageInputChanged)
+    .on_submit(|_| Message::AddPackagesFromInput)
+    .width(Length::Fill);
     let add_row = widget::row::with_capacity(2)
         .spacing(spacing.space_s)
         .align_y(Alignment::Center)
-        .push(
-            widget::text_input(
-                crate::fl!("packages-placeholder"),
-                app.package_input.as_str(),
-            )
-            .on_input(Message::PackageInputChanged)
-            .on_submit(|_| Message::AddPackagesFromInput)
-            .width(Length::Fill),
-        )
+        .push(add_input)
         .push(widget::button::suggested(crate::fl!("add")).on_press(Message::AddPackagesFromInput));
 
     let mut installed = settings::section().header(super::section_header(
@@ -59,7 +58,12 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         settings::section()
             .header(super::section_header(
                 crate::fl!("packages-add"),
-                Some(crate::fl!("packages-add-desc")),
+                Some(
+                    app.field_errors
+                        .packages
+                        .clone()
+                        .unwrap_or_else(|| crate::fl!("packages-add-desc")),
+                ),
             ))
             .add(add_row)
             .into(),

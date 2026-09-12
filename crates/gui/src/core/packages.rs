@@ -114,15 +114,7 @@ pub fn is_valid_package_name(name: &str) -> bool {
         return false;
     }
 
-    // Must start with a letter
-    let first = name.chars().next().unwrap();
-    if !first.is_ascii_alphabetic() {
-        return false;
-    }
-
-    // Rest can be alphanumeric, hyphens, underscores, dots (for nested packages)
-    name.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    common::nix::is_nix_attrpath(name)
 }
 
 /// Map every catalog package id to its bundle **display name**.
@@ -284,6 +276,8 @@ mod tests {
         assert!(is_valid_package_name("python3Packages.pip"));
         assert!(is_valid_package_name("nerd-fonts.fira-code"));
         assert!(is_valid_package_name(&"a".repeat(128)));
+        assert!(is_valid_package_name("_1password-gui"));
+        assert!(is_valid_package_name("_hidden"));
     }
 
     #[test]
@@ -294,7 +288,10 @@ mod tests {
         assert!(!is_valid_package_name("foo/bar"));
         assert!(!is_valid_package_name(&"a".repeat(129)));
         assert!(parse_package_input("123abc").is_empty());
-        assert!(parse_package_input("_hidden").is_empty());
+        assert_eq!(
+            parse_package_input("_1password-gui"),
+            vec!["_1password-gui"]
+        );
     }
 
     #[test]

@@ -100,36 +100,42 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
                     .icon(super::icon("network-server-symbolic"))
                     .control(tcp_chips),
             )
-            .add(
-                settings::item::builder(crate::fl!("network-custom-tcp"))
-                    .icon(super::icon("network-wired-symbolic"))
-                    .control(
-                        widget::text_input(
-                            crate::fl!("network-custom-tcp-placeholder"),
-                            app.custom_tcp_input.as_str(),
-                        )
-                        .on_input(Message::CustomTcpPortsChanged)
-                        .on_submit(Message::CustomTcpPortsChanged),
-                    ),
-            )
+            .add({
+                let mut item = settings::item::builder(crate::fl!("network-custom-tcp"))
+                    .icon(super::icon("network-wired-symbolic"));
+                if let Some(error) = app.field_errors.tcp_ports.as_deref() {
+                    item = item.description(error.to_owned());
+                }
+                item.control(
+                    widget::text_input(
+                        crate::fl!("network-custom-tcp-placeholder"),
+                        app.custom_tcp_input.as_str(),
+                    )
+                    .on_input(Message::CustomTcpPortsChanged)
+                    .on_submit(Message::CustomTcpPortsChanged),
+                )
+            })
             .add(
                 settings::item::builder(crate::fl!("network-quick-udp"))
                     .description(crate::fl!("network-quick-udp-desc"))
                     .icon(super::icon("network-workgroup-symbolic"))
                     .control(udp_chips),
             )
-            .add(
-                settings::item::builder(crate::fl!("network-custom-udp"))
-                    .icon(super::icon("network-wireless-symbolic"))
-                    .control(
-                        widget::text_input(
-                            crate::fl!("network-custom-udp-placeholder"),
-                            app.custom_udp_input.as_str(),
-                        )
-                        .on_input(Message::CustomUdpPortsChanged)
-                        .on_submit(Message::CustomUdpPortsChanged),
-                    ),
-            )
+            .add({
+                let mut item = settings::item::builder(crate::fl!("network-custom-udp"))
+                    .icon(super::icon("network-wireless-symbolic"));
+                if let Some(error) = app.field_errors.udp_ports.as_deref() {
+                    item = item.description(error.to_owned());
+                }
+                item.control(
+                    widget::text_input(
+                        crate::fl!("network-custom-udp-placeholder"),
+                        app.custom_udp_input.as_str(),
+                    )
+                    .on_input(Message::CustomUdpPortsChanged)
+                    .on_submit(Message::CustomUdpPortsChanged),
+                )
+            })
             .add(super::info_item(
                 crate::fl!("network-format"),
                 crate::fl!("network-format-desc"),

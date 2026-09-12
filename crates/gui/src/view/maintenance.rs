@@ -54,9 +54,10 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
     let store_sub = match (app.disk_usage.as_ref(), calculating) {
         (_, true) => crate::fl!("calculating"),
         (None, false) => crate::fl!("loading"),
-        (Some(info), false) if info.store_size.is_empty() => {
-            crate::fl!("maintenance-disk-error")
-        }
+        (Some(info), false) if info.store_size.is_empty() => info
+            .error
+            .clone()
+            .unwrap_or_else(|| crate::fl!("maintenance-disk-error")),
         (Some(info), false) => info.store_size.clone(),
     };
     let generations_sub = match (app.disk_usage.as_ref(), calculating) {
@@ -76,8 +77,10 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         crate::fl!("refresh-disk")
     };
     let mut refresh = widget::button::standard(refresh_label);
-    if idle {
+    if buttons_enabled {
         refresh = refresh.on_press(Message::LoadDiskUsage);
+    } else if app.helper_missing {
+        refresh = refresh.tooltip(crate::fl!("helper-missing-action"));
     }
 
     let log = if app.maintenance_log().is_empty() {

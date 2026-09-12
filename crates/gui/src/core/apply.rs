@@ -31,7 +31,16 @@ impl AppModel {
                 }
                 Vec::new()
             }
-            Message::LaunchUrl(url) => vec![Intent::OpenUrl(url)],
+            Message::LaunchUrl(url) => {
+                if let Some(err) = url_scheme_error(&url) {
+                    vec![Intent::ShowToast {
+                        text: err,
+                        timeout_ms: TOAST_MS,
+                    }]
+                } else {
+                    vec![Intent::OpenUrl(url)]
+                }
+            }
             Message::Quit => vec![Intent::Exit],
             Message::RefreshSystem => {
                 if !self.flags.skip_host_probes {
@@ -85,6 +94,10 @@ impl AppModel {
                     }]
                 }
             }
+            Message::Notify { text } => vec![Intent::ShowToast {
+                text,
+                timeout_ms: TOAST_MS,
+            }],
 
             Message::CopyIntegrationSnippet => {
                 let snippet = match self.system_info.config_mode {
@@ -141,6 +154,9 @@ impl AppModel {
                 package,
                 enabled,
             } => {
+                if !self.state.is_bundle_enabled(&bundle_id) {
+                    return Vec::new();
+                }
                 if self.state.get_bundle_packages(&bundle_id).is_none() {
                     self.state.set_bundle_packages(&bundle_id, HashSet::new());
                 }
@@ -160,8 +176,12 @@ impl AppModel {
             Message::AddPackagesFromInput => {
                 let packages = parse_package_input(&self.package_input);
                 if packages.is_empty() {
+                    if !self.package_input.trim().is_empty() {
+                        self.field_errors.packages = Some(crate::fl!("error-packages-invalid"));
+                    }
                     return Vec::new();
                 }
+                self.field_errors.packages = None;
                 self.package_input.clear();
 
                 let (added, duplicates, in_bundle) = classify_new_packages(
@@ -316,6 +336,9 @@ impl AppModel {
             }
             Message::SetTlpEnabled(enabled) => {
                 self.state.hardware_config.tlp_enabled = enabled;
+                if enabled {
+                    self.state.hardware_config.power_profile = 0;
+                }
                 self.state.has_changes = true;
                 Vec::new()
             }
@@ -346,8 +369,9 @@ impl AppModel {
                 Vec::new()
             }
             Message::CustomTcpPortsChanged(raw) => {
-                if let Err(err) = self.state.parse_and_set_custom_tcp_ports(&raw) {
-                    tracing::debug!(err, "invalid custom TCP ports");
+                match self.state.parse_and_set_custom_tcp_ports(&raw) {
+                    Ok(()) => self.field_errors.tcp_ports = None,
+                    Err(err) => self.field_errors.tcp_ports = Some(err),
                 }
                 self.custom_tcp_input = raw;
                 Vec::new()
@@ -357,8 +381,9 @@ impl AppModel {
                 Vec::new()
             }
             Message::CustomUdpPortsChanged(raw) => {
-                if let Err(err) = self.state.parse_and_set_custom_udp_ports(&raw) {
-                    tracing::debug!(err, "invalid custom UDP ports");
+                match self.state.parse_and_set_custom_udp_ports(&raw) {
+                    Ok(()) => self.field_errors.udp_ports = None,
+                    Err(err) => self.field_errors.udp_ports = Some(err),
                 }
                 self.custom_udp_input = raw;
                 Vec::new()
@@ -399,8 +424,13 @@ impl AppModel {
                 if enabled {
                     let port = self.state.wireguard_listen_port();
                     self.state.network_config.wireguard_listen_port = port;
-                    // Open the listen UDP port; leave it if the user later disables WireGuard.
                     self.state.set_udp_port(port, true);
+                    self.wg_auto_udp = Some(port);
+                    self.custom_udp_input = crate::state::custom_udp_input_from_ports(
+                        &self.state.network_config.allowed_udp_ports,
+                    );
+                } else if let Some(port) = self.wg_auto_udp.take() {
+                    self.state.set_udp_port(port, false);
                     self.custom_udp_input = crate::state::custom_udp_input_from_ports(
                         &self.state.network_config.allowed_udp_ports,
                     );
@@ -416,8 +446,13 @@ impl AppModel {
                 };
                 self.state.network_config.wireguard_listen_port = port;
                 if self.state.network_config.wireguard_enabled {
-                    // Open the new listen port; do not remove a previously auto-added port.
+                    if let Some(old) = self.wg_auto_udp {
+                        if old != port {
+                            self.state.set_udp_port(old, false);
+                        }
+                    }
                     self.state.set_udp_port(port, true);
+                    self.wg_auto_udp = Some(port);
                     self.custom_udp_input = crate::state::custom_udp_input_from_ports(
                         &self.state.network_config.allowed_udp_ports,
                     );
@@ -1090,6 +1125,13 @@ impl AppModel {
 
     pub(crate) fn refresh_banner(&mut self) {
         // Priority: Not NixOS > helper-missing / state-load warning > integration.
+        if self.busy == Busy::LoadingState {
+            self.banner = Some(Banner {
+                kind: BannerKind::Info,
+                text: crate::fl!("banner-loading-state"),
+            });
+            return;
+        }
         if !self.system_info.is_nixos && !self.flags.skip_host_probes {
             self.banner = Some(Banner {
                 kind: BannerKind::Error,
@@ -1164,6 +1206,15 @@ fn append_capped_log(buf: &mut String, text: &str) {
             buf.drain(..=i);
         }
         buf.insert_str(0, "…\n");
+    }
+}
+
+fn url_scheme_error(url: &str) -> Option<String> {
+    let lower = url.trim().to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        None
+    } else {
+        Some(crate::fl!("toast-url-blocked"))
     }
 }
 
@@ -1242,6 +1293,7 @@ mod tests {
                 | Message::DismissDialog
                 | Message::UpdateConfig(_)
                 | Message::ClipboardCopied { .. }
+                | Message::Notify { .. }
                 | Message::CopyIntegrationSnippet
                 | Message::OpenEtcNixos
                 | Message::VerifyIntegration
@@ -1320,6 +1372,9 @@ mod tests {
             Message::DismissDialog,
             Message::UpdateConfig(crate::config::UserPreferences::default()),
             Message::ClipboardCopied { ok: true },
+            Message::Notify {
+                text: String::new(),
+            },
             Message::CopyIntegrationSnippet,
             Message::OpenEtcNixos,
             Message::VerifyIntegration,
@@ -1755,6 +1810,40 @@ mod tests {
         assert!(intents
             .iter()
             .any(|intent| matches!(intent, Intent::ShowToast { .. })));
+    }
+
+    #[test]
+    fn invalid_package_input_sets_field_error() {
+        let mut app = test_app();
+        app.apply(Message::PackageInputChanged("123abc".into()));
+        app.apply(Message::AddPackagesFromInput);
+        assert!(app.field_errors.packages.is_some());
+        assert!(app.state.custom_packages.is_empty());
+    }
+
+    #[test]
+    fn launch_url_rejects_non_http() {
+        let mut app = test_app();
+        let intents = app.apply(Message::LaunchUrl("file:///etc/passwd".into()));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::ShowToast { .. })));
+        assert!(!intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::OpenUrl(_))));
+        let intents = app.apply(Message::LaunchUrl("https://example.com".into()));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::OpenUrl(url) if url == "https://example.com")));
+    }
+
+    #[test]
+    fn wireguard_disable_removes_auto_udp_port() {
+        let mut app = test_app();
+        app.apply(Message::SetWireguardEnabled(true));
+        assert!(app.state.network_config.allowed_udp_ports.contains(&51820));
+        app.apply(Message::SetWireguardEnabled(false));
+        assert!(!app.state.network_config.allowed_udp_ports.contains(&51820));
     }
 
     #[test]
@@ -2382,17 +2471,11 @@ mod tests {
 
         app.apply(Message::SetWireguardListenPort(51821));
         assert_eq!(app.state.network_config.wireguard_listen_port, 51821);
-        assert_eq!(
-            app.state.network_config.allowed_udp_ports,
-            vec![51820, 51821]
-        );
+        assert_eq!(app.state.network_config.allowed_udp_ports, vec![51821]);
 
         app.apply(Message::SetWireguardEnabled(false));
         assert!(!app.state.network_config.wireguard_enabled);
-        assert_eq!(
-            app.state.network_config.allowed_udp_ports,
-            vec![51820, 51821]
-        );
+        assert!(app.state.network_config.allowed_udp_ports.is_empty());
     }
 
     #[test]

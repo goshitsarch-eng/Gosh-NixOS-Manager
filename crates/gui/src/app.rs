@@ -109,6 +109,8 @@ pub struct FieldErrors {
     pub dns: Option<String>,
     pub username: Option<String>,
     pub packages: Option<String>,
+    pub tcp_ports: Option<String>,
+    pub udp_ports: Option<String>,
 }
 
 /// Application model. Views borrow this; `apply()` mutates it.
@@ -149,6 +151,8 @@ pub struct AppModel {
     pub(crate) field_errors: FieldErrors,
     pub(crate) verify_pending: bool,
     pub(crate) helper_cancel: Arc<AtomicBool>,
+    /// UDP port opened automatically for WireGuard (moved/removed with the toggle).
+    pub(crate) wg_auto_udp: Option<u16>,
 }
 
 impl AppModel {
@@ -384,6 +388,7 @@ impl Application for AppModel {
             field_errors: FieldErrors::default(),
             verify_pending: false,
             helper_cancel: Arc::new(AtomicBool::new(false)),
+            wg_auto_udp: None,
         };
 
         app.seed_username_from_host();
@@ -394,9 +399,8 @@ impl Application for AppModel {
                 text: crate::fl!("helper-missing-banner"),
             });
         }
-        app.refresh_banner();
-
         let intents = app.startup_intents();
+        app.refresh_banner();
         let task = app.intents_to_task(intents);
         (app, task)
     }
@@ -642,18 +646,28 @@ impl AppModel {
                 }
                 Intent::OpenPath(path) => {
                     tasks.push(cosmic::task::future(async move {
-                        if let Err(err) = open_path(&path) {
-                            tracing::warn!(?err, path = %path.display(), "failed to open path");
+                        match open_path(&path) {
+                            Ok(()) => cosmic::Action::None,
+                            Err(err) => {
+                                tracing::warn!(?err, path = %path.display(), "failed to open path");
+                                cosmic::Action::App(Message::Notify {
+                                    text: crate::fl!("toast-open-failed"),
+                                })
+                            }
                         }
-                        cosmic::Action::None
                     }));
                 }
                 Intent::OpenUrl(url) => {
                     tasks.push(cosmic::task::future(async move {
-                        if let Err(err) = open::that_detached(&url) {
-                            tracing::warn!(?err, url, "failed to open url");
+                        match open::that_detached(&url) {
+                            Ok(()) => cosmic::Action::None,
+                            Err(err) => {
+                                tracing::warn!(?err, url, "failed to open url");
+                                cosmic::Action::App(Message::Notify {
+                                    text: crate::fl!("toast-open-failed"),
+                                })
+                            }
                         }
-                        cosmic::Action::None
                     }));
                 }
                 Intent::SavePrefs => {

@@ -17,8 +17,10 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
 
     let mut refresh = widget::button::standard(crate::fl!("refresh"))
         .leading_icon(widget::icon::from_name("view-refresh-symbolic"));
-    if idle {
+    if buttons_enabled {
         refresh = refresh.on_press(Message::LoadGenerations);
+    } else if app.helper_missing {
+        refresh = refresh.tooltip(crate::fl!("helper-missing-action"));
     }
     let mut rollback = widget::button::suggested(crate::fl!("rollback-previous"))
         .leading_icon(widget::icon::from_name("edit-undo-symbolic"));

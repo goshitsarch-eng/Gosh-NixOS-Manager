@@ -35,7 +35,21 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         let mut section =
             settings::section().header(super::section_header(group.title, Some(group.description)));
         for service in group.services {
-            section = section.add(service_row(service, config));
+            let enabled = service_enabled(config, service.id);
+            let id = service.id.to_owned();
+            section = section.add(
+                settings::item::builder(service_name(service.id))
+                    .description(format!(
+                        "{} — {}",
+                        service_description(service.id),
+                        crate::fl!("service-nix-option", option = service.nix_option)
+                    ))
+                    .icon(super::icon(service.icon))
+                    .toggler(enabled, move |enabled| Message::ToggleService {
+                        id: id.clone(),
+                        enabled,
+                    }),
+            );
         }
         if let Some((title, description, icon)) = group.extra {
             section = section.add(super::info_item(title, description, icon));
@@ -54,30 +68,6 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
     );
 
     settings::view_column(children).into()
-}
-
-fn service_row<'a>(service: &ServiceDef, config: &ServicesConfig) -> Element<'a, Message> {
-    let enabled = service_enabled(config, service.id);
-    let id = service.id.to_owned();
-    widget::tooltip(
-        settings::item::builder(service_name(service.id))
-            .description(service_description(service.id))
-            .icon(super::icon(service.icon))
-            .control(
-                widget::toggler(enabled)
-                    .width(Length::Shrink)
-                    .on_toggle(move |enabled| Message::ToggleService {
-                        id: id.clone(),
-                        enabled,
-                    }),
-            ),
-        widget::text::caption(crate::fl!(
-            "service-nix-option",
-            option = service.nix_option
-        )),
-        widget::tooltip::Position::Bottom,
-    )
-    .into()
 }
 
 fn service_name(id: &str) -> String {

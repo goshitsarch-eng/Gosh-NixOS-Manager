@@ -611,7 +611,7 @@ pub fn default_bundles() -> Vec<BundleDef> {
                 PackageDef::new("gnuplot", "Gnuplot"),
             ],
             arm_compat: ArmCompat::Partial,
-            arm_note: Some("RStudio binary not available; Julia has limited ARM support".into()),
+            arm_note: Some("Julia has limited ARM support".into()),
         },
         // 3D & CAD
         BundleDef {
@@ -730,7 +730,7 @@ pub fn default_system_actions() -> Vec<SystemActionDef> {
         SystemActionDef {
             id: "docker_user".into(),
             name: "Docker Group".into(),
-            description: "Add user to docker group for rootless Docker".into(),
+            description: "Add user to docker group for the Docker socket".into(),
             icon: "system-users-symbolic".into(),
             action_type: SystemActionType::UserGroup {
                 group: "docker".into(),
