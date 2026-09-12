@@ -33,7 +33,14 @@ impl AppModel {
             }
             Message::LaunchUrl(url) => vec![Intent::OpenUrl(url)],
             Message::Quit => vec![Intent::Exit],
-            Message::RefreshSystem => vec![Intent::DetectSystem, Intent::DetectGpu],
+            Message::RefreshSystem => {
+                if !self.flags.skip_host_probes {
+                    self.flags.spawn = crate::helper::spawn::SpawnSpec::from_env();
+                    self.helper_missing = !self.flags.spawn.helper_available;
+                    self.refresh_banner();
+                }
+                vec![Intent::DetectSystem, Intent::DetectGpu]
+            }
             Message::SystemDetected(info) => {
                 self.system_info = info;
                 self.seed_username_from_host();
@@ -59,7 +66,7 @@ impl AppModel {
                     Vec::new()
                 }
             }
-            Message::DismissToast => Vec::new(),
+            Message::DismissToast(_) => Vec::new(),
             Message::DismissDialog => {
                 self.dialog = None;
                 Vec::new()
@@ -450,7 +457,30 @@ impl AppModel {
             }
             Message::CancelApply => {
                 self.dialog = None;
-                Vec::new()
+                if matches!(
+                    self.busy,
+                    Busy::Applying
+                        | Busy::DryRun
+                        | Busy::LoadingGenerations
+                        | Busy::LoadingDisk
+                        | Busy::Maintenance
+                        | Busy::RollingBack
+                        | Busy::DeletingGeneration
+                        | Busy::LoadingState
+                ) {
+                    self.helper_cancel
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.busy = Busy::Idle;
+                    self.helper = HelperStatus::Idle;
+                    self.apply_log
+                        .push_str(&format!("\n{}\n", crate::fl!("apply-cancelled")));
+                    vec![Intent::ShowToast {
+                        text: crate::fl!("toast-helper-cancelled"),
+                        timeout_ms: TOAST_MS,
+                    }]
+                } else {
+                    Vec::new()
+                }
             }
             Message::RequestDryRun => self.start_rebuild(RebuildType::DryBuild, false),
             Message::SetRebuildType(rebuild) => {
@@ -461,11 +491,17 @@ impl AppModel {
             }
             Message::ApplyFinished { success, message } => {
                 self.busy = Busy::Idle;
-                if success {
+                let state_saved = !message.to_ascii_lowercase().contains("state save failed");
+                if success && state_saved {
                     self.state.mark_applied();
                 }
+                let text = if success {
+                    crate::fl!("apply-complete", details = message.as_str())
+                } else {
+                    crate::fl!("apply-failed", details = message.as_str())
+                };
                 vec![Intent::ShowToast {
-                    text: message,
+                    text,
                     timeout_ms: TOAST_MS,
                 }]
             }
@@ -551,31 +587,41 @@ impl AppModel {
                 self.helper = HelperStatus::Idle;
                 let was_busy = self.busy;
                 self.busy = Busy::Idle;
-                if matches!(op, HelperOp::ReadState) {
-                    self.state_load_warning = Some(crate::fl!("banner-state-timeout"));
-                    self.refresh_banner();
+                if error.as_deref() == Some("cancelled") {
                     return Vec::new();
                 }
+                if matches!(op, HelperOp::ReadState) {
+                    self.state_load_warning = Some(crate::fl!("banner-state-helper-comm"));
+                    self.refresh_banner();
+                    return vec![Intent::ShowToast {
+                        text: crate::fl!("banner-state-helper-comm"),
+                        timeout_ms: TOAST_MS,
+                    }];
+                }
                 let detail = error.unwrap_or_else(|| crate::fl!("log-helper-closed"));
-                match op {
-                    HelperOp::Apply { .. } if was_busy != Busy::Idle => {
-                        self.apply_log.push_str(&format!("\n{detail}\n"));
-                        vec![Intent::ShowToast {
-                            text: detail,
-                            timeout_ms: TOAST_MS,
-                        }]
-                    }
-                    _ => Vec::new(),
+                self.append_op_log(&op, &detail);
+                if was_busy != Busy::Idle {
+                    vec![Intent::ShowToast {
+                        text: detail,
+                        timeout_ms: TOAST_MS,
+                    }]
+                } else {
+                    Vec::new()
                 }
             }
             HelperEvent::Timeout { op } => {
                 self.helper = HelperStatus::Idle;
                 self.busy = Busy::Idle;
+                let text = crate::fl!("toast-helper-timeout");
                 if matches!(op, HelperOp::ReadState) {
                     self.state_load_warning = Some(crate::fl!("banner-state-timeout"));
                     self.refresh_banner();
                 }
-                Vec::new()
+                self.append_op_log(&op, &text);
+                vec![Intent::ShowToast {
+                    text,
+                    timeout_ms: TOAST_MS,
+                }]
             }
         }
     }
@@ -583,16 +629,28 @@ impl AppModel {
     fn apply_helper_response(&mut self, op: HelperOp, response: HelperResponse) -> Vec<Intent> {
         match response {
             HelperResponse::State(ipc) => {
-                self.state = crate::state::AppState::from_ipc_state(ipc);
-                self.sync_draft_inputs();
-                self.seed_username_from_host();
-                self.state_load_warning = None;
                 self.helper = HelperStatus::Idle;
                 if self.busy == Busy::LoadingState {
                     self.busy = Busy::Idle;
                 }
+                if self.state.has_changes {
+                    self.state_load_warning = Some(crate::fl!("banner-state-ignored-dirty"));
+                    self.refresh_banner();
+                    return vec![Intent::ShowToast {
+                        text: crate::fl!("toast-state-ignored-dirty"),
+                        timeout_ms: TOAST_MS,
+                    }];
+                }
+                self.state = crate::state::AppState::from_ipc_state(ipc);
+                self.sync_draft_inputs();
+                self.seed_username_from_host();
+                self.state_load_warning = None;
                 self.refresh_banner();
-                Vec::new()
+                if let Some(id) = self.state.selected_profile.clone() {
+                    vec![Intent::LocalProfilePreview { id }]
+                } else {
+                    Vec::new()
+                }
             }
             HelperResponse::Error { message, details } => {
                 self.helper = HelperStatus::Idle;
@@ -784,8 +842,15 @@ impl AppModel {
         let mut intents = vec![Intent::SetWindowTitle(self.window_title())];
         match page {
             Page::Apply => intents.push(Intent::LocalPreview),
+            Page::Profiles => {
+                if let Some(id) = self.state.selected_profile.clone() {
+                    intents.push(Intent::LocalProfilePreview { id });
+                }
+            }
             Page::Generations => intents.extend(self.load_generations_intents()),
-            Page::Maintenance => intents.extend(self.load_disk_usage_intents()),
+            Page::Maintenance if self.disk_usage.is_none() => {
+                intents.extend(self.load_disk_usage_intents());
+            }
             Page::Hardware if self.gpu_vendor.is_none() => intents.push(Intent::DetectGpu),
             _ => {}
         }
@@ -862,6 +927,7 @@ impl AppModel {
             let hardware = self.hardware_for_nix();
             ipc.bluetooth_enabled = hardware.bluetooth_enabled;
             ipc.hardware_config = hardware;
+            ipc.last_applied = Some(unix_timestamp_secs());
             Box::new(ipc)
         });
         let request = self.to_apply_request(rebuild);
@@ -1065,6 +1131,40 @@ impl AppModel {
     pub(crate) fn window_title(&self) -> String {
         format!("{} — {}", crate::fl!("app-title"), self.page.title())
     }
+
+    fn append_op_log(&mut self, op: &HelperOp, text: &str) {
+        let buf = match op {
+            HelperOp::RunMaintenance { .. } => &mut self.maintenance_log,
+            HelperOp::Rollback { .. }
+            | HelperOp::DeleteGenerations { .. }
+            | HelperOp::ListGenerations => &mut self.generations_log,
+            _ => &mut self.apply_log,
+        };
+        append_capped_log(buf, text);
+    }
+}
+
+fn unix_timestamp_secs() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
+fn append_capped_log(buf: &mut String, text: &str) {
+    const MAX: usize = 200_000;
+    buf.push_str(text);
+    if !text.ends_with('\n') {
+        buf.push('\n');
+    }
+    if buf.len() > MAX {
+        let drain = buf.len() - MAX;
+        buf.drain(..drain);
+        if let Some(i) = buf.find('\n') {
+            buf.drain(..=i);
+        }
+        buf.insert_str(0, "…\n");
+    }
 }
 
 /// GTK hostname charset `[A-Za-z0-9-]`, max 63 characters. Empty is handled by the caller.
@@ -1138,7 +1238,7 @@ mod tests {
                 | Message::Quit
                 | Message::RefreshSystem
                 | Message::SystemDetected(_)
-                | Message::DismissToast
+                | Message::DismissToast(_)
                 | Message::DismissDialog
                 | Message::UpdateConfig(_)
                 | Message::ClipboardCopied { .. }
@@ -1216,7 +1316,7 @@ mod tests {
             Message::Quit,
             Message::RefreshSystem,
             Message::SystemDetected(SystemInfo::default()),
-            Message::DismissToast,
+            Message::DismissToast(cosmic::widget::ToastId::default()),
             Message::DismissDialog,
             Message::UpdateConfig(crate::config::UserPreferences::default()),
             Message::ClipboardCopied { ok: true },
@@ -1607,6 +1707,69 @@ mod tests {
     }
 
     #[test]
+    fn confirm_apply_writes_last_applied() {
+        let mut app = test_app_with_helper();
+        app.state.select_profile("gnome");
+        let intents = app.apply(Message::ConfirmApply);
+        match spawn_helper(&intents) {
+            Some(Intent::SpawnHelper { op, .. }) => match op {
+                HelperOp::Apply {
+                    save: Some(state), ..
+                } => {
+                    assert!(state.last_applied.is_some());
+                }
+                other => panic!("expected Apply with save, got {other:?}"),
+            },
+            other => panic!("expected SpawnHelper, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn helper_timeout_toasts() {
+        let mut app = test_app_with_helper();
+        app.busy = Busy::LoadingGenerations;
+        let intents = app.apply(Message::Helper(HelperEvent::Timeout {
+            op: HelperOp::ListGenerations,
+        }));
+        assert_eq!(app.busy, Busy::Idle);
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::ShowToast { .. })));
+        assert!(app.generations_log.contains("timed out"));
+    }
+
+    #[test]
+    fn dirty_readstate_is_ignored() {
+        let mut app = test_app_with_helper();
+        app.state.select_profile("kde");
+        assert!(app.state.has_changes);
+        let ipc = IpcAppState {
+            selected_profile: Some("gnome".into()),
+            ..IpcAppState::default()
+        };
+        let intents = app.apply(Message::Helper(HelperEvent::Response {
+            op: HelperOp::ReadState,
+            response: Box::new(HelperResponse::State(ipc)),
+        }));
+        assert_eq!(app.state.selected_profile.as_deref(), Some("kde"));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::ShowToast { .. })));
+    }
+
+    #[test]
+    fn cancel_apply_while_busy_sets_cancel_flag() {
+        let mut app = test_app_with_helper();
+        app.busy = Busy::Applying;
+        let intents = app.apply(Message::CancelApply);
+        assert_eq!(app.busy, Busy::Idle);
+        assert!(app.helper_cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(intents
+            .iter()
+            .any(|intent| matches!(intent, Intent::ShowToast { .. })));
+    }
+
+    #[test]
     fn nvidia_open_combo_sets_open_flag() {
         let mut app = test_app();
         app.apply(Message::SetNvidiaDriver(Some(2)));
@@ -1903,7 +2066,7 @@ mod tests {
     #[test]
     fn helper_state_log_and_apply_complete() {
         let mut app = test_app();
-        app.state.has_changes = true;
+        app.state.has_changes = false;
 
         let ipc = IpcAppState {
             selected_profile: Some("xfce".into()),
@@ -1943,7 +2106,7 @@ mod tests {
         assert!(!app.state.has_changes);
         assert!(intents.iter().any(|intent| matches!(
             intent,
-            Intent::ShowToast { text, .. } if text == "done"
+            Intent::ShowToast { text, .. } if text.contains("done")
         )));
     }
 

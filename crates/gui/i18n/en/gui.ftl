@@ -90,6 +90,11 @@ banner-state-helper-comm = Failed to communicate with helper
 banner-state-read-error = State read error: { $message }
 banner-state-timeout = State read timeout
 banner-state-spawn = Could not load saved state - using defaults
+banner-state-ignored-dirty = Unsaved edits were kept; host state was not reloaded
+toast-state-ignored-dirty = Kept your unsaved edits instead of reloading host state
+toast-helper-timeout = The privileged helper timed out
+toast-helper-cancelled = Operation cancelled
+apply-cancelled = Cancelled.
 banner-arm-bundles = Running on ARM64 - some packages may not be available
 banner-arm-hardware = ARM64: NVIDIA drivers and Intel Thermald are not available
 
@@ -289,8 +294,9 @@ apply-preview-placeholder = # No changes to preview
     # Select a profile or bundles to see the configuration
 apply-building = Building configuration…
 apply-validating = Validating configuration…
-apply-complete = ✓ Complete
-apply-failed = ✗ Failed
+apply-complete = ✓ Complete — { $details }
+apply-failed = ✗ Failed — { $details }
+dialog-cancel-apply = Cancel
 apply-log = Build Log
 apply-log-desc = Output from nixos-rebuild
 apply-log-placeholder = # Output from nixos-rebuild

@@ -69,6 +69,22 @@ impl HelperClient {
                                 tracing::error!(
                                     "Failed to parse helper response: {e}; line={line}"
                                 );
+                                if line.trim_start().starts_with('{') {
+                                    let _ = tx.send(HelperResponse::Error {
+                                        message: "Unexpected response from helper".into(),
+                                        details: Some(e.to_string()),
+                                    });
+                                    break;
+                                }
+                                if tx
+                                    .send(HelperResponse::Log {
+                                        level: common::ipc::LogLevel::Warning,
+                                        message: line,
+                                    })
+                                    .is_err()
+                                {
+                                    break;
+                                }
                             }
                         }
                     }

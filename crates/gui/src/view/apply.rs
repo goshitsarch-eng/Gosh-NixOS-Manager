@@ -64,6 +64,10 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
             _ => crate::fl!("apply-building"),
         };
         actions = actions.push(widget::text::body(status));
+        actions = actions.push(
+            widget::button::standard(crate::fl!("dialog-cancel-apply"))
+                .on_press(Message::CancelApply),
+        );
     }
 
     let preview = if app.apply_preview.is_empty() {

@@ -4,39 +4,63 @@ use crate::helper::client::HelperClient;
 use crate::helper::spawn::SpawnSpec;
 use crate::message::{HelperEvent, HelperOp};
 use common::ipc::{HelperRequest, HelperResponse, LogLevel, RebuildType};
-use futures::stream::{self, Stream, StreamExt};
+use futures::stream::Stream;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-/// Stream helper events for one privileged operation.
-///
-/// When the spec says the helper is missing, yields [`HelperEvent::SpawnFailed`]
-/// and does not spawn a privileged helper.
+/// Stream helper events as they arrive (dedicated thread, not a buffered `async` block).
 pub fn stream(
     spec: SpawnSpec,
     op: HelperOp,
     request: HelperRequest,
+    cancel: Arc<AtomicBool>,
 ) -> impl Stream<Item = HelperEvent> + Send {
-    stream::once(async move { run_blocking(spec, op, request) }).flat_map(stream::iter)
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let _ = std::thread::Builder::new()
+        .name("nixos-toolkit-helper".into())
+        .spawn(move || {
+            run_emitting(spec, op, request, &cancel, |event| {
+                let _ = tx.unbounded_send(event);
+            });
+        });
+    rx
 }
 
 /// Run one helper process to completion.
 /// Switch/Boot/Test/Build: EnsureDirectories → Apply → optional WriteState.
 /// DryBuild: Apply only (the helper snapshots before creating directories).
+#[cfg(test)]
 pub(crate) fn run_blocking(
     spec: SpawnSpec,
     op: HelperOp,
     request: HelperRequest,
 ) -> Vec<HelperEvent> {
+    let mut events = Vec::new();
+    run_emitting(spec, op, request, &AtomicBool::new(false), |event| {
+        events.push(event)
+    });
+    events
+}
+
+fn run_emitting(
+    spec: SpawnSpec,
+    op: HelperOp,
+    request: HelperRequest,
+    cancel: &AtomicBool,
+    mut emit: impl FnMut(HelperEvent),
+) {
     if !spec.helper_available {
-        return vec![HelperEvent::SpawnFailed {
+        emit(HelperEvent::SpawnFailed {
             op,
             error: helper_missing_message().to_string(),
-        }];
+        });
+        return;
     }
 
     match HelperClient::spawn(&spec) {
         Ok(mut client) => {
-            let mut events = vec![HelperEvent::Spawned { op: event_op(&op) }];
+            emit(HelperEvent::Spawned { op: event_op(&op) });
             match &op {
                 HelperOp::Apply {
                     then_write_state,
@@ -48,16 +72,16 @@ pub(crate) fn run_blocking(
                     &request,
                     *then_write_state,
                     save.as_deref(),
-                    &mut events,
+                    cancel,
+                    &mut emit,
                 ),
-                _ => run_single(&mut client, &op, &request, &mut events),
+                _ => run_single(&mut client, &op, &request, cancel, &mut emit),
             }
-            events
         }
-        Err(err) => vec![HelperEvent::SpawnFailed {
+        Err(err) => emit(HelperEvent::SpawnFailed {
             op,
             error: err.to_string(),
-        }],
+        }),
     }
 }
 
@@ -77,8 +101,8 @@ fn event_op(op: &HelperOp) -> HelperOp {
     }
 }
 
-fn push_log(events: &mut Vec<HelperEvent>, op: &HelperOp, message: impl Into<String>) {
-    events.push(HelperEvent::Response {
+fn push_log(emit: &mut impl FnMut(HelperEvent), op: &HelperOp, message: impl Into<String>) {
+    emit(HelperEvent::Response {
         op: event_op(op),
         response: Box::new(HelperResponse::Log {
             level: LogLevel::Info,
@@ -91,16 +115,17 @@ fn run_single(
     client: &mut HelperClient,
     op: &HelperOp,
     request: &HelperRequest,
-    events: &mut Vec<HelperEvent>,
+    cancel: &AtomicBool,
+    emit: &mut impl FnMut(HelperEvent),
 ) {
     if let Err(err) = client.send(request) {
-        events.push(HelperEvent::SpawnFailed {
+        emit(HelperEvent::SpawnFailed {
             op: event_op(op),
             error: err.to_string(),
         });
         return;
     }
-    let _ = recv_until_terminal(client, op, timeout_for(op), events, true, true);
+    let _ = recv_until_terminal(client, op, timeout_for(op), cancel, emit, true, true);
 }
 
 fn run_apply_chain(
@@ -109,7 +134,8 @@ fn run_apply_chain(
     apply_request: &HelperRequest,
     then_write_state: bool,
     save: Option<&common::ipc::AppState>,
-    events: &mut Vec<HelperEvent>,
+    cancel: &AtomicBool,
+    emit: &mut impl FnMut(HelperEvent),
 ) {
     let dry_build = matches!(
         op,
@@ -122,9 +148,9 @@ fn run_apply_chain(
     // EnsureDirectories first would create a placeholder tree and make restore
     // leave that placeholder instead of the pre-dry-run state.
     if !dry_build {
-        push_log(events, op, "Ensuring directories exist...");
+        push_log(emit, op, "Ensuring directories exist...");
         if let Err(err) = client.send(&HelperRequest::EnsureDirectories) {
-            events.push(HelperEvent::SpawnFailed {
+            emit(HelperEvent::SpawnFailed {
                 op: event_op(op),
                 error: err.to_string(),
             });
@@ -135,15 +161,16 @@ fn run_apply_chain(
             client,
             op,
             timeout_for(&HelperOp::EnsureDirectories),
-            events,
+            cancel,
+            emit,
             true,
             true,
         ) {
             Some(HelperResponse::Ok) => {
-                push_log(events, op, "Directories ready.");
+                push_log(emit, op, "Directories ready.");
             }
             Some(other) => {
-                events.push(HelperEvent::Response {
+                emit(HelperEvent::Response {
                     op: event_op(op),
                     response: Box::new(other),
                 });
@@ -154,29 +181,36 @@ fn run_apply_chain(
     }
 
     if let Err(err) = client.send(apply_request) {
-        events.push(HelperEvent::SpawnFailed {
+        emit(HelperEvent::SpawnFailed {
             op: event_op(op),
             error: err.to_string(),
         });
         return;
     }
 
-    match recv_until_terminal(client, op, timeout_for(op), events, false, true) {
-        Some(HelperResponse::ApplyComplete { success, message }) => {
+    match recv_until_terminal(client, op, timeout_for(op), cancel, emit, false, true) {
+        Some(HelperResponse::ApplyComplete {
+            success,
+            mut message,
+        }) => {
             if success && then_write_state {
                 if let Some(state) = save {
-                    write_state_after_apply(client, op, state, events);
+                    if !write_state_after_apply(client, op, state, cancel, emit)
+                        && !message.to_ascii_lowercase().contains("state save failed")
+                    {
+                        message.push_str("; State save failed");
+                    }
                 }
             } else if success && !then_write_state {
-                push_log(events, op, "Dry run completed - no changes applied.");
+                push_log(emit, op, "Dry run completed - no changes applied.");
             }
-            events.push(HelperEvent::Response {
+            emit(HelperEvent::Response {
                 op: event_op(op),
                 response: Box::new(HelperResponse::ApplyComplete { success, message }),
             });
         }
         Some(other) => {
-            events.push(HelperEvent::Response {
+            emit(HelperEvent::Response {
                 op: event_op(op),
                 response: Box::new(other),
             });
@@ -189,41 +223,47 @@ fn write_state_after_apply(
     client: &mut HelperClient,
     op: &HelperOp,
     state: &common::ipc::AppState,
-    events: &mut Vec<HelperEvent>,
-) {
+    cancel: &AtomicBool,
+    emit: &mut impl FnMut(HelperEvent),
+) -> bool {
     if let Err(err) = client.send(&HelperRequest::WriteState {
         state: state.clone(),
     }) {
-        push_log(events, op, format!("Warning: Could not save state: {err}"));
-        return;
+        push_log(emit, op, format!("Warning: State save failed: {err}"));
+        return false;
     }
 
     match recv_until_terminal(
         client,
         op,
         timeout_for(&HelperOp::WriteState),
-        events,
+        cancel,
+        emit,
         false,
         false,
     ) {
         Some(HelperResponse::Ok) => {
-            push_log(events, op, "State saved for next session.");
+            push_log(emit, op, "State saved for next session.");
+            true
         }
         Some(HelperResponse::Error { message, .. }) => {
-            push_log(events, op, format!("Warning: State save failed: {message}"));
+            push_log(emit, op, format!("Warning: State save failed: {message}"));
+            false
         }
         Some(other) => {
-            events.push(HelperEvent::Response {
+            emit(HelperEvent::Response {
                 op: event_op(op),
                 response: Box::new(other),
             });
+            false
         }
         None => {
             push_log(
-                events,
+                emit,
                 op,
-                "Warning: State save timed out or helper closed; rebuild may have succeeded.",
+                "Warning: State save failed: timed out or helper closed; rebuild may have succeeded.",
             );
+            false
         }
     }
 }
@@ -236,45 +276,62 @@ fn recv_until_terminal(
     client: &mut HelperClient,
     op: &HelperOp,
     timeout: Option<Duration>,
-    events: &mut Vec<HelperEvent>,
+    cancel: &AtomicBool,
+    emit: &mut impl FnMut(HelperEvent),
     forward_terminal: bool,
     emit_eof: bool,
 ) -> Option<HelperResponse> {
+    let started = std::time::Instant::now();
+    let slice = Duration::from_millis(250);
     loop {
-        let response = if let Some(timeout) = timeout {
-            client.recv_timeout(timeout)
-        } else {
-            client.recv()
-        };
-        match response {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = client.kill();
+            if emit_eof {
+                emit(HelperEvent::Closed {
+                    op: event_op(op),
+                    error: Some("cancelled".into()),
+                });
+            }
+            return None;
+        }
+
+        if let Some(limit) = timeout {
+            if started.elapsed() >= limit {
+                let _ = client.kill();
+                if emit_eof {
+                    emit(HelperEvent::Timeout { op: event_op(op) });
+                }
+                return None;
+            }
+        }
+
+        match client.recv_timeout(slice) {
             Some(response) => {
                 let terminal = is_terminal(&response);
                 if terminal {
                     if forward_terminal {
-                        events.push(HelperEvent::Response {
+                        emit(HelperEvent::Response {
                             op: event_op(op),
                             response: Box::new(response.clone()),
                         });
                     }
                     return Some(response);
                 }
-                events.push(HelperEvent::Response {
+                emit(HelperEvent::Response {
                     op: event_op(op),
                     response: Box::new(response),
                 });
             }
             None => {
-                if emit_eof {
-                    if timeout.is_some() {
-                        events.push(HelperEvent::Timeout { op: event_op(op) });
-                    } else {
-                        events.push(HelperEvent::Closed {
+                if !client.is_running() {
+                    if emit_eof {
+                        emit(HelperEvent::Closed {
                             op: event_op(op),
                             error: Some("helper stdout closed".into()),
                         });
                     }
+                    return None;
                 }
-                return None;
             }
         }
     }
@@ -286,9 +343,8 @@ fn timeout_for(op: &HelperOp) -> Option<Duration> {
         HelperOp::EnsureDirectories => Some(Duration::from_secs(10)),
         HelperOp::WriteState => Some(Duration::from_secs(30)),
         HelperOp::Apply { .. } => None,
-        HelperOp::ListGenerations | HelperOp::GetDiskUsage | HelperOp::RunMaintenance { .. } => {
-            Some(Duration::from_secs(60))
-        }
+        HelperOp::GetDiskUsage | HelperOp::ListGenerations => Some(Duration::from_secs(180)),
+        HelperOp::RunMaintenance { .. } => Some(Duration::from_secs(900)),
         _ => Some(Duration::from_secs(30)),
     }
 }
@@ -482,6 +538,40 @@ for raw in sys.stdin:
             HelperEvent::Response { response, .. }
                 if matches!(**response, HelperResponse::ApplyComplete { success: false, .. })
         )));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn streamed_apply_emits_spawned_before_complete() {
+        let dir = temp_dir();
+        let (spec, _, _) = scripted_spec(&dir);
+        let events = run_blocking(
+            spec,
+            HelperOp::Apply {
+                rebuild: RebuildType::Switch,
+                then_write_state: false,
+                save: None,
+            },
+            apply_request(),
+        );
+        let spawned = events.iter().position(|event| {
+            matches!(
+                event,
+                HelperEvent::Spawned {
+                    op: HelperOp::Apply { .. }
+                }
+            )
+        });
+        let complete = events.iter().position(|event| {
+            matches!(
+                event,
+                HelperEvent::Response { response, .. }
+                    if matches!(**response, HelperResponse::ApplyComplete { .. })
+            )
+        });
+        assert!(spawned.is_some());
+        assert!(complete.is_some());
+        assert!(spawned.unwrap() < complete.unwrap());
         let _ = fs::remove_dir_all(&dir);
     }
 

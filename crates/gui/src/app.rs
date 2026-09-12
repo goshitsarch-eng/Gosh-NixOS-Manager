@@ -23,6 +23,8 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 const APP_ICON: &[u8] = include_bytes!("../../../data/icons/nixos-toolkit.svg");
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
@@ -146,6 +148,7 @@ pub struct AppModel {
     pub(crate) busy: Busy,
     pub(crate) field_errors: FieldErrors,
     pub(crate) verify_pending: bool,
+    pub(crate) helper_cancel: Arc<AtomicBool>,
 }
 
 impl AppModel {
@@ -359,7 +362,7 @@ impl Application for AppModel {
             prefs,
             page: Page::Onboarding,
             dialog: None,
-            toasts: widget::Toasts::new(|_| Message::DismissToast),
+            toasts: widget::Toasts::new(Message::DismissToast),
             banner: None,
             helper_missing,
             state_load_warning: None,
@@ -380,6 +383,7 @@ impl Application for AppModel {
             busy: Busy::Idle,
             field_errors: FieldErrors::default(),
             verify_pending: false,
+            helper_cancel: Arc::new(AtomicBool::new(false)),
         };
 
         app.seed_username_from_host();
@@ -404,7 +408,7 @@ impl Application for AppModel {
                 &self.key_binds,
                 vec![
                     menu::Item::Button(crate::fl!("about"), None, MenuAction::About),
-                    menu::Item::Button(crate::fl!("quit"), None, MenuAction::Quit),
+                    menu::Item::Button(crate::fl!("refresh"), None, MenuAction::Refresh),
                 ],
             ),
         )]);
@@ -557,8 +561,9 @@ impl Application for AppModel {
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
-        if matches!(message, Message::DismissToast) {
-            self.toasts = widget::Toasts::new(|_| Message::DismissToast);
+        if let Message::DismissToast(id) = message {
+            self.toasts.remove(id);
+            return Task::none();
         }
         if let Message::NavSelect(page) = message {
             self.sync_nav(page);
@@ -593,7 +598,14 @@ impl AppModel {
             match intent {
                 Intent::None => {}
                 Intent::SpawnHelper { op, request } => {
-                    tasks.push(spawn_helper_task(self.flags.spawn.clone(), op, request));
+                    self.helper_cancel
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    tasks.push(spawn_helper_task(
+                        self.flags.spawn.clone(),
+                        op,
+                        request,
+                        self.helper_cancel.clone(),
+                    ));
                 }
                 Intent::SendOnSession { .. } | Intent::CloseSession => {
                     // Session chaining is task 12.
@@ -702,14 +714,19 @@ fn generate_profile_preview(id: &str, templates_dir: &Path) -> String {
     }
 }
 
-fn spawn_helper_task(spec: SpawnSpec, op: HelperOp, request: HelperRequest) -> Task<Message> {
+fn spawn_helper_task(
+    spec: SpawnSpec,
+    op: HelperOp,
+    request: HelperRequest,
+    cancel: Arc<AtomicBool>,
+) -> Task<Message> {
     if !spec.helper_available {
         return cosmic::task::message(Message::Helper(HelperEvent::SpawnFailed {
             op,
             error: helper_missing_message().to_string(),
         }));
     }
-    cosmic::task::stream(session::stream(spec, op, request).map(Message::Helper))
+    cosmic::task::stream(session::stream(spec, op, request, cancel).map(Message::Helper))
 }
 
 fn open_path(path: &PathBuf) -> std::io::Result<()> {

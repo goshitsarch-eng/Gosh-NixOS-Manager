@@ -18,7 +18,7 @@ pub enum Message {
     /// Re-run local `detect_system()` (Ctrl+R / F5). Does not ReadState.
     RefreshSystem,
     SystemDetected(SystemInfo),
-    DismissToast,
+    DismissToast(cosmic::widget::ToastId),
     DismissDialog,
     /// cosmic-config / prefs file changed on disk.
     UpdateConfig(UserPreferences),
