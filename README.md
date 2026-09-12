@@ -351,6 +351,8 @@ The GUI button is still named **Update Channels** and sends `nix-channel --updat
 
 Apply rebuild modes: **Switch**, **Boot**, **Test**, **Build** (dropdown) plus **Dry Run** (`dry-build`). Successful Switch/Boot/Test/Build also persist `state.json`. Dry-build writes the managed tree so evaluation can run, then restores the previous files (restore failure is an error).
 
+On flake hosts the helper runs `nixos-rebuild <mode> --flake /etc/nixos` (the same default attribute as the CLI: `nixosConfigurations.<hostname>`). If your flake output name is not the hostname, rebuild from the CLI with an explicit `#attr`.
+
 ---
 
 ## Architecture

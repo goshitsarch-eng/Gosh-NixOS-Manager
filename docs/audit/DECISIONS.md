@@ -74,6 +74,8 @@ Enabling WG opens the listen port. Changing the listen port **moves** the auto-o
 | Splitting `apply.rs` | Half tests; freeze contract; not required for correctness |
 | `du -sh /nix/store` replacement with a perfect async store walker | Raise timeout, don’t auto-hit on every nav, show errors; full store accounting is the helper’s job |
 | Test/Build not writing managed files | `nixos-rebuild` must see the tree; Dry Run already restores. Document Test/Build persist files |
+| Invert NVIDIA auto-stable / PipeWire-on-any-hardware.nix / empty-apply cleanup | Advertised README/dialog contract (D1). Red team asked to invert; we did not. |
+| Kill `nixos-rebuild` process group on Cancel | Helper child is killed; grandchildren may continue. Documented residual. |
 
 ## D10 — Dirty ReadState
 
