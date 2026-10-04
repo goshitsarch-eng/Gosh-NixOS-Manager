@@ -25,3 +25,6 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Linux release artifacts
+/dist/

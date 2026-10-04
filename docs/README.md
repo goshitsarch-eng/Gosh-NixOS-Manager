@@ -1,3 +1,5 @@
+> Historical documentation retained for comparison. The current Flutter implementation is documented in [README.md](../README.md).
+
 # Documentation
 
 These files describe the **current** tree (libcosmic GUI, privileged helper, flake packages). They were rewritten against the source; do not treat older README drafts or `docs/migration/` as present tense.

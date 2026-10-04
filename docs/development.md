@@ -1,3 +1,5 @@
+> Historical documentation retained for comparison. The current Flutter implementation is documented in [BUILDING.md](../BUILDING.md).
+
 # Development
 
 ## Prerequisites

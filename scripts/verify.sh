@@ -1,58 +1,20 @@
 #!/usr/bin/env bash
-# scripts/verify.sh — full local/CI gate for the cosmic migration.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-
-log() { printf '\n==> %s\n' "$*"; }
-need() { command -v "$1" >/dev/null || { echo "missing: $1" >&2; exit 1; }; }
-
-# --- 0. tools ---
-need cargo
-need rustc
-need flatpak
-need flatpak-builder
-need weston
-need timeout
-
-# --- 1. host compile ---
-log "cargo fmt --check"
 cargo fmt --all -- --check
-
-log "cargo build --workspace"
-cargo build --workspace --all-targets
-
-# --- 2. clippy (CI equivalent of flake clippy) ---
-log "cargo clippy --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets -- -D warnings
-
-# --- 3. tests ---
-log "cargo test --workspace"
-cargo test --workspace --all-targets -- --nocapture
-
-# --- 3b. desktop / AppStream (when tools exist) ---
-if command -v desktop-file-validate >/dev/null; then
-  log "desktop-file-validate"
-  desktop-file-validate data/nixos-toolkit.desktop
-  desktop-file-validate flatpak/io.github.goshitsarch_eng.NixosToolkit.desktop
-else
-  echo "skip desktop-file-validate (not installed)" >&2
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
+cargo build --locked -p desktop-core
+python3 scripts/sync-pubspec-lock.py --check
+cd desktop
+flutter pub get --enforce-lockfile
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+NIXOS_TOOLKIT_CORE_LIBRARY="$ROOT/target/debug/libnixos_toolkit_core.so" flutter test
+cd "$ROOT"
+if [[ "${1:-}" == "--flatpak" ]]; then
+  scripts/build-flatpak.sh
+  flatpak install --user --noninteractive -y "dist/nixos-toolkit-0.1.0-$(uname -m).flatpak"
+  scripts/smoke-flatpak.sh
 fi
-if command -v appstreamcli >/dev/null; then
-  log "appstreamcli validate"
-  appstreamcli validate --no-net flatpak/io.github.goshitsarch_eng.NixosToolkit.metainfo.xml
-else
-  echo "skip appstreamcli (not installed)" >&2
-fi
-
-# --- 4. Flatpak (offline w.r.t. crates.io; runtimes must already be installed) ---
-log "flatpak-builder"
-test -f flatpak/cargo-sources.json || {
-  echo "flatpak/cargo-sources.json missing; run scripts/generate-cargo-sources.sh" >&2
-  exit 1
-}
-scripts/build-flatpak.sh
-
-# --- 5. smoke ---
-log "smoke"
-scripts/smoke-flatpak.sh

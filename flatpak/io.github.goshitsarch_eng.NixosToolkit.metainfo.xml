@@ -23,12 +23,6 @@
   </description>
   <url type="homepage">https://github.com/goshitsarch-eng/Gosh-NixOS-Manager</url>
   <url type="bugtracker">https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/issues</url>
-  <screenshots>
-    <screenshot type="default">
-      <image>https://raw.githubusercontent.com/goshitsarch-eng/Gosh-NixOS-Manager/main/data/icons/nixos-toolkit.svg</image>
-      <caption>NixOS Toolkit</caption>
-    </screenshot>
-  </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
     <release version="0.1.0" date="2026-09-12">

@@ -1,0 +1,21 @@
+name: nixos_toolkit
+description: NixOS Toolkit for Linux desktop and Flatpak.
+publish_to: none
+version: 0.1.0+1
+environment:
+  sdk: ^3.13.0
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.4
+  path: ^1.9.1
+  url_launcher: ^6.3.2
+  window_manager: ^0.5.1
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true

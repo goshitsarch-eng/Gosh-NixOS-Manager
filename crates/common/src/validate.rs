@@ -15,6 +15,14 @@ pub fn hostname_is_valid(hostname: &str) -> bool {
     !hostname.is_empty()
         && hostname.len() <= MAX_HOSTNAME_LEN
         && hostname
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && hostname
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && hostname
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
@@ -145,6 +153,16 @@ mod tests {
         assert!(!is_ipv4("1.1.1.256"));
         assert!(!is_ipv4("::1"));
         assert!(!is_ipv4("1.1.1.1\n};"));
+    }
+
+    #[test]
+    fn hostname_requires_alphanumeric_edges() {
+        for invalid in ["-", "---", "-desktop", "desktop-"] {
+            assert!(!hostname_is_valid(invalid));
+        }
+        for valid in ["a", "desk-1", "42"] {
+            assert!(hostname_is_valid(valid));
+        }
     }
 
     #[test]
