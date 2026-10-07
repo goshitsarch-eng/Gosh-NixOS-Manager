@@ -103,8 +103,19 @@ fn read_json_line(reader: &mut impl BufRead, max: usize) -> io::Result<Option<Re
             break;
         }
         if buf.len() >= max {
-            let mut rest = Vec::new();
-            let _ = reader.read_until(b'\n', &mut rest);
+            // Drain through the delimiter without allocating an unbounded buffer.
+            loop {
+                let available = reader.fill_buf()?;
+                if available.is_empty() {
+                    break;
+                }
+                if let Some(end) = available.iter().position(|b| *b == b'\n') {
+                    reader.consume(end + 1);
+                    break;
+                }
+                let count = available.len();
+                reader.consume(count);
+            }
             return Ok(Some(Err(())));
         }
         buf.push(byte[0]);
@@ -194,5 +205,35 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
         }
         HelperRequest::RunMaintenance { command } => commands::run_maintenance(command),
         HelperRequest::GetDiskUsage => commands::get_disk_usage(),
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+    #[test]
+    fn oversized_record_is_drained_and_next_request_remains_readable() {
+        let mut input = io::Cursor::new(b"oversized\n{}\n");
+        assert!(matches!(
+            read_json_line(&mut input, 3).unwrap(),
+            Some(Err(()))
+        ));
+        assert_eq!(
+            read_json_line(&mut input, 3).unwrap(),
+            Some(Ok("{}".into()))
+        );
+    }
+    #[test]
+    fn exact_limit_and_final_record_without_newline_are_accepted() {
+        let mut input = io::Cursor::new(b"{}\n{}");
+        assert_eq!(
+            read_json_line(&mut input, 2).unwrap(),
+            Some(Ok("{}".into()))
+        );
+        assert_eq!(
+            read_json_line(&mut input, 2).unwrap(),
+            Some(Ok("{}".into()))
+        );
+        assert_eq!(read_json_line(&mut input, 2).unwrap(), None);
     }
 }

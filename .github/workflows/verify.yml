@@ -2,7 +2,8 @@ name: verify
 
 on:
   push:
-    branches: [main, cosmic-migration]
+    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -47,18 +48,18 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy,rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo build
-        run: cargo build --workspace --all-targets
+        run: cargo build --locked --workspace --all-targets
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace --all-targets -- --nocapture
+        run: cargo test --locked --workspace --all-targets --all-features
 
   # Lightweight flake checks only (fmt + audit). Do not run `nix flake check`:
   # that also builds gui, helper, and clippy and is too heavy for every PR.
@@ -76,46 +77,102 @@ jobs:
       - name: flake audit
         run: nix build .#checks.x86_64-linux.audit
 
-  # Full Flatpak + weston smoke is the local `scripts/verify.sh` gate.
-  # GitHub-hosted runners are tight on disk/time for Freedesktop 25.08 + libcosmic.
-  # Enable via workflow_dispatch when a runner with cached runtimes is available.
-  flatpak:
-    name: flatpak
+  desktop:
+    name: Flutter Linux and native bridge
     runs-on: ubuntu-24.04
-    if: github.event_name == 'workflow_dispatch'
-    timeout-minutes: 180
+    env:
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+      DASH__SUPPRESS_ANALYTICS: "true"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Flatpak tools
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            flatpak \
-            flatpak-builder \
-            weston \
-            python3 \
-            dbus-x11
-
-      - name: Add Flathub and runtimes
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build libgtk-3-dev python3-yaml xvfb dbus-x11
+      - name: Install verified stable Flutter
         run: |
-          flatpak remote-add --if-not-exists --user flathub \
-            https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y flathub \
-            org.freedesktop.Platform//25.08 \
-            org.freedesktop.Sdk//25.08 \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08
-
-      - name: Build Flatpak
-        run: scripts/build-flatpak.sh
-
-      - name: Smoke
-        run: scripts/smoke-flatpak.sh
-
-      - name: Upload smoke logs
-        if: failure()
-        uses: actions/upload-artifact@v4
+          git init "$RUNNER_TEMP/flutter"
+          git -C "$RUNNER_TEMP/flutter" remote add origin https://github.com/flutter/flutter.git
+          git -C "$RUNNER_TEMP/flutter" fetch --depth 1 origin refs/tags/3.47.6:refs/tags/3.47.6
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse refs/tags/3.47.6^{commit})" = 5fc346839b5d0eef006ed8404392afb4dfae428d
+          git -C "$RUNNER_TEMP/flutter" checkout -b stable 5fc346839b5d0eef006ed8404392afb4dfae428d
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Prepare Flutter
+        run: |
+          flutter --version
+          flutter precache --linux
+      - name: Check lock snapshot and real bridge
+        run: |
+          python3 scripts/sync-pubspec-lock.py --check
+          cargo build --locked -p desktop-core
+          cd desktop
+          flutter pub get --enforce-lockfile
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          NIXOS_TOOLKIT_CORE_LIBRARY="$GITHUB_WORKSPACE/target/debug/libnixos_toolkit_core.so" flutter test
+      - name: Assemble Linux release
+        run: scripts/package-linux.sh
+      - name: Run packaged read-only diagnostics
+        run: |
+          tar -xzf dist/nixos-toolkit-0.1.0-linux-x86_64.tar.gz -C "$RUNNER_TEMP"
+          xvfb-run -a dbus-run-session -- "$RUNNER_TEMP/nixos-toolkit-0.1.0-linux-x86_64/nixos-toolkit" --diagnose > diagnostics.json
+          python3 scripts/check-diagnostics.py diagnostics.json
+      - uses: actions/upload-artifact@v4
         with:
-          name: smoke-logs
-          path: /tmp/nixos-toolkit-smoke.*/**
-          if-no-files-found: ignore
+          name: linux-x86_64
+          path: dist/*
+
+  flatpak:
+    name: Flutter Flatpak and native bridge
+    needs: desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist
+      - name: Install Flatpak tools and runtimes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder xvfb dbus-x11
+          flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+      - name: Build checksummed Flutter Flatpak
+        run: |
+          (cd dist && sha256sum -c *.sha256)
+          python3 packaging/flatpak/generate-manifest.py dist/nixos-toolkit-0.1.0-linux-x86_64.tar.gz .flatpak/manifest.json
+          flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=.flatpak/repo .flatpak/build .flatpak/manifest.json
+          flatpak build-bundle .flatpak/repo dist/nixos-toolkit-0.1.0-x86_64.flatpak io.github.goshitsarch_eng.NixosToolkit
+          (cd dist && sha256sum nixos-toolkit-0.1.0-x86_64.flatpak > nixos-toolkit-0.1.0-x86_64.flatpak.sha256)
+          flatpak install --user --noninteractive -y dist/nixos-toolkit-0.1.0-x86_64.flatpak
+      - name: Test Rust API inside the actual sandbox
+        run: scripts/smoke-flatpak.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-x86_64
+          path: |
+            dist/*.flatpak
+            dist/*.flatpak.sha256
+
+  release:
+    name: Draft Linux release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [cargo, flake, desktop, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-x86_64'
+          merge-multiple: true
+          path: dist
+      - name: Create reviewable release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --generate-notes

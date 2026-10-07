@@ -1,3 +1,5 @@
+> Historical documentation retained for comparison. The current Flutter implementation is documented in [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 # Architecture
 
 Current tree. GTK4/libadwaita is gone. Historical rewrite notes live in [migration/](migration/).

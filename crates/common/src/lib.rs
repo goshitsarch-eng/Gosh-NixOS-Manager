@@ -8,8 +8,10 @@
 
 pub mod actions;
 pub mod config;
+pub mod host;
 pub mod ipc;
 pub mod nix;
+pub mod packages;
 pub mod validate;
 
 pub use actions::{

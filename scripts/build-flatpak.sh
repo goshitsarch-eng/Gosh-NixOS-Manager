@@ -1,44 +1,14 @@
 #!/usr/bin/env bash
-# Build and install the local Flatpak from a dirty checkout.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-
-APP_ID="io.github.goshitsarch_eng.NixosToolkit"
-MANIFEST="flatpak/${APP_ID}.yml"
-REMOTE="nixos-toolkit-local"
-BUILD_DIR="${ROOT}/.flatpak/build"
-STATE_DIR="${ROOT}/.flatpak/builder"
-REPO_DIR="${ROOT}/.flatpak/repo"
-
-need() { command -v "$1" >/dev/null || { echo "missing: $1" >&2; exit 1; }; }
-need flatpak
-need flatpak-builder
-
-test -f "${ROOT}/flatpak/cargo-sources.json" || {
-  echo "flatpak/cargo-sources.json missing; run scripts/generate-cargo-sources.sh" >&2
-  exit 1
-}
-
-flatpak remote-add --if-not-exists --user flathub \
-  https://dl.flathub.org/repo/flathub.flatpakrepo
-
-mkdir -p "${ROOT}/.flatpak"
-
-# --disable-rofiles-fuse: toolboxes/CI often cannot mount rofiles-fuse.
-flatpak-builder --user --force-clean --ccache \
-  --disable-rofiles-fuse \
-  --install-deps-from=flathub \
-  --repo="${REPO_DIR}" \
-  --state-dir="${STATE_DIR}" \
-  "${BUILD_DIR}" \
-  "${MANIFEST}"
-
-# --if-not-exists keeps a leftover file:///tmp/... URL from a previous
-# sandbox; install then fails with "server has no summary file".
-flatpak --user remote-delete --force "${REMOTE}" >/dev/null 2>&1 || true
-flatpak --user remote-add --no-gpg-verify "${REMOTE}" "${REPO_DIR}"
-
-flatpak --user install -y --or-update --reinstall \
-  "${REMOTE}" "${APP_ID}"
+APP_ID=io.github.goshitsarch_eng.NixosToolkit
+DIST="${TOOLKIT_DIST_DIR:-$ROOT/dist}"
+ARCH="$(uname -m)"
+"$ROOT/scripts/package-linux.sh"
+python3 "$ROOT/packaging/flatpak/generate-manifest.py" \
+  "$DIST/nixos-toolkit-0.1.0-linux-$ARCH.tar.gz" "$ROOT/.flatpak/manifest.json"
+flatpak-builder --user --force-clean --disable-rofiles-fuse \
+  --repo="$ROOT/.flatpak/repo" "$ROOT/.flatpak/build" "$ROOT/.flatpak/manifest.json"
+flatpak build-bundle "$ROOT/.flatpak/repo" "$DIST/nixos-toolkit-0.1.0-$ARCH.flatpak" "$APP_ID"
+(cd "$DIST" && sha256sum "nixos-toolkit-0.1.0-$ARCH.flatpak" > "nixos-toolkit-0.1.0-$ARCH.flatpak.sha256")
+printf 'Created %s\n' "$DIST/nixos-toolkit-0.1.0-$ARCH.flatpak"

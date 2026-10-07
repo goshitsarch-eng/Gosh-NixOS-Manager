@@ -1196,6 +1196,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktop-core"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
