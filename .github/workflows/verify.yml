@@ -77,6 +77,48 @@ jobs:
       - name: flake audit
         run: nix build .#checks.x86_64-linux.audit
 
+  host-protocol:
+    name: Isolated host operations and generated modules
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: Swatinem/rust-cache@v2
+      - name: Test helper confinement and recovery
+        run: |
+          nix develop .#qa --command bash -c '
+            set -euo pipefail
+            cargo build --locked -p helper -p desktop-core
+            python3 scripts/test-helper-isolated.py
+            python3 scripts/test-installer-isolated.py
+          '
+      - name: Evaluate the pinned configuration matrix
+        run: |
+          toolkit_nixpkgs=$(nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixpkgs.outPath')
+          nix develop .#qa --command python3 scripts/test-flake-rebuild.py "$toolkit_nixpkgs"
+          nix develop .#qa --command python3 scripts/test-generated-nix.py "$toolkit_nixpkgs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: configuration-matrix
+          path: |
+            dist/qa-generated-nix/
+            dist/qa-flake-rebuild/
+
+  reboot-recovery:
+    name: NixOS guest reboot and recovery
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - name: Run disposable guest tests
+        run: |
+          toolkit_helper=$(nix build --no-link --print-out-paths .#helper)
+          toolkit_nixpkgs=$(nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixpkgs.outPath')
+          nix-build tests/nixos/reboot-recovery.nix --no-out-link \
+            --argstr nixpkgs "$toolkit_nixpkgs" --argstr helper "$toolkit_helper"
+
   desktop:
     name: Flutter Linux and native bridge
     runs-on: ubuntu-24.04
@@ -108,7 +150,7 @@ jobs:
           cargo build --locked -p desktop-core
           cd desktop
           flutter pub get --enforce-lockfile
-          dart format --output=none --set-exit-if-changed lib test
+          dart format --output=none --set-exit-if-changed lib test integration_test tool
           flutter analyze
           NIXOS_TOOLKIT_CORE_LIBRARY="$GITHUB_WORKSPACE/target/debug/libnixos_toolkit_core.so" flutter test
       - name: Assemble Linux release
@@ -137,7 +179,7 @@ jobs:
       - name: Install Flatpak tools and runtimes
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder xvfb dbus-x11
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder appstream patchelf xvfb dbus-x11
           flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
       - name: Build checksummed Flutter Flatpak
@@ -160,7 +202,7 @@ jobs:
   release:
     name: Draft Linux release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [cargo, flake, desktop, flatpak]
+    needs: [cargo, flake, host-protocol, reboot-recovery, desktop, flatpak]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
