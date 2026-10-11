@@ -28,14 +28,21 @@ void main() {
   test(
     'apply streams progress and saves state after successful rebuild',
     () async {
-      await peer('success')
-          .apply({'hostname': 'desktop', 'last_applied': null}, 'Switch');
+      await peer('success').apply({
+        'hostname': 'desktop',
+        'last_applied': null,
+        'expected_revision': 'test-revision',
+      }, 'Switch');
       expect(await requests(), ['BeginSession', 'Apply', 'WriteState']);
       expect(logs, ['Rebuilding']);
       final apply =
           jsonDecode((await trace.readAsLines())[1])['payload'] as Map;
       expect(apply['rebuild_type'], 'Switch');
       expect(apply.containsKey('last_applied'), false);
+      expect(apply['expected_revision'], 'test-revision');
+      final saved =
+          jsonDecode((await trace.readAsLines())[2])['payload']['state'] as Map;
+      expect(saved.containsKey('expected_revision'), isFalse);
     },
   );
   test('dry build omits directory creation and state write', () async {

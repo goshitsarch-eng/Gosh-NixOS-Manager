@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../bridge/core_api.dart';
 import '../models/configuration.dart';
+import '../models/change_review.dart';
 import '../services/helper_session.dart';
 import '../services/preferences.dart';
 
@@ -16,6 +17,8 @@ class AppController extends ChangeNotifier {
   HelperApi? helper;
   Preferences preferences = Preferences();
   ConfigurationDto? configuration;
+  ConfigurationDto? _savedConfiguration;
+  String? _hostRevision;
   Map<String, dynamic> catalogs = {};
   Map<String, dynamic> host = {};
   List<Map<String, dynamic>> generations = [];
@@ -49,6 +52,20 @@ class AppController extends ChangeNotifier {
   bool get canManage => host['can_manage'] == true && helper != null;
   bool get ready => configuration != null;
   bool get idle => busy == null;
+  bool get canApply =>
+      canManage &&
+      idle &&
+      !_stateLoadFailed &&
+      _hostRevision != null &&
+      recovery == null &&
+      !recoveryUnknown &&
+      fieldErrors.isEmpty;
+
+  ChangeReview get changeReview => ChangeReview(
+    _savedConfiguration ?? configuration!,
+    configuration!,
+    catalogs,
+  );
 
   List<Map<String, dynamic>> catalog(String name) =>
       List<Map<String, dynamic>>.from(catalogs[name] as List? ?? []);
@@ -62,6 +79,7 @@ class AppController extends ChangeNotifier {
       configuration = ConfigurationDto(
         catalogs['defaults'] as Map<String, dynamic>,
       );
+      _savedConfiguration = configuration!.copy();
       try {
         preferences = await preferenceStore.load();
       } catch (failure) {
@@ -71,14 +89,7 @@ class AppController extends ChangeNotifier {
       await _refreshHost();
       if (canManage) {
         try {
-          final reply = await helper!.request('ReadState');
-          if (reply['type'] != 'State') {
-            throw const HelperFailure('Invalid saved-state response');
-          }
-          configuration = ConfigurationDto(
-            reply['payload'] as Map<String, dynamic>,
-          );
-          _stateLoadFailed = false;
+          await _loadSavedState(replaceDraft: true);
           await _loadRecovery();
         } catch (failure) {
           _stateLoadFailed = true;
@@ -105,19 +116,60 @@ class AppController extends ChangeNotifier {
             'Reopen the app to load saved system state before applying preview selections',
           );
         }
-        final reply = await helper!.request('ReadState');
-        if (reply['type'] != 'State') {
-          throw const HelperFailure('Invalid saved-state response');
-        }
-        configuration = ConfigurationDto(
-          reply['payload'] as Map<String, dynamic>,
-        );
-        _stateLoadFailed = false;
+        await _loadSavedState(replaceDraft: true);
         await updatePreview();
       }
       await _loadRecovery();
     }
   });
+
+  Future<void> _loadSavedState({required bool replaceDraft}) async {
+    _stateLoadFailed = true;
+    late Map<String, dynamic> reply;
+    try {
+      reply = await helper!.request('ReadStateSnapshot');
+    } on HelperFailure catch (failure) {
+      if (failure.message.contains('unknown variant `ReadStateSnapshot`')) {
+        throw const HelperFailure(
+          'Update the host helper to match this app, then reload saved selections',
+        );
+      }
+      rethrow;
+    }
+    final payload = reply['payload'];
+    if (reply['type'] != 'StateSnapshot' ||
+        payload is! Map ||
+        payload['state'] is! Map ||
+        payload['revision'] is! String ||
+        (payload['revision'] as String).isEmpty) {
+      throw const HelperFailure(
+        'Update the host helper to load configuration safely, then reload saved selections',
+      );
+    }
+    _savedConfiguration = ConfigurationDto(
+      Map<String, dynamic>.from(payload['state'] as Map),
+    );
+    _hostRevision = payload['revision'] as String;
+    if (replaceDraft) configuration = _savedConfiguration!.copy();
+    _stateLoadFailed = false;
+  }
+
+  Future<void> reloadSavedSelections() =>
+      perform('Reloading saved selections', () async {
+        if (!canManage) throw const HelperFailure('Host helper is unavailable');
+        await _loadRecovery();
+        if (recovery != null) {
+          throw const HelperFailure(
+            'Restore the unfinished apply before reloading selections',
+          );
+        }
+        await _loadSavedState(replaceDraft: true);
+        fieldDrafts.clear();
+        fieldErrors.clear();
+        dirty = false;
+        _revision++;
+        await updatePreview();
+      });
 
   Future<void> _loadRecovery() async {
     recoveryUnknown = true;
@@ -134,13 +186,7 @@ class AppController extends ChangeNotifier {
   Future<void> recoverApply() => perform('Restoring previous system', () async {
     try {
       await helper!.request('RecoverApply');
-      final state = await helper!.request('ReadState');
-      if (state['type'] != 'State') {
-        throw const HelperFailure('Invalid saved-state response');
-      }
-      configuration = ConfigurationDto(
-        state['payload'] as Map<String, dynamic>,
-      );
+      await _loadSavedState(replaceDraft: true);
       fieldDrafts.clear();
       fieldErrors.clear();
       dirty = false;
@@ -339,7 +385,7 @@ class AppController extends ChangeNotifier {
           'A NixOS host and installed privileged helper are required',
         );
       }
-      if (_stateLoadFailed) {
+      if (_stateLoadFailed || _hostRevision == null) {
         throw const HelperFailure(
           'Saved system state was not loaded. Reopen the app and load it successfully before applying changes.',
         );
@@ -359,7 +405,13 @@ class AppController extends ChangeNotifier {
       final revision = _revision;
       await core.call('validate', {'state': snapshot.toJson()});
       try {
-        await helper!.apply(snapshot.toJson(), dryRun ? 'DryBuild' : rebuild);
+        await helper!.apply({
+          ...snapshot.toJson(),
+          'expected_revision': _hostRevision,
+        }, dryRun ? 'DryBuild' : rebuild);
+        if (!dryRun) {
+          await _loadSavedState(replaceDraft: revision == _revision);
+        }
       } finally {
         try {
           await _loadRecovery();
@@ -371,7 +423,13 @@ class AppController extends ChangeNotifier {
       appendLog(
         dryRun
             ? 'Dry build completed; managed files restored'
-            : 'Changes applied and state saved',
+            : switch (rebuild) {
+                'Build' => 'Build completed and selections saved; the running system was not changed',
+                'Boot' =>
+                  'Selections saved; changes will activate on the next restart',
+                'Test' => 'Changes activated temporarily and selections saved; the boot selection was not changed',
+                _ => 'Changes activated and selections saved',
+              },
       );
     },
   );

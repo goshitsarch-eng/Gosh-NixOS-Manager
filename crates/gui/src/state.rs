@@ -479,6 +479,7 @@ impl AppState {
             services_config: self.services_config.clone(),
             hardware_config,
             rebuild_type: rebuild,
+            expected_revision: None,
         }
     }
 

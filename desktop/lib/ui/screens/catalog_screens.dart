@@ -12,7 +12,7 @@ class ProfilesScreen extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       const Text(
-        'Choose one desktop environment. Review its configuration before applying.',
+        'Choose one desktop environment. Click the selected desktop again to clear it. Review its configuration before applying.',
       ),
       const SizedBox(height: 16),
       Wrap(
@@ -35,7 +35,9 @@ class ProfilesScreen extends StatelessWidget {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(12),
                   onTap: controller.idle && compatible
-                      ? () => controller.selectProfile(profile['id'] as String)
+                      ? () => controller.selectProfile(
+                          selected ? null : profile['id'] as String,
+                        )
                       : null,
                   child: Padding(
                     padding: const EdgeInsets.all(18),

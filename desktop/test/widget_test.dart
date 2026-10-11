@@ -110,6 +110,38 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('selected desktop can be clicked again to clear, then replaced', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1100, 760);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    controller.selectPage(1);
+    await tester.pumpWidget(
+      ToolkitApp(controller: controller, onQuit: () async {}),
+    );
+    final profiles = controller.catalog('profiles');
+    final kde = profiles.firstWhere((p) => p['id'] == 'kde');
+    final gnome = profiles.firstWhere((p) => p['id'] == 'gnome');
+    final kdeCard = find.text(kde['name'] as String);
+    await tester.ensureVisible(kdeCard);
+    await tester.tap(kdeCard);
+    await tester.pumpAndSettle();
+    expect(controller.configuration!.profile, 'kde');
+    expect(controller.profilePreview, isNotEmpty);
+    await tester.tap(kdeCard);
+    await tester.pumpAndSettle();
+    expect(controller.configuration!.profile, isNull);
+    expect(controller.profilePreview, isEmpty);
+    final gnomeCard = find.text(gnome['name'] as String);
+    await tester.ensureVisible(gnomeCard);
+    await tester.tap(gnomeCard);
+    await tester.pumpAndSettle();
+    expect(controller.configuration!.profile, 'gnome');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('all pages render and package entry reaches Rust preview', (
     tester,
   ) async {
@@ -167,6 +199,42 @@ void main() {
       reason: 'Non-NixOS host must keep privileged actions disabled',
     );
   });
+
+  testWidgets(
+    'welcome guidance and change review remain readable at minimum size',
+    (tester) async {
+      tester.view.physicalSize = const Size(640, 480);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        ToolkitApp(controller: controller, onQuit: () async {}),
+      );
+      expect(find.text('Using Toolkit alongside other tools'), findsOneWidget);
+      final guidance = find.textContaining(
+        'Do not hand-edit /etc/nixos/nixos-toolkit/',
+      );
+      await tester.ensureVisible(guidance);
+      await tester.pumpAndSettle();
+      expect(guidance, findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await controller.addPackages('ripgrep');
+      controller.selectPage(10);
+      await tester.pumpAndSettle();
+      expect(find.text('Review your changes'), findsOneWidget);
+      expect(
+        find.textContaining('Add software selections (1): ripgrep'),
+        findsOneWidget,
+      );
+      controller.setRebuild('Test');
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('does not automatically revert after a timeout'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('minimum-size navigation and theme changes remain usable', (
     tester,

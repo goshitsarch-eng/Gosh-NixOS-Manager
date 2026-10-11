@@ -329,6 +329,7 @@ pub fn apply(
     services_config: ServicesConfig,
     hardware_config: HardwareConfig,
     rebuild_type: RebuildType,
+    expected_revision: Option<String>,
 ) -> HelperResponse {
     if let Some(err) = invalid_payload(
         selected_profile.as_deref(),
@@ -346,6 +347,17 @@ pub fn apply(
     }
 
     let dry = matches!(rebuild_type, RebuildType::DryBuild);
+    // The session holds the mutation lock before this check. Reject stale drafts
+    // before snapshots, generated writes, or recovery records are created.
+    if let Some(expected) = expected_revision {
+        if let Err(error) = crate::configuration_revision::check(&expected) {
+            return HelperResponse::Error {
+                message: "Host configuration changed or could not be checked; nothing was written"
+                    .into(),
+                details: Some(error.to_string()),
+            };
+        }
+    }
     if detect_integration() != IntegrationStatus::Integrated {
         return HelperResponse::Error {
             message: "Managed configuration is not imported by the host configuration".into(),
@@ -1989,6 +2001,7 @@ mod tests {
             ServicesConfig::default(),
             HardwareConfig::default(),
             RebuildType::DryBuild,
+            None,
         ) {
             HelperResponse::Error { message, .. } => {
                 assert!(message.contains("DNS"), "{message}");

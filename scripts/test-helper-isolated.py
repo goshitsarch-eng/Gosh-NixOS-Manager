@@ -128,6 +128,45 @@ elif name == 'switch-to-configuration':
         return {str(p.relative_to(self.managed)): p.read_bytes()
                 for p in self.managed.rglob("*") if p.is_file()}
 
+    def test_configuration_revision_blocks_external_edits_before_any_writes(self):
+        self.seed()
+        snapshot = self.run_requests([{'type': 'ReadStateSnapshot'}])[0]
+        self.assertEqual(snapshot['type'], 'StateSnapshot')
+        self.assertEqual(snapshot['payload']['state']['hostname'], 'qa-desktop')
+        revision = snapshot['payload']['revision']
+        self.assertTrue(revision.startswith('v1:'))
+        for changed in [self.root / 'etc/nixos/configuration.nix',
+                        self.managed / 'state/selected.nix',
+                        self.managed / 'state/state.json']:
+            with self.subTest(changed=changed.name):
+                original = changed.read_text()
+                changed.write_text(original + '\n')
+                before = self.contents()
+                request = self.apply_request()
+                request['payload']['expected_revision'] = revision
+                response = self.run_requests([request])[0]
+                self.assertEqual(response['type'], 'Error')
+                self.assertIn('nothing was written', response['payload']['message'])
+                self.assertEqual(self.contents(), before)
+                self.assertEqual(self.commands(), [])
+                self.assertFalse((self.root / 'var/lib/nixos-toolkit/recovery').exists())
+                changed.write_text(original)
+        request = self.apply_request('DryBuild')
+        request['payload']['expected_revision'] = revision
+        self.assertTrue(self.run_requests([request])[0]['payload']['success'])
+
+    def test_configuration_snapshot_rejects_unreadable_nix_and_detects_new_files(self):
+        self.seed()
+        revision = self.run_requests([{'type': 'ReadStateSnapshot'}])[0]['payload']['revision']
+        new = self.root / 'etc/nixos/manual-packages.nix'
+        new.write_text('{ environment.systemPackages = []; }')
+        request = self.apply_request('DryBuild')
+        request['payload']['expected_revision'] = revision
+        self.assertEqual(self.run_requests([request])[0]['type'], 'Error')
+        new.unlink()
+        new.symlink_to('/missing.nix')
+        self.assertEqual(self.run_requests([{'type': 'ReadStateSnapshot'}])[0]['type'], 'Error')
+
     def test_all_rebuild_modes_and_saved_state(self):
         for mode in ["Switch", "Boot", "Test", "Build"]:
             with self.subTest(mode=mode):

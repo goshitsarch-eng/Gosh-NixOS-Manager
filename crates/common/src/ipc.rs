@@ -58,6 +58,9 @@ pub enum HelperRequest {
         #[serde(default)]
         hardware_config: HardwareConfig,
         rebuild_type: RebuildType,
+        /// Optimistic concurrency guard used by the current desktop frontend.
+        #[serde(default)]
+        expected_revision: Option<String>,
     },
 
     /// Ensure directories exist
@@ -65,6 +68,9 @@ pub enum HelperRequest {
 
     /// Read current state from state.json
     ReadState,
+
+    /// Saved state plus a digest of configuration files and system selections.
+    ReadStateSnapshot,
 
     /// Write state to state.json
     WriteState { state: AppState },
@@ -183,6 +189,11 @@ pub enum HelperResponse {
 
     /// Current application state
     State(AppState),
+
+    StateSnapshot {
+        state: AppState,
+        revision: String,
+    },
 
     /// List of NixOS generations
     Generations(Vec<Generation>),

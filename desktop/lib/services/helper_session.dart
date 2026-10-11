@@ -182,7 +182,9 @@ class HostHelper implements HelperApi {
         );
       }
       try {
-        await connection.send('WriteState', {'state': state});
+        final savedState = Map<String, dynamic>.from(state)
+          ..remove('expected_revision');
+        await connection.send('WriteState', {'state': savedState});
       } catch (error) {
         throw HelperFailure('Rebuild succeeded, but state save failed: $error');
       }

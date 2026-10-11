@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nixos_toolkit/bridge/core_api.dart';
+import 'package:nixos_toolkit/models/change_review.dart';
 import 'package:nixos_toolkit/services/helper_session.dart';
 import 'package:nixos_toolkit/services/preferences.dart';
 import 'package:nixos_toolkit/state/app_controller.dart';
@@ -25,6 +26,8 @@ class RecordingHelper implements HelperApi {
   bool failRead = false;
   Map<String, dynamic>? recovery;
   int applies = 0;
+  int revision = 0;
+  bool oldProtocol = false;
   String? rebuild;
   @override
   Future<Map<String, dynamic>> request(
@@ -39,6 +42,17 @@ class RecordingHelper implements HelperApi {
       recovery = null;
       return {'type': 'Ok'};
     }
+    if (type == 'ReadStateSnapshot' && oldProtocol) {
+      throw const HelperFailure(
+        'Invalid request format: unknown variant `ReadStateSnapshot`',
+      );
+    }
+    if (type == 'ReadStateSnapshot') {
+      return {
+        'type': 'StateSnapshot',
+        'payload': {'state': state, 'revision': 'test-$revision'},
+      };
+    }
     return {'type': 'State', 'payload': state};
   }
 
@@ -46,8 +60,19 @@ class RecordingHelper implements HelperApi {
   Future<void> apply(Map<String, dynamic> state, String rebuild) async {
     applies++;
     this.rebuild = rebuild;
+    if (state['expected_revision'] != 'test-$revision') {
+      throw const HelperFailure(
+        'Host configuration changed; nothing was written',
+      );
+    }
     if (failSave) {
       throw const HelperFailure('Rebuild succeeded, but state save failed');
+    }
+    if (rebuild != 'DryBuild') {
+      this.state
+        ..clear()
+        ..addAll(Map<String, dynamic>.from(state)..remove('expected_revision'));
+      revision++;
     }
   }
 
@@ -265,6 +290,61 @@ void main() {
       expect(
         controller.preview,
         contains('nixpkgs.config.allowUnfree = true;'),
+      );
+    },
+  );
+
+  test('stale drafts stop, then explicit reload discards edits and updates the guard', () async {
+    await controller.addPackages('ripgrep');
+    helper.state['custom_packages'] = ['fd'];
+    helper.revision++;
+    await controller.apply();
+    expect(controller.error, contains('Host configuration changed'));
+    expect(controller.dirty, isTrue);
+    expect(helper.state['custom_packages'], ['fd']);
+    await controller.reloadSavedSelections();
+    expect(controller.error, isNull);
+    expect(controller.configuration!.strings('custom_packages'), ['fd']);
+    expect(controller.dirty, isFalse);
+    expect(controller.changeReview.additions, isEmpty);
+    await controller.addPackages('ripgrep');
+    await controller.apply();
+    expect(controller.error, isNull);
+    expect(controller.changeReview.additions, isEmpty);
+  });
+
+  test('older helpers cannot bypass the configuration guard', () async {
+    helper.oldProtocol = true;
+    await controller.initialize();
+    expect(controller.canApply, isFalse);
+    expect(controller.error, contains('Update the host helper'));
+    await controller.apply();
+    expect(helper.applies, 0);
+  });
+
+  test(
+    'review shows removals, network changes, and deduplicated language aliases',
+    () async {
+      helper.state['custom_packages'] = ['ripgrep'];
+      await controller.initialize();
+      controller.setValue('custom_packages', ['npm', 'javascript', 'nodejs']);
+      controller.setValue('allowed_tcp_ports', [22], 'network_config');
+      expect(controller.changeReview.additions, hasLength(1));
+      expect(controller.changeReview.removals, ['ripgrep']);
+      expect(
+        controller.changeReview.text,
+        contains('Open TCP ports: Not set → 22'),
+      );
+      expect(
+        controller.changeReview.notes,
+        contains('Network changes can interrupt a remote connection.'),
+      );
+      controller.setRebuild('Build');
+      await controller.apply();
+      expect(controller.logs.last, contains('running system was not changed'));
+      expect(
+        rebuildExplanation('Test'),
+        contains('does not automatically revert'),
       );
     },
   );

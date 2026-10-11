@@ -30,6 +30,13 @@ In this cloud workspace, first run `. /workspace/setup/activate.sh`; the tools a
 
 The UI stays unprivileged. Install `nixos-toolkit-helper` and its polkit policy through the NixOS module, then add the managed `selected.nix` import using the application's instructions. Existing Nix configuration remains under your control. Managed state retains its existing JSON format and path. Preferences retain the canonical XDG file and read the former cosmic theme setting when needed.
 
+Getting Started explains how to use Toolkit alongside manual Nix configuration,
+Home Manager and Flatpak/Bazaar. Keep manual settings in your own modules outside
+`/etc/nixos/nixos-toolkit/`; that directory contains generated files. Prefer one
+installation method per application and one place to manage each system setting.
+Apply Changes shows additions, removals and changed settings before confirmation.
+Its review describes Toolkit selections, not a complete software inventory.
+
 ```nix
 programs.nixos-toolkit.enable = true;
 ```
@@ -41,6 +48,12 @@ programs.nixos-toolkit.enable = true;
 The [live NixOS VM report](docs/audit/LIVE_VM_QA.md) records real UI, rebuild, generation, maintenance, cancellation and recovery tests. The [initial audit](docs/audit/NIXOS_RELEASE_QA.md) covers the module matrix and earlier safety fixes. The current packages also have authenticated Flatpak host checks and a separate NixOS guest test for reboot, rollback and recovery.
 
 Apply now checks the host configuration before activation and keeps a private recovery journal until the selection is saved. If an apply is interrupted, use **Restore previous system** before making further changes. This restores managed files and the previous running/boot configuration; service data is not rolled back. Install matching app and helper versions.
+
+The current Flutter app also checks whether configuration changed since it loaded
+the saved selections. A mismatch stops Apply before writing files. Use **Reload
+saved selections** to discard an outdated draft after resolving manual edits.
+Build saves proposed settings without activation; Test activates immediately
+without changing the next boot and has no automatic rollback timer.
 
 The NixOS module includes a NixOS 25.05 compatibility fix for the observed firewall/D-Bus activation timeout: it waits for the D-Bus reload job before submitting other reloads. Twenty-eight helper/CLI activations passed with the fix installed, including live port-rule checks; an intentionally failed firewall reload still failed the apply and recovered correctly. See [BUILDING.md](BUILDING.md) for standalone host integration. NixOS 25.05's insecure Electron check remains enabled; affected Gaming selections must be deselected or used on a channel with supported packages.
 

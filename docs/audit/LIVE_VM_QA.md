@@ -165,3 +165,33 @@ entries, including Ollama. Controller and widget regressions check that the
 removed tools are absent and supported tools remain selectable. All 105
 common/core Rust tests and 33 Flutter tests passed, along with formatting and
 Flutter analysis.
+
+## Usability and stale-configuration protection: 2026-10-11
+
+Getting Started now explains how to combine Toolkit with manual Nix modules,
+Home Manager and Flatpak/Bazaar. It identifies the generated directory and its
+state, package, bundle and profile files, and explains Build/Test behavior and
+the limits of rollback. Apply Changes shows software additions/removals and
+requested setting changes relative to the last saved Toolkit selection, with
+the same review in its existing confirmation dialog. This is not a full host
+inventory or a guarantee that another module does not override a setting.
+
+The current Flutter frontend requires a saved-state snapshot from the matching
+helper and includes its configuration revision in Apply. Changes to tracked
+configuration files or running/boot system selections reject the stale request
+before managed writes or a recovery journal. An explicit Reload saved selections
+action discards drafts only after confirmation when they are dirty. It refreshes
+the snapshot and review baseline. Build, Boot, Test and Switch explain their
+different activation effects; successful Build no longer claims activation.
+
+Validation passed 158 common/core/helper/fake-helper Rust tests, 38 Flutter tests,
+28 isolated helper tests, workspace Clippy, Flutter analysis and formatting.
+Tests cover external edits to main/managed configuration and state, added and
+unreadable Nix files, boot-selection changes, unchanged guarded dry builds,
+reload after a stale draft, rejection of older helpers, protocol metadata
+remaining out of saved state, and the new guidance/review at 640×480. Scope and
+legacy-client limitations of the revision guard are documented in BUILDING.md.
+
+Clicking the selected desktop card now clears that selection and its preview.
+The profile screen explains the toggle, and a widget regression selects KDE,
+clicks it again to clear, and then selects GNOME.

@@ -8,6 +8,7 @@
 //! Communication is via JSON over stdin/stdout.
 
 mod commands;
+mod configuration_revision;
 mod nix_gen;
 mod operation;
 mod rebuild;
@@ -247,6 +248,7 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             services_config,
             hardware_config,
             rebuild_type,
+            expected_revision,
         } => commands::apply(
             selected_profile,
             enabled_bundles,
@@ -261,9 +263,11 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
             services_config,
             hardware_config,
             rebuild_type,
+            expected_revision,
         ),
         HelperRequest::EnsureDirectories => commands::ensure_directories(),
         HelperRequest::ReadState => commands::read_state(),
+        HelperRequest::ReadStateSnapshot => configuration_revision::read_state_snapshot(),
         HelperRequest::GetRecovery => recovery::status(),
         HelperRequest::RecoverApply => recovery::recover(),
         HelperRequest::WriteState { state } => commands::write_state(state),

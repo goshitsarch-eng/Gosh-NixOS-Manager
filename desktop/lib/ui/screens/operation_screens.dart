@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../state/app_controller.dart';
+import '../../models/change_review.dart';
 import '../components/settings.dart';
 
 Future<bool> confirm(
@@ -77,6 +78,41 @@ class OnboardingScreen extends StatelessWidget {
               title: const Text('Host helper'),
               subtitle: Text(
                 controller.canManage ? 'Installed and available' : 'Apply, generations and maintenance require a NixOS host with nixos-toolkit-helper installed.',
+              ),
+            ),
+          ],
+        ),
+        SettingsSection(
+          title: 'Using Toolkit alongside other tools',
+          description:
+              'Choose one place to manage each application and system setting.',
+          children: const [
+            ListTile(
+              leading: Icon(Icons.apps_outlined),
+              title: Text('Manual installs can coexist'),
+              subtitle: Text(
+                'Nix profiles, Home Manager and Flatpak/Bazaar can be used alongside Toolkit. Avoid installing the same application in several places: you may get duplicate launchers or run a different version. Toolkit checkboxes show its own selections, not every installed application.',
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.edit_note),
+              title: Text('Keep manual settings in your own Nix modules'),
+              subtitle: Text(
+                'Edit /etc/nixos/configuration.nix or your own imported modules, such as /etc/nixos/my-packages.nix. Avoid defining the same desktop, audio or network setting in both Toolkit and your manual configuration.',
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.folder_off_outlined),
+              title: Text('Leave Toolkit-generated files alone'),
+              subtitle: SelectableText(
+                'Do not hand-edit /etc/nixos/nixos-toolkit/, including state/selected.nix, state/state.json, state/custom-packages.nix, bundles/ and profiles/. Applying changes regenerates these files. Keep the selected.nix import in your main configuration.',
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.fact_check_outlined),
+              title: Text('Review and build before major changes'),
+              subtitle: Text(
+                'Review additions, removals and system settings on Apply Changes. Dry run checks evaluation; Build also builds packages without activation, but saves the proposed settings. Test temporarily activates settings and can interrupt services; it has no automatic timeout rollback. Keep a working generation and backups of your files: system rollback does not restore application data.',
               ),
             ),
           ],
@@ -353,8 +389,7 @@ class ApplyScreen extends StatelessWidget {
     if (await confirm(
       context,
       'Apply configuration?',
-      'The helper will update the managed Nix modules and run nixos-rebuild ${controller.rebuild.toLowerCase()}. '
-          'Review the preview before continuing. Applying an empty selection removes previous managed selections.',
+      '${rebuildExplanation(controller.rebuild)}\n\n${controller.changeReview.text}',
       action: 'Apply changes',
       destructive: true,
     )) {
@@ -366,6 +401,11 @@ class ApplyScreen extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
+      SettingsSection(
+        title: 'Review your changes',
+        description: 'Compared with your last saved Toolkit selections. Other installation methods are not included.',
+        children: [SelectableText(controller.changeReview.text)],
+      ),
       SettingsSection(
         title: 'Configuration preview',
         description: 'Review the files generated from your current selections.',
@@ -403,24 +443,49 @@ class ApplyScreen extends StatelessWidget {
             : null,
       ),
       const SizedBox(height: 20),
+      Text(rebuildExplanation(controller.rebuild)),
+      if (controller.fieldErrors.isNotEmpty)
+        const Padding(
+          padding: EdgeInsets.only(top: 12),
+          child: Text(
+            'Correct the invalid values in your settings before applying.',
+          ),
+        ),
+      const SizedBox(height: 12),
       Wrap(
         spacing: 12,
         runSpacing: 12,
         children: [
           FilledButton.icon(
-            onPressed: controller.canManage && controller.idle
-                ? () => apply(context)
-                : null,
+            onPressed: controller.canApply ? () => apply(context) : null,
             icon: const Icon(Icons.check),
             label: const Text('Apply changes'),
           ),
           OutlinedButton.icon(
-            onPressed: controller.canManage && controller.idle
+            onPressed: controller.canApply
                 ? () => controller.apply(dryRun: true)
                 : null,
             icon: const Icon(Icons.fact_check_outlined),
             label: const Text('Dry run'),
           ),
+          if (controller.canManage)
+            OutlinedButton.icon(
+              onPressed: controller.idle && controller.recovery == null
+                  ? () async {
+                      if (!controller.dirty ||
+                          await confirm(
+                            context,
+                            'Reload saved selections?',
+                            'Discard your unsaved selections and reload the current host configuration. Manual edits to Toolkit-generated files should be moved into your own NixOS module first.',
+                            action: 'Reload saved selections',
+                          )) {
+                        await controller.reloadSavedSelections();
+                      }
+                    }
+                  : null,
+              icon: const Icon(Icons.restore),
+              label: const Text('Reload saved selections'),
+            ),
           if (!controller.idle)
             TextButton(
               onPressed: () async {

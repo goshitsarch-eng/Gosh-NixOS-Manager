@@ -59,6 +59,26 @@ nix run
 
 The default GUI is Flutter. The pinned nixpkgs provides Flutter 3.47.4/Dart 3.13.3; the independently verified cloud SDK is 3.47.6/3.13.5. `.#reference` retains the former GUI and `.#core` builds the shared library. The full Flutter GUI, Rust core and helper build passed with the locked inputs in an isolated workspace Nix store. Packaged diagnostics also passed using a Nix Mesa driver; the Debian container's driver search path needs that explicit test configuration. On NixOS, the configured graphics drivers provide the normal `/run/opengl-driver` path. The host module installs the helper and polkit policy. Enable it in NixOS and rebuild using your normal host configuration; the cloud Debian container cannot validate activation.
 
+## Configuration revision guard
+
+The current desktop requires a matching helper with `ReadStateSnapshot` support
+before Apply is enabled. The snapshot contains saved state and a SHA-256 revision
+of non-hidden `.nix` files and `flake.lock` files beneath `/etc/nixos`, managed
+`state/state.json`, symlink targets, and resolved running/selected system paths.
+File contents stay on the host. Reads are bounded to 4096 tracked files, 32 MiB
+and 32 directory levels; unreadable tracked files fail closed. State is read
+between two revision checks. Apply verifies `expected_revision` while holding
+the existing helper mutation lock, before any managed writes or recovery setup.
+
+This detects edits after loading, including another Toolkit instance's changes.
+It does not audit edits made before loading, external imported directories,
+changed channel inputs, user profiles or Flatpak installations. Symlinked Nix
+files are read, but symlinked directories are not traversed. Editors do not share
+the helper lock, so this is not a filesystem-wide transaction. Legacy protocol
+clients, including the reference frontend, can omit the optional revision;
+the current Flutter frontend requires and sends it. Dry runs retain the revision;
+successful state saving and explicit reload fetch a new snapshot.
+
 ## Flatpak build, install and QA (verified)
 
 The complete recipe uses Freedesktop 25.08 and the checksummed Linux Flutter release archive. Dependency downloads/compilation happen during the native release build; Flatpak assembly relocates ELF paths into a separate checksummed bundle, without fetching Flutter or crates inside its sandbox. Install `flatpak`, `flatpak-builder`, `appstream`, `patchelf` and Python 3.12+ (included in `nix develop`). Build on a compatible libc baseline (CI uses Ubuntu 24.04); path relocation alone cannot fix a newer libc ABI.
