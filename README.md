@@ -6,7 +6,7 @@ Choose from 13 desktop profiles, 16 software bundles, custom packages, hardware,
 
 The [software bundle catalog](docs/SOFTWARE_BUNDLES.md) documents Bazaar, AI tools,
 language SDKs and container tools, with verified upstream links and installation
-notes. Tools awaiting a verified Linux package appear as manual setup entries.
+notes. Only tools with managed installation support appear in the catalog.
 
 ![Linux Light appearance](docs/screenshots/linux-light.png)
 ![Linux Dark appearance](docs/screenshots/linux-dark.png)

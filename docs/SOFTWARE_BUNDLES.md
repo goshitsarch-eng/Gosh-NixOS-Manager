@@ -2,8 +2,8 @@
 
 Verified against upstream documentation and Nixpkgs on 2026-10-11. The Rust
 catalog in `crates/common/src/actions.rs` is authoritative for both frontends
-and the helper. Enabling a bundle selects its installable entries; manual setup
-entries stay unchecked and link to the upstream project.
+and the helper. Enabling a bundle selects its installable entries. Tools without
+verified managed installation support are omitted from the catalog.
 
 ## Flatpak
 
@@ -19,25 +19,22 @@ not execute remote installers or change another user's Flatpak remotes.
 
 | Requested tool | Managed package / status | Verified source |
 | --- | --- | --- |
-| ChatGPT Desktop | Manual setup; Nixpkgs `chatgpt` targets Darwin and must not be emitted for Linux. An official Linux package has not been integrated here. | [OpenAI download](https://chatgpt.com/download/) |
-| Hermes Agent Desktop | Manual setup; upstream's Nix installation path is best effort. Its desktop integration has not been validated here. | [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop), [Nix setup](https://hermes-agent.nousresearch.com/docs/getting-started/nix-setup) |
 | Claude Code CLI | `claude-code`; run `claude` | [Anthropic setup](https://code.claude.com/docs/en/setup) |
 | Codex | `codex`; run `codex` | [OpenAI Codex](https://github.com/openai/codex) |
 | Grok CLI | `grok-build`; run `grok`. This selects xAI's official coding agent. Nixpkgs `grok-cli` is a separate community project. | [Grok Build](https://docs.x.ai/build/overview) |
 | Cursor Desktop | `code-cursor`; run `cursor` | [Cursor download](https://cursor.com/download) |
 | Cursor CLI | `cursor-cli`; run `cursor-agent` | [Cursor CLI](https://cursor.com/docs/cli/overview) |
-| Muse Code | Manual setup; no verified Nix package integrated. `pkgs.muse` is a music application. | [Meta Muse Code](https://dev.meta.ai/docs/muse-code) |
-| Grokbot | Grok Bot; unavailable for managed Linux installation. The official page lists macOS, Windows and iOS. Do not substitute the unrelated community `grok-bot-cli`. | [Grok Bot](https://x.ai/bot) |
 | Mistral Vibe CLI | `mistral-vibe`; run `vibe`. Its packaged `textual-speedups` dependency requires `allowUnfree`. | [Mistral Vibe](https://github.com/mistralai/mistral-vibe) |
-| Kimi Code CLI | Manual setup; current MoonshotAI CLI has no verified Nix package integrated here. | [MoonshotAI Kimi Code](https://github.com/MoonshotAI/kimi-code) |
 | OpenCode | `opencode`; run `opencode` | [OpenCode](https://github.com/anomalyco/opencode) |
 | Pi Coding Agent | `pi-coding-agent`; run `pi` | [Pi](https://pi.dev/) |
 
 Ollama remains available. AI provider authentication and any subscriptions are
 configured in each tool after installation. No provider credentials or agents
 are enabled automatically. Proprietary package selections add the existing
-`allowUnfree` module. A manually injected selection for an unavailable entry
-fails with an explicit explanation; it is never silently treated as installed.
+`allowUnfree` module.
+
+ChatGPT Desktop, Hermes Agent Desktop, Muse Code, Grok Bot and Kimi Code were
+removed from the catalog because managed installation is not supported here.
 
 ## Development Tools
 
@@ -88,7 +85,7 @@ store size. Existing host attributes retain the versions supplied by that host.
 `scripts/test-generated-nix.py` covers each installable entry in these three
 bundles individually, all selected, and empty selections. Rust and Flutter
 regressions cover dependency activation, deselection, runtime deduplication,
-proprietary packages, setup-only entries and the expanded catalog UI.
+proprietary packages, omission of unsupported tools and the expanded catalog UI.
 
 Generated package lists carry validated JSON selection markers. The helper uses
 them to recover exact checkbox IDs if `state.json` is missing or corrupt, while

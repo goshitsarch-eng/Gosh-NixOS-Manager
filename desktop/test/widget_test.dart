@@ -60,7 +60,7 @@ void main() {
     await temp.delete(recursive: true);
   });
 
-  testWidgets('AI catalog separates selectable packages from manual setup', (
+  testWidgets('AI catalog shows installable tools without setup-only entries', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1100, 760);
@@ -92,6 +92,11 @@ void main() {
       );
       expect(checkbox.value, isTrue, reason: id);
       expect(checkbox.onChanged, isNotNull, reason: id);
+      expect(checkbox.secondary, isNull);
+      expect(
+        find.byTooltip('Official website: ${(checkbox.title! as Text).data}'),
+        findsOneWidget,
+      );
     }
     for (final id in [
       'chatgpt-desktop',
@@ -100,16 +105,7 @@ void main() {
       'grok-bot',
       'kimi-code',
     ]) {
-      final checkbox = tester.widget<CheckboxListTile>(
-        find.byKey(ValueKey('bundle-package-$id')),
-      );
-      expect(checkbox.value, isFalse, reason: id);
-      expect(checkbox.onChanged, isNull, reason: id);
-      expect(checkbox.secondary, isNull);
-      expect(
-        find.byTooltip('Official website: ${(checkbox.title! as Text).data}'),
-        findsOneWidget,
-      );
+      expect(find.byKey(ValueKey('bundle-package-$id')), findsNothing);
     }
     expect(tester.takeException(), isNull);
   });

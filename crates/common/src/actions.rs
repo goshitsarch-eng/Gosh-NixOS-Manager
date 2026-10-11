@@ -245,14 +245,6 @@ impl PackageDef {
     }
 
     #[must_use]
-    pub fn manual_setup(id: &str, name: &str, homepage: &str, reason: &str) -> Self {
-        let mut package = Self::new(id, name);
-        package.homepage = Some(homepage.into());
-        package.unavailable_reason = Some(reason.into());
-        package
-    }
-
-    #[must_use]
     pub fn is_installable(&self) -> bool {
         self.unavailable_reason.is_none()
     }
@@ -483,8 +475,6 @@ pub fn default_bundles() -> Vec<BundleDef> {
             template: "bundles/ai-tools.nix".into(),
             packages: vec![
                 PackageDef::new("ollama", "Ollama"),
-                PackageDef::manual_setup("chatgpt-desktop", "ChatGPT Desktop", "https://chatgpt.com/download/", "Manual setup: a verified Linux Nix package is not yet integrated. The nixpkgs chatgpt package targets macOS."),
-                PackageDef::manual_setup("hermes-desktop", "Hermes Agent Desktop", "https://hermes-agent.nousresearch.com/docs/getting-started/nix-setup", "Manual setup: follow the official Nix guide. The desktop build is not yet verified for managed installation."),
                 PackageDef::new("claude-code", "Claude Code CLI")
                     .with_details("https://code.claude.com/docs/en/setup", "Run claude and sign in after installation."),
                 PackageDef::new("codex", "OpenAI Codex CLI")
@@ -495,11 +485,8 @@ pub fn default_bundles() -> Vec<BundleDef> {
                     .with_details("https://cursor.com/download", "AI code editor; command: cursor."),
                 PackageDef::new("cursor-cli", "Cursor CLI")
                     .with_details("https://cursor.com/docs/cli/overview", "Command: cursor-agent. Uses a pinned package source when absent from your channel."),
-                PackageDef::manual_setup("muse-code", "Muse Code", "https://dev.meta.ai/docs/muse-code", "Manual setup: Meta's Muse Code has no verified Nix package in this catalog. nixpkgs muse is an unrelated music application."),
-                PackageDef::manual_setup("grok-bot", "Grok Bot", "https://x.ai/bot", "Unavailable for managed Linux installation: the official page currently lists macOS, Windows and iOS."),
                 PackageDef::new("mistral-vibe", "Mistral Vibe CLI")
                     .with_details("https://github.com/mistralai/mistral-vibe", "Command: vibe. Includes an unfree Textual dependency. Uses a pinned package source when absent from your channel."),
-                PackageDef::manual_setup("kimi-code", "Kimi Code CLI", "https://github.com/MoonshotAI/kimi-code", "Manual setup: the current MoonshotAI CLI has no verified Nix package in this catalog."),
                 PackageDef::new("opencode", "OpenCode")
                     .with_details("https://opencode.ai/", "Command: opencode. Configure a model provider after installation."),
                 PackageDef::new("pi-coding-agent", "Pi Coding Agent")

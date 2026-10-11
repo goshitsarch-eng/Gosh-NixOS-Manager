@@ -155,3 +155,13 @@ The catalog change was pushed as `e73fb67` using `goshitsarch@gmail.com`.
 [GitHub run 38110269656](https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/actions/runs/38110269656)
 again reports that jobs could not start because the owner's account is locked
 due to billing. The local results above do not constitute a passing GitHub run.
+
+### Follow-up: remove unsupported catalog entries
+
+At the user's request, ChatGPT Desktop, Hermes Agent Desktop, Muse Code,
+Grok Bot and Kimi Code were removed from the shared catalog. The setup-only
+rows described above are historical; AI Tools now contains nine installable
+entries, including Ollama. Controller and widget regressions check that the
+removed tools are absent and supported tools remain selectable. All 105
+common/core Rust tests and 33 Flutter tests passed, along with formatting and
+Flutter analysis.

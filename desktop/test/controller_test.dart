@@ -224,11 +224,12 @@ void main() {
   );
 
   test(
-    'AI bundle excludes manual setup entries and rejects enabling them',
+    'AI bundle contains installable tools and omits removed entries',
     () async {
       final bundle = controller
           .catalog('bundles')
           .firstWhere((b) => b['id'] == 'ai-tools');
+      final packages = bundle['packages'] as List;
       controller.toggleBundle(bundle, true);
       final selection = List<String>.from(
         (controller.configuration!.value('bundle_packages') as Map)['ai-tools']
@@ -237,15 +238,18 @@ void main() {
       expect(
         selection,
         containsAll([
+          'ollama',
           'claude-code',
           'codex',
           'grok-build',
+          'code-cursor',
           'cursor-cli',
           'mistral-vibe',
           'opencode',
           'pi-coding-agent',
         ]),
       );
+      expect(selection, hasLength(9));
       for (final id in [
         'chatgpt-desktop',
         'hermes-desktop',
@@ -253,13 +257,8 @@ void main() {
         'grok-bot',
         'kimi-code',
       ]) {
+        expect(packages.where((p) => p['id'] == id), isEmpty);
         expect(selection, isNot(contains(id)));
-        controller.toggleBundlePackage('ai-tools', id, true);
-        expect(
-          (controller.configuration!.value('bundle_packages')
-              as Map)['ai-tools'],
-          isNot(contains(id)),
-        );
       }
       await controller.updatePreview();
       expect(controller.preview, isNot(contains('(throw')));

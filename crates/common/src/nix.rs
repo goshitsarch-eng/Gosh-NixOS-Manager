@@ -1922,15 +1922,14 @@ mod tests {
     }
 
     #[test]
-    fn manual_setup_entries_are_not_installed_by_default_or_silently_skipped() {
+    fn ai_bundle_contains_only_installable_entries() {
         let ai = bundle_by_id("ai-tools");
         let options = NixGenOptions::default();
         let selected = options.get_bundle_packages(&ai);
-        for package in ai.packages.iter().filter(|p| !p.is_installable()) {
-            assert!(!selected.contains(&package.id));
-            let forced = generate_fallback_bundle("ai-tools", std::slice::from_ref(&package.id));
-            assert!(forced.contains("(throw \"NixOS Toolkit:"));
-            assert!(forced.contains(&package.display_name));
+        assert_eq!(selected.len(), ai.packages.len());
+        for package in &ai.packages {
+            assert!(package.is_installable(), "{}", package.id);
+            assert!(selected.contains(&package.id));
         }
         let default = generate_fallback_bundle("ai-tools", &selected);
         assert!(!default.contains("throw"));
