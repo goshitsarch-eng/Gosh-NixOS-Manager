@@ -20,6 +20,15 @@ class WidgetCore implements CoreApi {
     String operation, [
     Map<String, dynamic>? args,
   ]) async {
+    // Unit tests must never authenticate against an installed host helper.
+    // Real host operations belong to the explicitly opted-in VM target.
+    if (operation == 'probe_host') {
+      return {
+        'can_manage': false,
+        'arch': 'X86_64',
+        'system': {'is_nixos': false},
+      };
+    }
     final result = NativeCore.invoke(
       path,
       jsonEncode({'operation': operation, 'args': ?args}),

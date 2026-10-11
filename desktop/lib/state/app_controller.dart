@@ -99,6 +99,7 @@ class AppController extends ChangeNotifier {
   Future<void> perform(String title, Future<void> Function() action) async {
     if (!idle) return;
     busy = title;
+    error = null;
     notifyListeners();
     try {
       await action();

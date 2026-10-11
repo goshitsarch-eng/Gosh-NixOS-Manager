@@ -52,19 +52,22 @@ class HelperTests(unittest.TestCase):
         self.managed = self.root / "etc/nixos/nixos-toolkit"
         mock = self.root / "bin/mock"
         mock.write_text(f"#!{sys.executable}\n" + '''
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 name = pathlib.Path(sys.argv[0]).name
 with open('/fixture/commands.jsonl', 'a') as out:
     out.write(json.dumps([name, *sys.argv[1:]]) + '\\n')
 if name == 'nixos-rebuild':
     assert pathlib.Path('/etc/nixos/nixos-toolkit/state/selected.nix').exists()
     print('building fixture', flush=True)
+    time.sleep(float(os.environ.get('QA_REBUILD_DELAY', '0')))
     sys.exit(int(os.environ.get('QA_REBUILD_EXIT', '0')))
 if name == 'nix-env' and '--list-generations' in sys.argv:
     print('1 2026-10-01 12:00:00\\n2 2026-10-02 12:00:00 (current)')
 elif name == 'du':
     print('123M\\t/nix/store')
 elif name == 'switch-to-configuration':
+    print('activating fixture', flush=True)
+    time.sleep(float(os.environ.get('QA_ACTIVATE_DELAY', '0')))
     sys.exit(int(os.environ.get('QA_ACTIVATE_EXIT', '0')))
 ''')
         mock.chmod(0o755)
@@ -225,6 +228,47 @@ elif name == 'switch-to-configuration':
         (self.managed / "state/state.json").write_text("corrupt")
         self.assertEqual(self.run_requests([{"type": "ReadState"}])[0]["payload"]["hostname"], "qa-desktop")
 
+    def test_interactive_cancel_and_disconnect_restore_files_and_release_lock(self):
+        self.seed()
+        before = self.contents()
+        for disconnect in [False, True]:
+            with self.subTest(disconnect=disconnect):
+                process = subprocess.Popen(self.command(QA_REBUILD_DELAY=30), stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                try:
+                    process.stdin.write('{"type":"BeginSession"}\n')
+                    process.stdin.flush()
+                    self.assertEqual(json.loads(process.stdout.readline())["type"], "Ok")
+                    process.stdin.write(json.dumps(self.apply_request()) + '\n')
+                    process.stdin.flush()
+                    while True:
+                        response = json.loads(process.stdout.readline())
+                        if response.get('payload', {}).get('message') == 'building fixture':
+                            break
+                    # Pipelined requests must not hide the running command's
+                    # cancellation token. Both pending requests are canceled.
+                    process.stdin.write(json.dumps(self.apply_request()) + '\n')
+                    process.stdin.flush()
+                    if not disconnect:
+                        process.stdin.write('{"type":"Cancel"}\n')
+                        process.stdin.flush()
+                        while True:
+                            response = json.loads(process.stdout.readline())
+                            if response['type'] != 'Log':
+                                self.assertEqual(response['type'], 'Error')
+                                self.assertIn('interrupted', response['payload']['message'].lower())
+                                break
+                    process.stdin.close()
+                    process.stdin = None
+                    process.communicate(timeout=5)
+                    self.assertEqual(process.returncode, 0)
+                    self.assertEqual(self.contents(), before)
+                    self.assertEqual(self.run_requests([{'type': 'EnsureDirectories'}])[0]['type'], 'Ok')
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate(timeout=5)
+
     def test_generation_list_activation_and_deletion(self):
         replies = self.run_requests([
             {"type": "ListGenerations"},
@@ -254,6 +298,39 @@ elif name == 'switch-to-configuration':
         self.assertEqual(reply["type"], "Error")
         self.assertIn("System profile restored", reply["payload"]["details"])
         self.assertEqual(self.commands()[-1], ["nix-env", "-p", "/nix/var/nix/profiles/system", "--switch-generation", "2"])
+
+    def test_cancelled_activation_still_restores_profile_selection(self):
+        process = subprocess.Popen(self.command(QA_ACTIVATE_DELAY=30), stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        try:
+            process.stdin.write('{"type":"BeginSession"}\n')
+            process.stdin.flush()
+            self.assertEqual(json.loads(process.stdout.readline())['type'], 'Ok')
+            request = {'type': 'RollbackGeneration', 'payload': {'generation': 1, 'activate': 'switch'}}
+            process.stdin.write(json.dumps(request) + '\n')
+            process.stdin.flush()
+            while True:
+                response = json.loads(process.stdout.readline())
+                if response.get('payload', {}).get('message') == 'activating fixture':
+                    break
+            process.stdin.write('{"type":"Cancel"}\n')
+            process.stdin.flush()
+            while True:
+                response = json.loads(process.stdout.readline())
+                if response['type'] != 'Log':
+                    self.assertEqual(response['type'], 'Error')
+                    self.assertIn('System profile restored', response['payload']['details'])
+                    break
+            process.stdin.close()
+            process.stdin = None
+            process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0)
+            self.assertEqual(self.commands()[-1], ['nix-env', '-p', '/nix/var/nix/profiles/system',
+                                                 '--switch-generation', '2'])
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
 
     def test_running_generation_is_protected_even_when_not_selected(self):
         (self.root / "profiles/generation-one").mkdir()

@@ -31,6 +31,7 @@ class HostHelper implements HelperApi {
   Process? _process;
   bool _cancelled = false;
   bool _starting = false;
+  bool _sessionReady = false;
 
   factory HostHelper.fromCapabilities(
     Map<String, dynamic> host,
@@ -86,7 +87,21 @@ class HostHelper implements HelperApi {
           'Operation cancelled before sending a request',
         );
       }
-      final result = await action(_Connection(process, replies, onLog));
+      final connection = _Connection(process, replies, onLog);
+      try {
+        await connection.send('BeginSession');
+      } catch (error) {
+        throw HelperFailure(
+          'Could not open a cancellable helper session. Update the host helper with the app: $error',
+        );
+      }
+      _sessionReady = true;
+      if (_cancelled) {
+        throw const HelperFailure(
+          'Operation cancelled before sending a request',
+        );
+      }
+      final result = await action(connection);
       await process.stdin.close();
       final code = await process.exitCode.timeout(const Duration(seconds: 5));
       if (_cancelled) {
@@ -99,10 +114,22 @@ class HostHelper implements HelperApi {
       }
       return result;
     } finally {
+      // Closing an interactive session also asks the helper to cancel if a
+      // protocol error or disconnected frontend left a command running.
+      try {
+        await process.stdin.close();
+      } catch (_) {
+        // Preserve the original protocol failure if the pipe is already gone.
+      }
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 5));
+      } on TimeoutException {
+        process.kill();
+      }
       await replies.cancel();
       await errors.cancel();
-      process.kill();
       _process = null;
+      _sessionReady = false;
     }
   }
 
@@ -145,14 +172,14 @@ class HostHelper implements HelperApi {
   @override
   void cancel() {
     final process = _process;
-    if (process == null || process.kill(ProcessSignal.sigterm)) {
-      _cancelled = true;
-    } else {
-      // An unprivileged UI may not signal a helper after pkexec becomes root.
-      // Keep waiting and save successful state instead of pretending it stopped.
-      onLog(
-        'The host helper could not be interrupted; waiting for completion.',
-      );
+    _cancelled = true;
+    if (process == null) return;
+    if (!_sessionReady && process.kill(ProcessSignal.sigterm)) return;
+    try {
+      process.stdin.writeln(jsonEncode({'type': 'Cancel'}));
+      onLog('Cancellation requested; waiting for the host helper to stop.');
+    } catch (error) {
+      onLog('Could not request cancellation: $error');
     }
   }
 }
@@ -188,6 +215,7 @@ class _Connection {
         );
       }
       const expected = {
+        'BeginSession': 'Ok',
         'EnsureDirectories': 'Ok',
         'WriteState': 'Ok',
         'ReadState': 'State',

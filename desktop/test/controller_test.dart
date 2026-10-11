@@ -82,7 +82,6 @@ void main() {
       expect(controller.error, contains('state save failed'));
       expect(controller.configuration!.strings('custom_packages'), ['ripgrep']);
       helper.failSave = false;
-      controller.clearError();
       await controller.apply();
       expect(controller.dirty, false);
       expect(controller.error, isNull);

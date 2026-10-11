@@ -1,6 +1,6 @@
 # NixOS release QA — 2026-10-10
 
-**Release decision: pending real activation and desktop checks.** This audit found and fixed functional and data-preservation defects. Passing evaluations and isolated command tests do not prove that every desktop, driver, service, or system activation works on real hardware.
+**Initial audit, before live VM testing.** The subsequent [live VM report](LIVE_VM_QA.md) supersedes the host-operation gaps below. This first pass found and fixed functional and data-preservation defects. Passing evaluations and isolated command tests do not prove that every desktop, driver, service, or system activation works on real hardware.
 
 ## Environment and boundaries
 

@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum HelperRequest {
+    /// Opt into cancellation when this interactive client's input disconnects.
+    BeginSession,
+    /// Interrupt the active request through the authenticated input pipe.
+    Cancel,
     /// Check if helper has required permissions
     CheckPermissions,
 

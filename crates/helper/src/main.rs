@@ -9,97 +9,103 @@
 
 mod commands;
 mod nix_gen;
+mod operation;
 mod rebuild;
 
 use anyhow::Result;
 use common::ipc::{HelperRequest, HelperResponse};
 use common::validate::MAX_HELPER_JSON_LINE;
 use std::io::{self, BufRead, Write};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc,
+};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 fn main() -> Result<()> {
     // Initialize logging to stderr (stdout is for IPC)
     tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(io::stderr))
-        .with(EnvFilter::from_default_env().add_directive("helper=info".parse().unwrap()))
+        .with(fmt::layer().with_ansi(false).with_writer(io::stderr))
+        .with(
+            EnvFilter::from_default_env()
+                .add_directive("nixos_toolkit_helper=info".parse().unwrap()),
+        )
         .init();
 
     tracing::info!("NixOS Toolkit Helper started");
 
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
-    let mut input = stdin.lock();
-    // Keep this lock through Apply + WriteState, across requests in the session.
-    let mut mutation_lock = None;
-
-    loop {
-        match read_json_line(&mut input, MAX_HELPER_JSON_LINE) {
-            Ok(None) => break,
-            Ok(Some(Err(()))) => {
-                let response = HelperResponse::Error {
-                    message: "Request too large".into(),
-                    details: Some(format!("JSON line exceeded {MAX_HELPER_JSON_LINE} bytes")),
-                };
-                if let Ok(json) = serde_json::to_string(&response) {
-                    if writeln!(stdout, "{json}").is_err() || stdout.flush().is_err() {
-                        break;
-                    }
+    // Read control messages independently while the worker executes a command.
+    // Legacy batch clients can close stdin after writing their requests. Only
+    // BeginSession clients opt into cancellation on disconnect.
+    let (sender, requests) = mpsc::sync_channel(8);
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut input = stdin.lock();
+        let mut interactive = false;
+        let mut active: Vec<std::sync::Weak<AtomicBool>> = Vec::new();
+        loop {
+            let request = match read_json_line(&mut input, MAX_HELPER_JSON_LINE) {
+                Ok(Some(Ok(line))) if line.is_empty() => continue,
+                Ok(Some(Ok(line))) => serde_json::from_str::<HelperRequest>(&line)
+                    .map_err(|error| format!("Invalid request format: {error}")),
+                Ok(Some(Err(()))) => Err(format!(
+                    "Request too large: JSON line exceeded {MAX_HELPER_JSON_LINE} bytes"
+                )),
+                Ok(None) | Err(_) => break,
+            };
+            if matches!(request, Ok(HelperRequest::Cancel)) {
+                for token in active.iter().filter_map(std::sync::Weak::upgrade) {
+                    token.store(true, Ordering::SeqCst);
                 }
                 continue;
             }
-            Ok(Some(Ok(line))) => {
-                if line.is_empty() {
-                    continue;
-                }
-
-                let response = match serde_json::from_str::<HelperRequest>(&line) {
-                    Ok(request) => {
-                        if request_mutates(&request) && mutation_lock.is_none() {
-                            match acquire_mutation_lock(std::path::Path::new(
-                                "/run/lock/nixos-toolkit.lock",
-                            )) {
-                                Ok(lock) => mutation_lock = Some(lock),
-                                Err(error) => {
-                                    let response = HelperResponse::Error {
-                                        message: "Cannot start host operation; another toolkit session may be running".into(),
-                                        details: Some(error.to_string()),
-                                    };
-                                    writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
-                                    stdout.flush()?;
-                                    continue;
-                                }
-                            }
-                        }
-                        handle_request(request)
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to parse request: {}", e);
-                        HelperResponse::Error {
-                            message: "Invalid request format".into(),
-                            details: Some(e.to_string()),
-                        }
-                    }
-                };
-
-                // Send response
-                match serde_json::to_string(&response) {
-                    Ok(json) => {
-                        if writeln!(stdout, "{}", json).is_err() {
-                            break;
-                        }
-                        if stdout.flush().is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to serialize response: {}", e);
-                    }
-                }
+            if matches!(request, Ok(HelperRequest::BeginSession)) {
+                interactive = true;
             }
-            Err(e) => {
-                tracing::error!("Error reading from stdin: {}", e);
+            let token = Arc::new(AtomicBool::new(false));
+            active.retain(|token| token.strong_count() > 0);
+            active.push(Arc::downgrade(&token));
+            if sender.send((request, token)).is_err() {
                 break;
             }
+        }
+        if interactive {
+            for token in active.iter().filter_map(std::sync::Weak::upgrade) {
+                token.store(true, Ordering::SeqCst);
+            }
+        }
+    });
+    let mut stdout = io::stdout();
+    let mut mutation_lock = None;
+    for (request, token) in requests {
+        let response = match request {
+            Ok(request) => operation::with_cancellation(token, || {
+                if operation::cancelled() {
+                    return HelperResponse::Error {
+                        message: "Operation interrupted before execution".into(),
+                        details: None,
+                    };
+                }
+                if request_mutates(&request) && mutation_lock.is_none() {
+                    match acquire_mutation_lock(std::path::Path::new("/run/lock/nixos-toolkit.lock")) {
+                        Ok(lock) => mutation_lock = Some(lock),
+                        Err(error) => return HelperResponse::Error {
+                            message: "Cannot start host operation; another toolkit session may be running".into(),
+                            details: Some(error.to_string()),
+                        },
+                    }
+                }
+                handle_request(request)
+            }),
+            Err(message) => HelperResponse::Error {
+                message,
+                details: None,
+            },
+        };
+        if writeln!(stdout, "{}", serde_json::to_string(&response)?).is_err()
+            || stdout.flush().is_err()
+        {
+            break;
         }
     }
 
@@ -170,6 +176,11 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
     tracing::info!("Handling request: {:?}", std::mem::discriminant(&request));
 
     match request {
+        HelperRequest::BeginSession => HelperResponse::Ok,
+        HelperRequest::Cancel => HelperResponse::Error {
+            message: "No active operation".into(),
+            details: None,
+        },
         HelperRequest::CheckPermissions => commands::check_permissions(),
         HelperRequest::GetSystemInfo => commands::get_system_info(),
         HelperRequest::Validate {

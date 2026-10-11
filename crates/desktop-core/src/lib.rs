@@ -86,7 +86,27 @@ fn helper_path() -> Option<String> {
                         .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
             }
         })
-        .map(|p| p.to_string_lossy().into_owned())
+        .and_then(|path| {
+            // pkexec matches the executable path against the installed policy.
+            // A /run/current-system symlink otherwise falls back to its generic
+            // action and prompts for every request instead of the toolkit action.
+            if host::in_flatpak() {
+                let output = std::process::Command::new("flatpak-spawn")
+                    .args(["--host", "--", "readlink", "-f", "--"])
+                    .arg(path)
+                    .output()
+                    .ok()?;
+                if !output.status.success() {
+                    return None;
+                }
+                let resolved = String::from_utf8(output.stdout).ok()?.trim().to_string();
+                Path::new(&resolved).is_absolute().then_some(resolved)
+            } else {
+                path.canonicalize()
+                    .ok()
+                    .map(|p| p.to_string_lossy().into_owned())
+            }
+        })
 }
 
 fn probe_host() -> Value {

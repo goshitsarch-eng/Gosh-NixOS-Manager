@@ -2,10 +2,8 @@
 
 use common::config::ConfigMode;
 use common::ipc::{HelperResponse, LogLevel, RebuildType};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
+use std::io::Write;
+use std::process::Command;
 
 /// Send a log message to the GUI
 fn send_log(level: LogLevel, message: String) {
@@ -34,107 +32,39 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
         }
     }
 
-    // Capture output - use pseudo-tty behavior with stderr merged for better streaming
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
     send_log(
         LogLevel::Info,
-        format!("Running: nixos-rebuild {}", rebuild_arg),
+        format!("Running: nixos-rebuild {rebuild_arg}"),
     );
-    send_log(
-        LogLevel::Info,
-        "Building system configuration...".to_string(),
-    );
-
-    // Spawn the process
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            return HelperResponse::Error {
-                message: "Failed to spawn nixos-rebuild".into(),
-                details: Some(e.to_string()),
-            };
-        }
-    };
-
-    // Take ownership of stdout and stderr
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    // Create channel for collecting output from both streams
-    let (tx, rx) = mpsc::channel();
-
-    // Spawn thread to read stdout
-    let tx_stdout = tx.clone();
-    let stdout_thread = thread::spawn(move || {
-        if let Some(stdout) = stdout {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                let _ = tx_stdout.send((LogLevel::Info, line));
-            }
-        }
+    let result = crate::operation::run(&mut cmd, |is_error, message| {
+        let level = if is_error && (message.contains("error:") || message.contains("Error:")) {
+            LogLevel::Error
+        } else if message.contains("warning:") || message.contains("Warning:") {
+            LogLevel::Warning
+        } else {
+            LogLevel::Info
+        };
+        send_log(level, message.to_string());
     });
-
-    // Spawn thread to read stderr (where most nixos-rebuild output goes)
-    let tx_stderr = tx;
-    let stderr_thread = thread::spawn(move || {
-        if let Some(stderr) = stderr {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                // Determine log level based on content
-                let level = if line.contains("error:") || line.contains("Error:") {
-                    LogLevel::Error
-                } else if line.contains("warning:") || line.contains("Warning:") {
-                    LogLevel::Warning
-                } else {
-                    LogLevel::Info
-                };
-                let _ = tx_stderr.send((level, line));
-            }
-        }
-    });
-
-    // Receive and send log messages as they come in
-    // This runs until both sender threads are done
-    while let Ok((level, message)) = rx.recv() {
-        send_log(level, message);
-    }
-
-    // Wait for reader threads to finish
-    let _ = stdout_thread.join();
-    let _ = stderr_thread.join();
-
-    // Wait for the process to complete
-    match child.wait() {
-        Ok(status) => {
-            if status.success() {
-                send_log(LogLevel::Info, "Build completed successfully!".to_string());
-                HelperResponse::ApplyComplete {
-                    success: true,
-                    message: format!("nixos-rebuild {} completed successfully", rebuild_arg),
-                }
+    match result {
+        Ok(output) => HelperResponse::ApplyComplete {
+            success: output.status.success(),
+            message: if output.status.success() {
+                format!("nixos-rebuild {rebuild_arg} completed successfully")
             } else {
-                let code = status.code().unwrap_or(-1);
-                send_log(
-                    LogLevel::Error,
-                    format!("Build failed with exit code {}", code),
-                );
-                HelperResponse::ApplyComplete {
-                    success: false,
-                    message: format!(
-                        "nixos-rebuild {} failed with exit code {}",
-                        rebuild_arg, code
-                    ),
-                }
-            }
-        }
-        Err(e) => {
-            send_log(LogLevel::Error, format!("Process error: {}", e));
-            HelperResponse::Error {
-                message: "Failed to wait for nixos-rebuild".into(),
-                details: Some(e.to_string()),
-            }
-        }
+                format!(
+                    "nixos-rebuild {rebuild_arg} failed with exit code {}",
+                    output.status.code().unwrap_or(-1)
+                )
+            },
+        },
+        Err(error) => HelperResponse::Error {
+            message: if error.kind() == std::io::ErrorKind::Interrupted {
+                "Rebuild interrupted; verify the running system before retrying".into()
+            } else {
+                "Failed to run nixos-rebuild".into()
+            },
+            details: Some(error.to_string()),
+        },
     }
 }

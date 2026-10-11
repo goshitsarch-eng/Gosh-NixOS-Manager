@@ -30,17 +30,17 @@ void main() {
     () async {
       await peer('success')
           .apply({'hostname': 'desktop', 'last_applied': null}, 'Switch');
-      expect(await requests(), ['Apply', 'WriteState']);
+      expect(await requests(), ['BeginSession', 'Apply', 'WriteState']);
       expect(logs, ['Rebuilding']);
       final apply =
-          jsonDecode((await trace.readAsLines())[0])['payload'] as Map;
+          jsonDecode((await trace.readAsLines())[1])['payload'] as Map;
       expect(apply['rebuild_type'], 'Switch');
       expect(apply.containsKey('last_applied'), false);
     },
   );
   test('dry build omits directory creation and state write', () async {
     await peer('success').apply({}, 'DryBuild');
-    expect(await requests(), ['Apply']);
+    expect(await requests(), ['BeginSession', 'Apply']);
   });
   test('state save failure is surfaced after rebuild success', () async {
     await expectLater(
@@ -59,7 +59,7 @@ void main() {
       peer('apply-failure').apply({}, 'Switch'),
       throwsA(isA<HelperFailure>()),
     );
-    expect(await requests(), ['Apply']);
+    expect(await requests(), ['BeginSession', 'Apply']);
   });
   test('unexpected response and disconnected helper fail explicitly', () async {
     await expectLater(

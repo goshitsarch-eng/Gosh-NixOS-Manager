@@ -2,7 +2,7 @@
 
 Only native Linux and Linux Flatpak are in scope. “Implemented” means the code exists; it does not establish that the platform workflow passed.
 
-For the current NixOS audit, fixes, configuration matrix and outstanding release gates, see [NIXOS_RELEASE_QA.md](docs/audit/NIXOS_RELEASE_QA.md). The table below preserves earlier Debian/Flatpak migration evidence; it does not certify the changed revision's complete desktop workflow.
+The [live NixOS VM report](docs/audit/LIVE_VM_QA.md) records actual native UI, rebuild, generation, cancellation and maintenance checks. The [initial audit](docs/audit/NIXOS_RELEASE_QA.md) records the configuration matrix and earlier fixes. The table below preserves historical Debian/Flatpak migration evidence; its NixOS host gaps are superseded by the live report, while its Flatpak/ARM64 limitations still apply.
 
 | Feature | Native x86_64 Linux | Linux Flatpak |
 |---|---|---|

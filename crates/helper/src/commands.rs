@@ -1368,9 +1368,10 @@ pub fn write_state(state: AppState) -> HelperResponse {
 pub fn list_generations() -> HelperResponse {
     use std::process::Command;
 
-    let output = Command::new("nix-env")
-        .args(["--list-generations", "-p", "/nix/var/nix/profiles/system"])
-        .output();
+    let output = crate::operation::run(
+        Command::new("nix-env").args(["--list-generations", "-p", "/nix/var/nix/profiles/system"]),
+        |_, _| {},
+    );
 
     match output {
         Ok(output) => {
@@ -1493,46 +1494,31 @@ pub fn rollback_generation(generation: u32, activate: String) -> HelperResponse 
     };
 
     // Switch to the specified generation
-    let switch_output = Command::new("nix-env")
-        .args([
+    let switch_output = crate::operation::run(
+        Command::new("nix-env").args([
             "-p",
             "/nix/var/nix/profiles/system",
             "--switch-generation",
             &generation.to_string(),
-        ])
-        .output();
+        ]),
+        |_, _| {},
+    );
 
     match switch_output {
         Ok(output) if output.status.success() => {
             // Activate the generation (`switch` now or `boot` for next reboot).
-            let activate_output =
+            let activate_output = crate::operation::run(
                 Command::new("/nix/var/nix/profiles/system/bin/switch-to-configuration")
-                    .arg(&activate)
-                    .output();
+                    .arg(&activate),
+                |_, line| send_log(LogLevel::Info, line.to_string()),
+            );
 
             let details = match activate_output {
                 Ok(output) if output.status.success() => return HelperResponse::Ok,
                 Ok(output) => String::from_utf8_lossy(&output.stderr).to_string(),
                 Err(error) => error.to_string(),
             };
-            let restored = Command::new("nix-env")
-                .args([
-                    "-p",
-                    "/nix/var/nix/profiles/system",
-                    "--switch-generation",
-                    &previous.to_string(),
-                ])
-                .output();
-            let recovery = match restored {
-                Ok(output) if output.status.success() => {
-                    format!("System profile restored to generation {previous}.")
-                }
-                Ok(output) => format!(
-                    "Restoring the system profile failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-                Err(error) => format!("Restoring the system profile failed: {error}"),
-            };
+            let recovery = restore_system_profile(previous);
             HelperResponse::Error {
                 message: "Failed to activate generation; verify the running system before retrying"
                     .into(),
@@ -1541,12 +1527,40 @@ pub fn rollback_generation(generation: u32, activate: String) -> HelperResponse 
         }
         Ok(output) => HelperResponse::Error {
             message: "Failed to switch generation".into(),
-            details: Some(String::from_utf8_lossy(&output.stderr).to_string()),
+            details: Some(format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stderr),
+                restore_system_profile(previous)
+            )),
         },
         Err(e) => HelperResponse::Error {
             message: "Failed to execute nix-env".into(),
-            details: Some(e.to_string()),
+            // Cancellation can race the atomic profile update. Compensate even
+            // when nix-env's successful exit was not observed by the worker.
+            details: Some(format!("{e}\n{}", restore_system_profile(previous))),
         },
+    }
+}
+
+fn restore_system_profile(previous: u32) -> String {
+    // Recovery must run even after the interactive session was canceled.
+    match std::process::Command::new("nix-env")
+        .args([
+            "-p",
+            "/nix/var/nix/profiles/system",
+            "--switch-generation",
+            &previous.to_string(),
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            format!("System profile restored to generation {previous}.")
+        }
+        Ok(output) => format!(
+            "Restoring the system profile failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+        Err(error) => format!("Restoring the system profile failed: {error}"),
     }
 }
 
@@ -1583,10 +1597,12 @@ pub fn delete_generations(generations: Vec<u32>) -> HelperResponse {
 
     let gen_args: Vec<String> = generations.iter().map(|g| g.to_string()).collect();
 
-    let output = Command::new("nix-env")
-        .args(["-p", "/nix/var/nix/profiles/system", "--delete-generations"])
-        .args(&gen_args)
-        .output();
+    let output = crate::operation::run(
+        Command::new("nix-env")
+            .args(["-p", "/nix/var/nix/profiles/system", "--delete-generations"])
+            .args(&gen_args),
+        |_, _| {},
+    );
 
     match output {
         Ok(output) if output.status.success() => HelperResponse::Ok,
@@ -1687,7 +1703,9 @@ pub fn run_maintenance(command: String) -> HelperResponse {
         };
     }
 
-    let output = Command::new(parts[0]).args(&parts[1..]).output();
+    let output = crate::operation::run(Command::new(parts[0]).args(&parts[1..]), |_, line| {
+        send_log(LogLevel::Info, line.to_string());
+    });
 
     match output {
         Ok(output) => HelperResponse::MaintenanceOutput {
@@ -1711,7 +1729,7 @@ pub fn get_disk_usage() -> HelperResponse {
     let mut error = None;
 
     // Get Nix store size using du
-    match Command::new("du").args(["-sh", "/nix/store"]).output() {
+    match crate::operation::run(Command::new("du").args(["-sh", "/nix/store"]), |_, _| {}) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             // du output format: "45G\t/nix/store"
@@ -1729,10 +1747,10 @@ pub fn get_disk_usage() -> HelperResponse {
     }
 
     // Count generations using nix-env
-    match Command::new("nix-env")
-        .args(["--list-generations", "-p", "/nix/var/nix/profiles/system"])
-        .output()
-    {
+    match crate::operation::run(
+        Command::new("nix-env").args(["--list-generations", "-p", "/nix/var/nix/profiles/system"]),
+        |_, _| {},
+    ) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             generation_count = stdout.lines().filter(|l| !l.trim().is_empty()).count() as u32;

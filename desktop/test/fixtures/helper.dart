@@ -10,6 +10,10 @@ Future<void> main(List<String> args) async {
     final request = jsonDecode(line) as Map<String, dynamic>;
     await trace.writeAsString('$line\n', mode: FileMode.append);
     final type = request['type'];
+    if (type == 'BeginSession') {
+      stdout.writeln(jsonEncode({'type': 'Ok'}));
+      continue;
+    }
     if (scenario == 'disconnect') exit(3);
     if (scenario == 'oversized') {
       stdout.write('x' * 4194305);
@@ -17,13 +21,22 @@ Future<void> main(List<String> args) async {
       exit(0);
     }
     if (scenario == 'wait') {
+      if (type == 'Cancel') {
+        stdout.writeln(
+          jsonEncode({
+            'type': 'Error',
+            'payload': {'message': 'Operation interrupted'},
+          }),
+        );
+        continue;
+      }
       stdout.writeln(
         jsonEncode({
           'type': 'Log',
           'payload': {'message': 'Waiting'},
         }),
       );
-      await Future<void>.delayed(const Duration(minutes: 2));
+      continue;
     }
     if (scenario == 'wrong') {
       stdout.writeln(jsonEncode({'type': 'State', 'payload': {}}));
