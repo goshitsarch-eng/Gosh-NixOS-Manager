@@ -105,3 +105,53 @@ The patched activation package built successfully, including its Clippy check an
 Four additional activations checked the actual TCP 18080 and UDP 51821 firewall rules, active Tailscale/Fail2ban services, and removal of test ports on baseline restoration. All passed, for 28 successful network activations. A separate negative test temporarily set the firewall's ExecReload to a failing command and applied a changed network selection. The helper returned an apply failure with pending recovery. Restoring the temporary host configuration and invoking RecoverApply returned the managed hashes, running system and boot selection to baseline, with no failed units. This checks that the patch preserves real failure reporting. Nix formatting also passed, and the native app remains running.
 
 The host uses root-owned copies of the compatibility module and patch under `/etc/nixos/toolkit-activation`, imported from `toolkit-qa.nix`. The original QA installation module is backed up with the existing root-only VM recovery files. Diagnostics and before/after logs are under ignored `dist/qa-evidence/firewall-fix/`.
+
+## Software bundle expansion: 2026-10-11
+
+The [package audit](../SOFTWARE_BUNDLES.md) records the requested additions,
+official upstream sources, exact Nix attributes and compatibility behavior.
+Bazaar and all requested development entries are available, along with eight
+new installable AI tools. ChatGPT Desktop, Hermes Agent Desktop, Muse Code,
+Grok Bot and Kimi Code are explicitly setup-only entries: their managed Linux
+packages have not been integrated and verified. The UI links to their official
+projects and cannot select them for installation.
+
+The installed native app passed live accessibility actions on all 37 installable
+package checkboxes across Development Tools, AI Tools and Flatpak Support.
+Each checkbox was switched off and back on; all five setup-only entries stayed
+disabled and unchecked. The final build also exposes all thirteen new AI
+website links as named buttons, separate from their package checkboxes.
+Bundle switches were returned to off. These actions test selection behavior;
+they do not install or run every third-party package.
+
+Validation passed 157 Rust tests, 33 Flutter tests, 26 isolated helper tests,
+workspace Clippy and Flutter analysis. Generated modules passed 85 bundle
+evaluations on the pinned package collection, plus 37 individual selections
+and three whole-bundle selections on the host's NixOS 25.05 collection.
+Regression checks include Node/npm/JavaScript deduplication, Flutter/Dart
+compatibility, DistroShelf's container dependencies, unfree dependencies,
+setup-only rejection and exact selection recovery after missing/corrupt state.
+
+Final Nix GUI/helper builds and the native release archive completed. The
+Flatpak was rebuilt, installed and passed packaged Rust API/catalog/preview
+diagnostics and a real sandbox-to-host standard-stream round trip. The local
+repack used the installed Freedesktop Platform for its file-copy commands;
+the normal release manifest and SDK build procedure remain unchanged.
+Both release archive checksums were verified.
+
+The updated app/helper were installed through a successful NixOS dry-build and
+switch. Running and selected boot systems match, the firewall is active, no
+system units have failed, and the helper reports no pending recovery. Managed
+configuration hashes still match the pre-test baseline. The original root-only
+backup and recovery GC root remain available. No requested toolchain or AI
+agent was activated merely by testing its bundle controls.
+
+Provider authentication, paid/model requests, desktop logins and full builds of
+every added toolchain remain outside these checks. Local build logs, evaluation
+reports, live-control results, screenshots and before/after host checks are in
+ignored `dist/qa-evidence/software-bundles/`.
+
+The catalog change was pushed as `e73fb67` using `goshitsarch@gmail.com`.
+[GitHub run 38110269656](https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/actions/runs/38110269656)
+again reports that jobs could not start because the owner's account is locked
+due to billing. The local results above do not constitute a passing GitHub run.

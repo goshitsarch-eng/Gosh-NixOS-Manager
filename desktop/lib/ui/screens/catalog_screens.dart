@@ -164,7 +164,11 @@ class BundlesScreen extends StatelessWidget {
                   if (package['homepage'] != null)
                     IconButton(
                       tooltip: 'Official website: ${package['display_name']}',
-                      icon: const Icon(Icons.open_in_new),
+                      icon: Icon(
+                        Icons.open_in_new,
+                        semanticLabel:
+                            'Official website: ${package['display_name']}',
+                      ),
                       onPressed: () async {
                         final uri = Uri.parse(package['homepage'] as String);
                         try {
