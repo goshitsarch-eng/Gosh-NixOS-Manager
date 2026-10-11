@@ -1,3 +1,5 @@
+> **Historical: GTK to libcosmic migration.** The current desktop uses Flutter. Use the [current documentation](../README.md) for installation and development; this file preserves the earlier plan or results.
+
 # Migration decisions
 
 Lead decisions for the GTK4 → libcosmic rewrite. Each row records the question, options considered, the choice, and why. Priority order when options conflict:

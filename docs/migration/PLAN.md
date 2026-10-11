@@ -1,3 +1,5 @@
+> **Historical: GTK to libcosmic migration.** The current desktop uses Flutter. Use the [current documentation](../README.md) for installation and development; this file preserves the earlier plan or results.
+
 # NixOS Toolkit — libcosmic migration plan
 
 Lead consolidation of `ux.md`, `architecture.md`, `packaging.md`, and `review-phase1.md`. Decisions: `DECISIONS.md`.

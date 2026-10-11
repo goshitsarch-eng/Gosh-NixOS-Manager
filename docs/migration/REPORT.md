@@ -1,3 +1,5 @@
+> **Historical: GTK to libcosmic migration.** The current desktop uses Flutter. Use the [current documentation](../README.md) for installation and development; this file preserves the earlier plan or results.
+
 # NixOS Toolkit — libcosmic migration report
 
 The GTK4/libadwaita GUI is replaced by a libcosmic (iced) application with the same NixOS management features. The privileged helper and `crates/common` remain the backend. The GUI ships as a Flatpak; apply/rebuild still require a **host** `nixos-toolkit-helper` (NixOS module / polkit).

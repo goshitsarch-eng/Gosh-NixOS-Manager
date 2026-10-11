@@ -1,3 +1,5 @@
+> **Historical: September 2026 libcosmic audit.** Findings and open tasks describe that snapshot. See [current platform coverage](../../PLATFORM_SUPPORT.md) and the [live NixOS report](LIVE_VM_QA.md) for later results.
+
 # Performance and resource audit
 
 Reconnaissance only (branch `audit-hardening`). No fixes were implemented.

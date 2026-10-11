@@ -1,9 +1,10 @@
-# Software bundle package audit
+# Software bundles
 
-Verified against upstream documentation and Nixpkgs on 2026-10-11. The Rust
-catalog in `crates/common/src/actions.rs` is authoritative for both frontends
-and the helper. Enabling a bundle selects its installable entries. Tools without
-verified managed installation support are omitted from the catalog.
+These are the recent additions to Flatpak, AI Tools, and Development Tools.
+Enable a bundle, then uncheck any packages you do not want. The app also has
+bundles for gaming, office, multimedia, and other uses.
+
+Package names and upstream links were checked during the [bundle audit](audit/LIVE_VM_QA.md#software-bundle-expansion-2026-10-11). The [Rust catalog](../crates/common/src/actions.rs) defines the complete selection list.
 
 ## Flatpak
 
@@ -17,7 +18,7 @@ not execute remote installers or change another user's Flatpak remotes.
 
 ## AI Tools
 
-| Requested tool | Managed package / status | Verified source |
+| Tool | Package and command | Upstream |
 | --- | --- | --- |
 | Claude Code CLI | `claude-code`; run `claude` | [Anthropic setup](https://code.claude.com/docs/en/setup) |
 | Codex | `codex`; run `codex` | [OpenAI Codex](https://github.com/openai/codex) |
@@ -28,17 +29,16 @@ not execute remote installers or change another user's Flatpak remotes.
 | OpenCode | `opencode`; run `opencode` | [OpenCode](https://github.com/anomalyco/opencode) |
 | Pi Coding Agent | `pi-coding-agent`; run `pi` | [Pi](https://pi.dev/) |
 
-Ollama remains available. AI provider authentication and any subscriptions are
-configured in each tool after installation. No provider credentials or agents
-are enabled automatically. Proprietary package selections add the existing
-`allowUnfree` module.
+Ollama is also available. Sign in or configure API keys in each tool after
+installation; accounts and subscriptions are separate. Selecting proprietary
+packages enables the generated `allowUnfree` setting.
 
 ChatGPT Desktop, Hermes Agent Desktop, Muse Code, Grok Bot and Kimi Code were
 removed from the catalog because managed installation is not supported here.
 
 ## Development Tools
 
-| Requested tool | Nix package | Verified source / details |
+| Tool | Nix package | Upstream and notes |
 | --- | --- | --- |
 | Distrobox | `distrobox` | [Distrobox](https://distrobox.it/); enables rootless Podman. |
 | DistroShelf | `distroshelf`, `distrobox` | [DistroShelf](https://github.com/ranfdev/DistroShelf); enables rootless Podman even when Distrobox is unchecked. Choose an installed terminal in its preferences. |
@@ -80,22 +80,8 @@ The fetch is lazy and hash checked; it is unnecessary when all selected packages
 exist in the host collection. Extra package closures can increase download and
 store size. Existing host attributes retain the versions supplied by that host.
 
-## Validation
+## Testing and limits
 
-`scripts/test-generated-nix.py` covers each installable entry in these three
-bundles individually, all selected, and empty selections. Rust and Flutter
-regressions cover dependency activation, deselection, runtime deduplication,
-proprietary packages, omission of unsupported tools and the expanded catalog UI.
+The [bundle audit](audit/LIVE_VM_QA.md#software-bundle-expansion-2026-10-11) records package evaluation on NixOS 25.05 and the pinned newer package collection. Automated checks cover individual/whole-bundle selections, dependencies, aliases, deselection, and recovery of saved checkbox choices.
 
-Generated package lists carry validated JSON selection markers. The helper uses
-them to recover exact checkbox IDs if `state.json` is missing or corrupt, while
-retaining the parser for older files. This preserves npm/JavaScript aliases,
-Flutter/Dart selections and DistroShelf without inventing a Distrobox selection.
-
-Local checks passed: 157 Rust tests, 33 Flutter tests, workspace Clippy, Flutter
-analysis, 26 isolated helper tests, 85 bundle evaluations on the pinned package
-collection, and 37 individual plus three whole-bundle evaluations on NixOS 25.05.
-
-Package/module evaluation confirms attribute names and configuration validity;
-it does not establish that every provider login or AI model request works.
-Those require the user's provider accounts and separate application testing.
+Package evaluation checks names and configuration validity. Provider login, API calls, and every installed program's runtime behavior need separate testing. See [platform coverage](../PLATFORM_SUPPORT.md) for the remaining gaps.

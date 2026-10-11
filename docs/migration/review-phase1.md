@@ -1,3 +1,5 @@
+> **Historical: GTK to libcosmic migration.** The current desktop uses Flutter. Use the [current documentation](../README.md) for installation and development; this file preserves the earlier plan or results.
+
 # Phase 1 review — Devil's advocate
 
 Status: **CONDITIONAL**. Do not start Phase 2 until the lead records the decisions in §3 in `docs/migration/DECISIONS.md` (and folds the blocking items into `PLAN.md`). This review does **not** approve the three contracts as-is.

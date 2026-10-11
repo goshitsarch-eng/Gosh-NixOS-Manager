@@ -1,22 +1,24 @@
-NixOS Toolkit 0.1.0 — Linux Flutter desktop
+NixOS Toolkit — Linux desktop archive
 
-Extract the complete archive, then run ./nixos-toolkit in this directory.
-Keep lib/ and data/ beside the executable. Paths with spaces are supported.
-Required runtime: GTK 3, GL/EGL, a graphical X11 or Wayland session, and the
-system C/C++ runtime. flutter-build.json and rust-build.txt record the tools.
-Build on your oldest supported Linux distribution; a binary built with newer
-glibc cannot run on an older distribution merely because GTK is installed.
+On NixOS, use the prebuilt Nix installer:
+https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/blob/main/INSTALLING.md
 
-On other Linux distributions, profiles, packages, forms and preview work.
-Apply, generations and maintenance require NixOS, a host-installed
-nixos-toolkit-helper, polkit and an authentication agent. Install the host
-helper using this repository's NixOS module. Do not run the desktop as root.
-The Flatpak also uses the host helper; it contains no privileged service.
+For this archive, extract everything and run ./nixos-toolkit in a graphical
+session. Keep lib/ and data/ beside the executable. Paths with spaces work.
+You need GTK 3, GL/EGL, X11 or Wayland, and the system C/C++ runtime. A build
+made with a newer glibc may not run on an older distribution. Tool versions
+are recorded in flutter-build.json and rust-build.txt.
 
-Preferences retain $XDG_CONFIG_HOME/nixos-toolkit/preferences.json.
-Managed system state remains /etc/nixos/nixos-toolkit/state/state.json.
-See BUILDING.md, ARCHITECTURE.md, PLATFORM_SUPPORT.md and MIGRATION_AUDIT.md
-in the source repository for build instructions and validation limits.
+Configuration previews work on other Linux distributions. Apply, generations,
+and maintenance require NixOS, a matching host helper, polkit, and a desktop
+authentication agent. The desktop app runs as your normal user.
 
-GPL-3.0-or-later; license included in LICENSE.
-https://github.com/goshitsarch-eng/Gosh-NixOS-Manager
+User preferences: $XDG_CONFIG_HOME/nixos-toolkit/preferences.json
+(default base: ~/.config).
+System selections: /etc/nixos/nixos-toolkit/state/state.json.
+Keep manual settings outside /etc/nixos/nixos-toolkit/.
+
+Usage, build instructions, and tested platforms:
+https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/tree/main/docs
+
+GPL-3.0-or-later. See the included LICENSE.

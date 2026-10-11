@@ -1,3 +1,5 @@
+> **Historical: September 2026 libcosmic audit.** Findings and open tasks describe that snapshot. See [current platform coverage](../../PLATFORM_SUPPORT.md) and the [live NixOS report](LIVE_VM_QA.md) for later results.
+
 # Bugs and completeness issues (reconnaissance)
 
 Severity: **P0** crash/security/corruption, **P1** major broken feature, **P2** normal bug, **P3** polish.

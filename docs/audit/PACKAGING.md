@@ -1,3 +1,5 @@
+> **Historical: September 2026 libcosmic audit.** Findings and open tasks describe that snapshot. See [current platform coverage](../../PLATFORM_SUPPORT.md) and the [live NixOS report](LIVE_VM_QA.md) for later results.
+
 # Packaging, platform, and QA audit
 
 Reconnaissance only (branch `audit-hardening`). Product: **NixOS Toolkit**. This note covers the Nix flake, NixOS module, Flatpak GUI, desktop/AppStream/icons, polkit, `install.sh`, and the cargo/flake/Flatpak verification gate.

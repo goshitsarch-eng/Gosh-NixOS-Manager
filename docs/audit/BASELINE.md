@@ -1,3 +1,5 @@
+> **Historical: September 2026 libcosmic audit.** Findings and open tasks describe that snapshot. See [current platform coverage](../../PLATFORM_SUPPORT.md) and the [live NixOS report](LIVE_VM_QA.md) for later results.
+
 # Baseline — NixOS Toolkit (`audit-hardening`)
 
 Recorded 2026-09-12 before implementation. Product: **NixOS Toolkit** (`nixos-toolkit` GUI + `nixos-toolkit-helper`). Repository: `goshitsarch-eng/Gosh-NixOS-Manager`. Branch created from `main` @ `36e6de3`.

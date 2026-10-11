@@ -1,4 +1,5 @@
-> Historical feature reference for the former libcosmic frontend. Current build and architecture instructions are in the root README, BUILDING.md and ARCHITECTURE.md. See MIGRATION_AUDIT.md for verified behavior and changes.
+> **Historical: former libcosmic feature reference.** For the current app, see the [overview](../README.md), [usage guide](USAGE.md), and [platform coverage](../PLATFORM_SUPPORT.md).
+
 
 # NixOS Toolkit
 
@@ -377,7 +378,7 @@ Workspace crates: `common`, `gui` (binary `nixos-toolkit`), `helper` (binary `ni
 
 Flake packages: `default`/`gui`, `helper`, `templates`, `full`. Apps: `default` (`nixos-toolkit`), `helper`. Overlay attributes: `nixos-toolkit`, `nixos-toolkit-helper`.
 
-Details: [docs/architecture.md](docs/architecture.md), [docs/reference.md](docs/reference.md).
+Details: [docs/architecture.md](architecture.md), [docs/reference.md](reference.md).
 
 ---
 
@@ -402,7 +403,7 @@ nix build .#helper
 
 Rust: workspace `rust-version = "1.93"`, edition 2021. The flake uses rust-overlay `stable.latest`, not a 1.93 pin.
 
-Full contributor notes: [docs/development.md](docs/development.md).
+Full contributor notes: [docs/development.md](development.md).
 
 ---
 
@@ -418,7 +419,7 @@ Full contributor notes: [docs/development.md](docs/development.md).
 - The GUI never sends `CheckPermissions` / `GetSystemInfo` / `Validate` / `Generate`; detection is local (and `flatpak-spawn --host` inside the sandbox).
 - Hostname `lib.mkDefault` still sets the hostname when the user has no explicit `networking.hostName`.
 
-More: [docs/reference.md](docs/reference.md#known-limitations).
+More: [docs/reference.md](reference.md#configuration-rules).
 
 ---
 
@@ -444,11 +445,11 @@ More: [docs/reference.md](docs/reference.md#known-limitations).
 
 | Doc | Contents |
 |-----|----------|
-| [docs/README.md](docs/README.md) | Index |
-| [docs/architecture.md](docs/architecture.md) | Crates, IPC, generation, spawn, state |
-| [docs/development.md](docs/development.md) | Build, test, CI, adding profiles/bundles |
-| [docs/reference.md](docs/reference.md) | Paths, env, IPC variants, catalogs, stubs |
-| [docs/migration/](docs/migration/) | Historical GTK → libcosmic notes (not current) |
+| [docs/README.md](README.md) | Index |
+| [docs/architecture.md](architecture.md) | Crates, IPC, generation, spawn, state |
+| [docs/development.md](development.md) | Build, test, CI, adding profiles/bundles |
+| [docs/reference.md](reference.md) | Paths, env, IPC variants, catalogs, stubs |
+| [docs/migration/](migration/) | Historical GTK → libcosmic notes (not current) |
 
 ## Contributing
 
@@ -456,4 +457,4 @@ Issues and pull requests are welcome. Match the code, not the migration docs.
 
 ## License
 
-GPL-3.0-or-later. See [`LICENSE`](LICENSE).
+GPL-3.0-or-later. See [`LICENSE`](../LICENSE).

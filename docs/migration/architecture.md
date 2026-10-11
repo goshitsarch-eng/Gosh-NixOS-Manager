@@ -1,3 +1,5 @@
+> **Historical: GTK to libcosmic migration.** The current desktop uses Flutter. Use the [current documentation](../README.md) for installation and development; this file preserves the earlier plan or results.
+
 # NixOS Toolkit — libcosmic migration architecture
 
 This document is the architecture contract for the GTK4/libadwaita → libcosmic rewrite of the GUI crate. It maps current GObject pages, signals, `RefCell` state, and helper IPC onto libcosmic’s `Application` model (`Message`, `update`, `view`, `Task`, `subscription`).

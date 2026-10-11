@@ -1,3 +1,5 @@
+> **Historical: GTK to libcosmic migration.** The current desktop uses Flutter. Use the [current documentation](../README.md) for installation and development; this file preserves the earlier plan or results.
+
 # Packaging, sandbox, tests, and verification
 
 This is the packaging and QA plan for the GTK4 → libcosmic migration of NixOS Toolkit. It is the source of truth for `flatpak/`, `tests/`, `scripts/`, and `.github/workflows/verify.yml`. It does not change application behavior by itself; architecture owns `Message` / `update()`, this workstream owns how the GUI is built, sandboxed, tested, and shipped.

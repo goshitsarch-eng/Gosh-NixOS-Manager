@@ -1,157 +1,39 @@
-# CLAUDE.md
+# Repository guide
 
-This file provides guidance when working with code in this repository.
+NixOS Toolkit is a Flutter desktop app with a Rust core and a separate privileged helper. The repository is `goshitsarch-eng/Gosh-NixOS-Manager`. The old libcosmic frontend remains a reference package; it is not the default app.
 
-## Project Overview
+## Start here
 
-NixOS Toolkit — a libcosmic (iced) GUI for declarative NixOS system management. Users select a desktop profile, software bundles, and system settings. The unprivileged GUI talks to `nixos-toolkit-helper` (typically via `pkexec`). The helper writes Nix modules under `/etc/nixos/nixos-toolkit/` and runs `nixos-rebuild`. It does not edit the user's `configuration.nix` or `flake.nix`.
+- [README.md](README.md): product overview and quick install.
+- [INSTALLING.md](INSTALLING.md): signed prebuilt installation and manual integration.
+- [BUILDING.md](BUILDING.md): development, checks, packaging, and releases.
+- [ARCHITECTURE.md](ARCHITECTURE.md): state, FFI, helper sessions, and recovery.
+- [docs/reference.md](docs/reference.md): source map, paths, and protocol.
+- [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md): tested behavior and remaining gaps.
 
-Repository: `goshitsarch-eng/Gosh-NixOS-Manager`. Product name and binaries are NixOS Toolkit, not the repo title.
+## Build and check
 
-Workspace version `0.1.0`, edition `2021`, `rust-version = "1.93"`, license `GPL-3.0-or-later` (`LICENSE` in the repository root).
+Use `nix develop` from the repository root for the pinned toolchain. Run the UI with `cd desktop && flutter run -d linux`. Build the core/helper with `cargo build --locked -p desktop-core -p helper`.
 
-## Build & Development Commands
+`scripts/verify.sh` runs the normal Rust/Flutter gate. Add `--isolated` for helper/installer fixtures, or `--flatpak` for sandbox packaging and diagnostics. Run tests relevant to the change; live system tests require the disposable-VM setup documented in the audit reports.
 
-```bash
-# Enter development shell (required for cargo commands)
-nix develop
+Nix packages: `.#gui`/default, `.#helper`, `.#core`, `.#templates`, `.#full`, `.#installer`, and `.#reference`. The prebuilt release uses a signed Nix cache hosted as GitHub release assets. Private signing keys stay outside the repository and artifacts.
 
-# Run the GUI (Cargo package "gui", binary nixos-toolkit)
-cargo run -p gui
+## Where changes belong
 
-# Run the helper (Cargo package "helper", binary nixos-toolkit-helper)
-cargo run -p helper
+- `desktop/lib/`: Flutter UI, drafts, review, preferences, and helper transport.
+- `crates/common/`: catalogs, types, validation, host probes, and Nix generation.
+- `crates/desktop-core/`: six unprivileged JSON FFI operations.
+- `crates/helper/`: managed files, rebuilds, locking, recovery, generations, and maintenance.
+- `crates/fake-helper/`: protocol tests without host mutations.
+- `packaging/nix/` and `install.sh`: transactional prebuilt installation.
 
-# Build all flake packages
-nix build
+Keep preview and apply on the same generation rules. New bundle entries go in `common/src/actions.rs`; packages that require services also need the corresponding generation logic in `common/src/nix.rs`. Do not assume old bundle templates are copied during normal apply. Profile templates live in `nix/templates/profiles/`.
 
-# Build specific packages
-nix build .#gui
-nix build .#helper
-nix build .#templates
-nix build .#full
+## Boundaries to preserve
 
-# Run from flake
-nix run github:goshitsarch-eng/Gosh-NixOS-Manager
-```
+The GUI runs as the user. Host changes go through polkit and the helper. Apply requires a saved-state revision, rejects outdated drafts, and keeps a recovery journal through state persistence. The installer and helper share the mutation lock. Keep app/helper versions matched.
 
-Dev-shell sets `NIXOS_TOOLKIT_TEMPLATES_DIR` to `$PWD/nix/templates`. For apply tests against a local helper:
+The app owns generated files under `/etc/nixos/nixos-toolkit/`. The installer separately owns `nixos-toolkit-install.nix` and its marked imports in `configuration.nix`. Preserve unrelated configuration and external edits during recovery. User preferences are separate from privileged selection state.
 
-```bash
-export NIXOS_TOOLKIT_HELPER="$PWD/target/debug/nixos-toolkit-helper"
-cargo run -p gui
-```
-
-`NIXOS_TOOLKIT_NO_PKEXEC=1` spawns the helper directly (still needs write access to `/etc/nixos` for real applies).
-
-### Checks
-
-GitHub Actions (`.github/workflows/verify.yml`):
-
-- job `cargo`: `cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`
-- job `flake`: `nix build .#checks.x86_64-linux.fmt` and `.#checks.x86_64-linux.audit` on push/PR (not full `nix flake check`)
-- job `flatpak`: `workflow_dispatch` only
-
-Flake `checks`: inherit GUI/helper packages, `clippy` using GUI crane inputs/artifacts with `--all-targets -- --deny warnings` (no `-p gui`; clippy still walks the workspace), `fmt`, `audit`. No flake cargo-test check.
-
-Local full gate: `scripts/verify.sh` (cargo + clippy + test + Flatpak build + weston smoke).
-
-## Architecture
-
-### Crate structure
-
-```
-crates/
-├── common/       # Shared types: actions, ipc, config paths, nix generation
-├── gui/          # libcosmic application; binary nixos-toolkit
-│                 # view/ pages, helper/ spawn, core/ apply reducer
-├── helper/       # Privileged binary nixos-toolkit-helper (pkexec)
-└── fake-helper/  # JSON-line IPC double for tests; never touches /etc/nixos
-```
-
-There is no `window.rs` and no `pages/` directory. UI is `crates/gui/src/view/*.rs` plus `app.rs`.
-
-### Communication model
-
-- GUI runs unprivileged. Default spawn: `pkexec <helper>`. Flatpak: `flatpak-spawn --host -- pkexec <host-helper>`.
-- IPC: internally tagged JSON (`type` / `payload`), one object per line, stdout; tracing on stderr.
-- Apply chain on one helper process: `EnsureDirectories` → `Apply` → `WriteState` on success for Switch/Boot/Test/Build. DryBuild sends `Apply` only so the helper can snapshot before creating directories.
-- Local preview does **not** call the helper (`common::nix::generate_preview_full_from`).
-
-### Counts (from code, not marketing)
-
-- 13 profiles (`default_profiles()` + `nix/templates/profiles/`)
-- 16 bundle **definitions** (`default_bundles()`), 15 bundle **template files** (`ai-tools` has none)
-- 21 service toggles (`ServicesConfig` / `view/services.rs`)
-- 13 `HelperRequest` variants (including `GetDiskUsage`)
-- 5 system actions, 5 maintenance catalog actions
-- 6 maintenance allowlist strings (`nix-channel --update` plus `nix flake update --flake /etc/nixos`)
-- 11 nav pages
-- Apply rebuild dropdown: Switch / Boot / Test / Build; Dry Run is a separate button
-- `NetworkConfig` also has `wireguard_enabled` and `wireguard_listen_port`
-
-Enabling a bundle in the GUI always fills `bundle_packages` from the catalog. Preview and apply then generate a fallback module (resolved catalog attrs + `bundle_module_stub` in `crates/common/src/nix.rs`) instead of copying `nix/templates/bundles/*.nix`. Template copy still happens if the id is missing from `bundle_packages` (old state, or a reconstructed copied template). Generated fallback files restore `bundle_packages` on reconstruct. Profile templates **are** copied. Preview dump order matches apply.
-
-### Key files
-
-- `crates/common/src/actions.rs` — profiles, bundles, system/maintenance defs
-- `crates/common/src/ipc.rs` — `HelperRequest`, `HelperResponse`, `AppState`, hardware/network/services
-- `crates/common/src/nix.rs` — selected/hostname/DNS/users/packages/hardware/network/services/unfree generation, bundle stubs, local preview
-- `crates/common/src/config.rs` — managed paths (including `UNFREE_NIX`), `detect_integration_status`
-- `crates/gui/src/view/*.rs` — UI pages
-- `crates/gui/src/core/apply.rs` — message reducer
-- `crates/gui/src/helper/spawn.rs` — pkexec / Flatpak / env
-- `crates/helper/src/commands.rs` — request handlers, reconstruct, dry-build snapshot
-- `crates/helper/src/nix_gen.rs` — writes, profile fallbacks, stale cleanup, atomic write jail
-- `nix/templates/profiles/` — desktop templates (used on apply)
-- `nix/templates/bundles/` — bundle templates (legacy / helper-without-`bundle_packages`)
-
-### Adding profiles / bundles
-
-1. Add `nix/templates/profiles/<id>.nix` or `nix/templates/bundles/<id>.nix`.
-2. Add the def in `default_profiles()` or `default_bundles()`.
-3. For a bundle that must enable NixOS modules (not just `environment.systemPackages`), add a match arm in `crates/common/src/nix.rs` (`bundle_module_stub`). GUI apply will not copy the template.
-
-## Storage locations
-
-- Managed Nix: `/etc/nixos/nixos-toolkit/` (`state/`, `profiles/`, `bundles/`)
-- Privileged UI state: `/etc/nixos/nixos-toolkit/state/state.json`
-- User theme prefs: `$XDG_CONFIG_HOME/nixos-toolkit/preferences.json` (not `~/.local/share/`)
-- Templates at runtime: `$NIXOS_TOOLKIT_TEMPLATES_DIR` (Nix wrapper, Flatpak `/app/share/…`, else `./nix/templates`)
-
-## Security model
-
-- GUI never writes `/etc/nixos/`
-- Privileged operations go through the helper via pkexec (or `flatpak-spawn --host` + pkexec)
-- Managed files are separate from the user's `configuration.nix` / `flake.nix`
-- Maintenance commands are an exact-string allowlist in `commands.rs` (6 strings)
-- Hostname and DNS Nix use `lib.mkDefault` (explicit user settings win)
-- `atomic_write` refuses paths outside `/etc/nixos/nixos-toolkit` (prefix check)
-
-GUI and helper integration detection share `detect_integration_status`. Either `configuration.nix` or `flake.nix` importing `nixos-toolkit/state/selected.nix` (or `./` / absolute variants) counts. `#` line comments and `/* */` blocks are stripped first. Bare `nixos-toolkit` is not enough.
-
-NixOS module: `programs.nixos-toolkit.enable`, `.package` (GUI), `.helperPackage` (helper). Polkit actions `manage-system`, `write-config`, and `rebuild` all set `exec.path`.
-
-User-facing docs: `README.md`, `docs/architecture.md`, `docs/development.md`, `docs/reference.md`. `docs/migration/` is historical.
-
-## Git Commits & Documentation Style
-
-Never include references to AI, Claude, or automated generation in:
-
-Git commit messages
-Code comments
-Documentation
-README files
-Changelog entries
-Pull request descriptions
-
-Write all commits and documentation as if authored directly by a human developer. Use first-person naturally where appropriate (e.g., "Fixed bug in parser" or "Refactored authentication flow for clarity").
-Avoid phrases like:
-
-"Generated by Claude/AI"
-"AI-assisted"
-"Created with Claude Code"
-"This code was written by an AI"
-Any disclaimers about AI authorship
-
-Commit messages should be concise, conventional, and professional (e.g., "feat: add user authentication", "fix: resolve null pointer in data handler", "docs: update API reference").
+Write concise, conventional commit messages and plain documentation. Avoid authorship boilerplate or claims that tests passed without evidence. Keep current guidance in the linked guides; migration and older audit documents are historical records.

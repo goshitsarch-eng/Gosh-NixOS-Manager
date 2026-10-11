@@ -1,3 +1,5 @@
+> **Historical: Flutter migration audit.** This records the migration and its initial test coverage. Later [live NixOS tests](docs/audit/LIVE_VM_QA.md) and the published installer supersede the pending host/release checks below. See [current platform coverage](PLATFORM_SUPPORT.md).
+
 # Linux Flutter migration audit
 
 ## Scope and evidence

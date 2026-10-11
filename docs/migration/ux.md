@@ -1,3 +1,5 @@
+> **Historical: GTK to libcosmic migration.** The current desktop uses Flutter. Use the [current documentation](../README.md) for installation and development; this file preserves the earlier plan or results.
+
 # NixOS Toolkit — GTK4 → libcosmic UX contract
 
 This document is the **view-layer contract** for the COSMIC migration. It inventories every window, dialog, widget, shortcut, setting, and user flow in the current GTK4/libadwaita GUI (`crates/gui`) and maps each surface to a libcosmic equivalent following COSMIC design conventions (nav bar, settings sections, context drawer, modal dialog, toaster).
@@ -16,9 +18,9 @@ Views **borrow** state and **emit** messages. They do not spawn `pkexec`, talk t
 
 GTK sources of truth (do not trust this file over the code):
 
-- Shell: [`crates/gui/src/window.rs`](../../crates/gui/src/window.rs), [`crates/gui/src/app.rs`](../../crates/gui/src/app.rs), [`crates/gui/src/main.rs`](../../crates/gui/src/main.rs)
-- Pages: [`crates/gui/src/pages/`](../../crates/gui/src/pages/)
-- Prefs: [`crates/gui/src/preferences.rs`](../../crates/gui/src/preferences.rs)
+- Shell: `crates/gui/src/window.rs` (removed since this audit), [`crates/gui/src/app.rs`](../../crates/gui/src/app.rs), [`crates/gui/src/main.rs`](../../crates/gui/src/main.rs)
+- Pages: `crates/gui/src/pages/` (removed since this audit)
+- Prefs: `crates/gui/src/preferences.rs` (removed since this audit)
 - Local state: [`crates/gui/src/state.rs`](../../crates/gui/src/state.rs)
 - Detection: [`crates/gui/src/integration.rs`](../../crates/gui/src/integration.rs)
 - Catalogs: [`crates/common/src/actions.rs`](../../crates/common/src/actions.rs), [`crates/common/src/ipc.rs`](../../crates/common/src/ipc.rs)
@@ -560,7 +562,7 @@ Escape: COSMIC runtime closes the context drawer; `on_escape` should also dismis
 
 ### 5.1 What GTK stores
 
-[`crates/gui/src/preferences.rs`](../../crates/gui/src/preferences.rs):
+`crates/gui/src/preferences.rs` (removed since this audit):
 
 ```json
 { "color_scheme": "system" | "light" | "dark" }

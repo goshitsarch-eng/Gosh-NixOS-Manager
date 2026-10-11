@@ -1,22 +1,14 @@
-> Historical documentation retained for comparison. The current Flutter implementation is documented in [README.md](../README.md).
-
 # Documentation
 
-These files describe the **current** tree (libcosmic GUI, privileged helper, flake packages). They were rewritten against the source; do not treat older README drafts or `docs/migration/` as present tense.
+| Guide | Read it for |
+| --- | --- |
+| [Install](../INSTALLING.md) | Prebuilt installation, flakes, updates, recovery, and uninstall |
+| [Use the app](USAGE.md) | First changes, rebuild modes, file ownership, and troubleshooting |
+| [Software bundles](SOFTWARE_BUNDLES.md) | Package mappings and setup notes for recent additions |
+| [Build and test](../BUILDING.md) | Development, packaging, and releases |
+| [Architecture](../ARCHITECTURE.md) | Flutter, Rust, helper sessions, and recovery |
+| [Technical reference](reference.md) | Paths, protocol, configuration rules, and source locations |
+| [Platform coverage](../PLATFORM_SUPPORT.md) | What has been tested and what remains |
+| [Test reports](audit/README.md) | Live NixOS results and earlier audit evidence |
 
-| File | Audience | Contents |
-|------|----------|----------|
-| [../README.md](../README.md) | Users | Install, setup, features, apply vs preview, remaining limitations |
-| [architecture.md](architecture.md) | Contributors | Crates, process model, IPC, Nix generation, dry-build restore, state |
-| [development.md](development.md) | Contributors | Build, test, CI (cargo + flake fmt/audit), adding profiles/bundles, i18n |
-| [reference.md](reference.md) | Contributors | Paths, IPC variants, catalogs, helper stubs, limitations |
-| [migration/](migration/) | Archaeology | GTK4 → libcosmic design notes. **Historical.** |
-
-Identity:
-
-- Repository: `goshitsarch-eng/Gosh-NixOS-Manager`
-- Product name: NixOS Toolkit
-- App ID: `io.github.goshitsarch_eng.NixosToolkit`
-- GUI binary: `nixos-toolkit` (Cargo package `gui`)
-- Helper binary: `nixos-toolkit-helper` (Cargo package `helper`)
-- License: GPL-3.0-or-later (`LICENSE`)
+The current desktop is Flutter. [GTK/libcosmic migration notes](migration/README.md), the [Flutter migration audit](../MIGRATION_AUDIT.md), and the [former feature reference](REFERENCE_FEATURES.md) are historical records, not current installation instructions.

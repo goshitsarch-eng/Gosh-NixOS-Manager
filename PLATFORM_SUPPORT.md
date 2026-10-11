@@ -1,30 +1,24 @@
-# Linux validation matrix
+# Platform coverage
 
-Only native Linux and Linux Flatpak are in scope. “Implemented” means the code exists; it does not establish that the platform workflow passed.
+The prebuilt release supports **x86_64 NixOS**. Native Linux and Flatpak builds use the same Flutter frontend; changing the host system requires NixOS and the matching helper.
 
-The [live NixOS VM report](docs/audit/LIVE_VM_QA.md) records actual native UI, rebuild, generation, cancellation and maintenance checks. The [initial audit](docs/audit/NIXOS_RELEASE_QA.md) records the configuration matrix and earlier fixes. Native results below combine that VM run with earlier Debian desktop checks; Flatpak results combine earlier migration evidence with the follow-up installed-sandbox host checks.
+These results come from the [live NixOS VM report](docs/audit/LIVE_VM_QA.md), [initial release audit](docs/audit/NIXOS_RELEASE_QA.md), and earlier desktop checks. A passed configuration evaluation is not proof that every installed service or physical device works.
 
-| Feature | Native x86_64 Linux | Linux Flatpak |
-|---|---|---|
-| Debug and release build | Verified on Debian 13 and NixOS 25.05 | Release built/exported/installed on Freedesktop 25.08 |
-| Rust library loading and coarse API | Verified, including packaged relocation | Real sandbox diagnostics passed |
-| All 11 pages | Live navigation and widget tests verified | Live navigation and rendering verified |
-| Profiles, bundles, package entry/removal | All 13 profile previews, 16 bundles and package controls exercised; real package apply verified | Pages inspected; live package entry/removal and preview verified |
-| System, hardware, network, services | Available controls exercised; all 21 service options built, 19 activated; physical hardware limits in live report | All pages inspected; shared domain tests pass |
-| Local aggregate/profile preview | Verified with real Rust library and bundled templates | Real sandbox diagnostics and live aggregate preview passed |
-| Light and Dark themes | Live rendering and preference persistence verified | Live Light/Dark rendering; Dark retained after restart |
-| Follow System | Actual GNOME light/dark changes verified on NixOS | Actual desktop/portal signal unverified |
-| Minimum 640×480 / 2× DPI | Live minimum resize, physical 2× display/package preview and widget coverage verified | Live minimum resize and physical 2× display rendering verified |
-| Theme compatibility and window geometry | JSON/cosmic migration and atomic-write tests; live preference/close coverage | Sandbox XDG preference/geometry writes and restart verified; legacy migration tested separately |
-| About/menu/shortcuts/dialogs | Live menu/dirty-close coverage; widget coverage | Live menu/dirty-close coverage; shared widget tests pass |
-| Clipboard | Actual Wayland copy/read transfer verified | Actual Wayland sandbox copy/read transfer verified |
-| Browser and configuration-folder integration | Actual desktop launchers exercised on NixOS | Plugin/portal behavior pending |
-| Host helper apply/dry build | All five rebuild modes and failed-apply recovery passed on NixOS | Installed sandbox: authenticated state requests, DryBuild, Build/state save and transport cancellation passed |
-| Generations/rollback/maintenance/disk | Actual activation, next-boot selection, deletion protection, all maintenance actions and store usage passed; separate guest bootloader/reboot/recovery test passed | Authenticated generation listing and disk usage passed; full destructive generation/maintenance UI parity remains native-only |
-| Cancellation | Actual authenticated rebuild and store verification stopped; process-group and queued-request regression tests passed | Real authenticated store verification cancelled through the sandbox transport |
-| Nix default Flutter package | Full GUI/core/helper build and packaged diagnostics verified | Host helper package required separately |
-| Wayland | Native rendering/package preview on nested Weston 14 verified | Actual Wayland socket rendering and sandbox API verified |
-| Screen reader / keyboard-only desktop QA | Recovery keyboard focus/dialog semantics covered; real screen reader pending | Real screen reader pending |
-| ARM64 Linux | Architecture rules/build path configured; no ARM runner tested | No ARM sandbox tested |
+| Area | Tested | Still to verify |
+| --- | --- | --- |
+| Prebuilt installer | Public v0.1.0 URL on x86_64 NixOS 25.05; signatures, menu entry, normal-user launch, repeat install, uninstall/reinstall | Other host releases and configuration layouts |
+| Installer recovery | Isolated build/activation failures, interruption, concurrent edits, locks, and flake handling | Wider host coverage |
+| Native packaging | Flutter/core/helper Nix builds; Linux archive and relocation on Debian/NixOS | Older glibc baselines, ARM64 |
+| UI | All 11 pages; Light/Dark, native Follow System, minimum size, 2× display, X11/Wayland, clipboard | Real screen readers and complete keyboard-only use |
+| Desktop and software selection | All 13 profile previews, 16 bundles, package controls, deselection, real package apply | Login to every desktop, every third-party app's runtime behavior |
+| Hardware/network/services | Available controls, service matrix, real firewall rules and repeated activations | Physical GPUs, Bluetooth/audio devices, and all service-specific workflows |
+| Apply and recovery | All five rebuild modes, review/revision checks, failed apply, interrupted apply recovery, cancellation | Broader host/module combinations |
+| Generations and maintenance | Activation, next-boot selection, deletion protection, store usage, maintenance; reboot/rollback/recovery in a separate guest | More bootloader/hardware combinations |
+| Flatpak | Build/export/install, packaged diagnostics, UI/clipboard, authenticated state/generation/disk requests, Dry Run, Build/state save, cancellation | Portal/browser/folder integration, Follow System signal, full generation/maintenance UI parity |
+| ARM64 | Build paths and architecture rules are present | Actual builds, runtime, and sandbox validation |
 
-The initial cloud run used Debian. The subsequent native NixOS VM run established successful rebuild, generation and maintenance workflows. X11, physical 2× scaling, nested Wayland rendering and real Wayland clipboard checks also passed during the earlier desktop checks. Remaining release coverage includes screen readers, physical hardware, login to other desktop sessions, ARM64 and the remaining Flatpak portal/destructive UI cases. Reboot and recovery passed in a separate guest. GitHub CI remains blocked by an account billing lock. The firewall activation timeout was traced to D-Bus waiting on NSS lookups; the NixOS 25.05 compatibility module prevents overlapping reload requests, with 28 helper/CLI activations passing on this VM and genuine reload failures still reported. The former frontend remains available for comparison.
+The NixOS 25.05 D-Bus/firewall compatibility fix passed 28 helper/CLI activations in the VM. An intentionally failed firewall reload still reported failure and recovered correctly. This addresses the observed activation race, not every possible firewall error.
+
+AI provider login and model requests need separate testing with provider accounts. Some packages on older channels can fail Nix's insecure-package check; the app keeps that check enabled. See the [software catalog](docs/SOFTWARE_BUNDLES.md).
+
+For v0.1.0, GitHub Actions could not start because of an account billing lock. The release records local validation and does not claim passing hosted CI. Future releases should pass the [workflow](.github/workflows/verify.yml) and record any remaining gaps.

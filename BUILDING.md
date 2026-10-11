@@ -1,94 +1,76 @@
-# Build and validate on Linux
+# Build and test
 
-The cloud environment has Flutter **3.47.6**, Dart **3.13.5**, Rust **1.99.0**, Clang, CMake, Ninja and GTK 3 development files installed under `/workspace/toolchains`. Activate them with:
+For normal installation, use the [prebuilt installer](INSTALLING.md). These instructions are for working on the source or making a release.
 
-```sh
-. /workspace/setup/activate.sh
-cd /workspace/Gosh-NixOS-Manager
-```
+## Development
 
-The saved installation script uses authenticated APT downloads extracted to a local prefix, rustup and an official Flutter Git checkout at `5fc346839b5d0eef006ed8404392afb4dfae428d`. It does not require sudo or disable repository/TLS verification. Flutter/Pub/analyzer state stays under `/workspace`. Android, browser, Windows and macOS toolchains are unnecessary for this scope.
-
-For a normal Linux workstation, install stable Rust with clippy/rustfmt, stable Flutter with Dart >=3.13, and Clang, CMake, Ninja, pkg-config and GTK 3 development headers. GTK/GL/EGL and the system C/C++ runtime are needed at runtime. The CI lists the Ubuntu 24.04 dependency packages; native cloud validation used Debian 13.
-
-## Development and tests (verified)
+From the repository root on NixOS, enter the pinned development environment:
 
 ```sh
-cargo build --locked -p desktop-core
+nix develop
+cargo build --locked -p desktop-core -p helper
 cd desktop
 flutter pub get --enforce-lockfile
 flutter run -d linux
 ```
 
-`flutter build linux --debug` and `flutter build linux --release` build and bundle the Rust library automatically. For Flutter tests use an explicitly built native core:
+The Flutter Linux build compiles and bundles the Rust core and Nix templates automatically. The GUI stays unprivileged; real host changes still need a matching installed helper and polkit policy.
+
+On other Linux distributions, install stable Rust with Clippy/rustfmt, Flutter with Dart 3.13 or later, Clang, CMake, Ninja, pkg-config, GTK 3 development files, and Python with PyYAML. Packaging also uses patchelf, Flatpak, flatpak-builder, AppStream, and Xvfb. The exact CI setup is in [verify.yml](.github/workflows/verify.yml).
+
+## Checks
+
+From the root of the checkout, inside `nix develop`:
 
 ```sh
-NIXOS_TOOLKIT_CORE_LIBRARY="$PWD/../target/debug/libnixos_toolkit_core.so" flutter test
-flutter analyze
-dart format --output=none --set-exit-if-changed lib test integration_test tool
+scripts/verify.sh
+scripts/verify.sh --isolated
 ```
 
-From the repository root, `scripts/verify.sh` runs Rust formatting, Clippy, tests (including all features), the native bridge build, Flutter lock/format/analyzer/tests and the Nix-readable lock snapshot check. Widget tests use the actual Rust API; separate bridge tests exercise isolate dispatch. Helper tests launch a temporary protocol peer and never mutate NixOS files. After intentionally updating the Flutter lock, run `python3 scripts/sync-pubspec-lock.py` (requires PyYAML), and commit both lock representations.
+The first command runs Rust formatting, Clippy and tests, builds the native core/helper, checks the Flutter lock snapshot, and runs Dart formatting, analysis, and tests. The second repeats that gate and adds helper/installer tests in temporary Bubblewrap filesystems. Use it when changing privileged operations or installation.
 
-On NixOS, use `nix develop` for the pinned toolchain. `scripts/verify.sh --isolated` additionally exercises the real helper and installer in Bubblewrap fixtures with recording system commands and temporary configuration/home directories. `scripts/test-generated-nix.py /path/to/nixpkgs` evaluates every catalog profile/bundle/service and selected hardware/network combinations without activation. See the [current NixOS audit](docs/audit/NIXOS_RELEASE_QA.md) for exact coverage and release limits.
+For a focused Flutter test run after building `desktop-core`:
 
-## Native release (verified)
+```sh
+cd desktop
+NIXOS_TOOLKIT_CORE_LIBRARY="$PWD/../target/debug/libnixos_toolkit_core.so" flutter test
+```
+
+When deliberately updating `desktop/pubspec.lock`, run `python3 scripts/sync-pubspec-lock.py` from the root and commit both lock representations.
+
+Additional host checks:
+
+- `nix develop .#qa` provides a smaller Rust/Python/Bubblewrap/Git/nixos-rebuild shell.
+- `python3 scripts/test-generated-nix.py /path/to/nixpkgs` evaluates the profile, bundle, service, and hardware/network matrix without activation.
+- `python3 scripts/test-flake-rebuild.py /path/to/nixpkgs` checks plain and Git flakes in isolated filesystems, including newly generated modules and preservation of staged content.
+- [tests/nixos/reboot-recovery.nix](tests/nixos/reboot-recovery.nix) exercises bootloader, reboot, rollback, and recovery in a disposable guest.
+
+The opt-in live tests perform real system changes. Follow the backup requirements in the [live VM report](docs/audit/LIVE_VM_QA.md) before using `scripts/test-network-activation-live.py` or `desktop/tool/qa_flatpak_host.dart`.
+
+## Nix packages
+
+```sh
+nix build .#gui
+nix build .#helper
+nix build .#installer
+nix run
+```
+
+The default package and `.#gui` are Flutter. `.#core` is the shared Rust library, `.#templates` contains Nix templates, `.#full` combines the app/helper/templates, and `.#reference` retains the former libcosmic UI for comparison. `nix run` launches the app; it does not integrate the helper into your host. See [manual integration](INSTALLING.md#manual-integration).
+
+## Native Linux archive
 
 ```sh
 scripts/package-linux.sh
 ```
 
-This builds release mode and writes `dist/nixos-toolkit-0.1.0-linux-$(uname -m).tar.gz` and its SHA-256 file. The archive includes the executable, native libraries, templates, license, metadata, icon and tool versions. Extract the complete archive and run its `nixos-toolkit`; keep `lib/` and `data/` next to it. A release extracted to a path containing spaces and Unicode was launched outside the checkout.
+This writes `dist/nixos-toolkit-0.1.0-linux-$(uname -m).tar.gz` and a SHA-256 file. Extract the whole archive and keep `lib/` and `data/` beside the executable. Run `./nixos-toolkit --diagnose` in a graphical session to check the packaged core, templates, and read-only host capabilities. It does not authenticate or rebuild.
 
-With a graphical session available:
+Build on the oldest Linux distribution you intend to support; a newer glibc build may not run on older hosts. NixOS users should use the Nix package/installer. ARM64 builds still need a real runner and desktop validation.
 
-```sh
-./nixos-toolkit --diagnose
-```
+## Flatpak
 
-The diagnostic checks real bridge/catalog/preview calls and read-only host capabilities, then exits. It never authenticates or rebuilds. Desktop-service startup logs may accompany the JSON report; `scripts/check-diagnostics.py` validates it without discarding diagnostic logs. CI uses Xvfb for this command. Build on the oldest supported distribution; a newer glibc build does not establish compatibility with older hosts. x86_64 Linux was tested; ARM64 is a configured build target awaiting hardware/runner validation.
-
-## Nix packaging
-
-For the one-command prebuilt installation and signed Nix release process, see
-[INSTALLING.md](INSTALLING.md). `nix build .#installer` also builds the matching
-app/helper and the privileged integration program. `scripts/test-installer-isolated.py`
-checks the bootstrap, configuration editing, repeat install, uninstall, failed
-build/activation recovery, interrupted installs and concurrent edits in private
-Bubblewrap filesystems.
-
-```sh
-nix develop
-nix build .#gui
-nix build .#helper
-nix run
-```
-
-The default GUI is Flutter. The pinned nixpkgs provides Flutter 3.47.4/Dart 3.13.3; the independently verified cloud SDK is 3.47.6/3.13.5. `.#reference` retains the former GUI and `.#core` builds the shared library. The full Flutter GUI, Rust core and helper build passed with the locked inputs in an isolated workspace Nix store. Packaged diagnostics also passed using a Nix Mesa driver; the Debian container's driver search path needs that explicit test configuration. On NixOS, the configured graphics drivers provide the normal `/run/opengl-driver` path. The host module installs the helper and polkit policy. Enable it in NixOS and rebuild using your normal host configuration; the cloud Debian container cannot validate activation.
-
-## Configuration revision guard
-
-The current desktop requires a matching helper with `ReadStateSnapshot` support
-before Apply is enabled. The snapshot contains saved state and a SHA-256 revision
-of non-hidden `.nix` files and `flake.lock` files beneath `/etc/nixos`, managed
-`state/state.json`, symlink targets, and resolved running/selected system paths.
-File contents stay on the host. Reads are bounded to 4096 tracked files, 32 MiB
-and 32 directory levels; unreadable tracked files fail closed. State is read
-between two revision checks. Apply verifies `expected_revision` while holding
-the existing helper mutation lock, before any managed writes or recovery setup.
-
-This detects edits after loading, including another Toolkit instance's changes.
-It does not audit edits made before loading, external imported directories,
-changed channel inputs, user profiles or Flatpak installations. Symlinked Nix
-files are read, but symlinked directories are not traversed. Editors do not share
-the helper lock, so this is not a filesystem-wide transaction. Legacy protocol
-clients, including the reference frontend, can omit the optional revision;
-the current Flutter frontend requires and sends it. Dry runs retain the revision;
-successful state saving and explicit reload fetch a new snapshot.
-
-## Flatpak build, install and QA (verified)
-
-The complete recipe uses Freedesktop 25.08 and the checksummed Linux Flutter release archive. Dependency downloads/compilation happen during the native release build; Flatpak assembly relocates ELF paths into a separate checksummed bundle, without fetching Flutter or crates inside its sandbox. Install `flatpak`, `flatpak-builder`, `appstream`, `patchelf` and Python 3.12+ (included in `nix develop`). Build on a compatible libc baseline (CI uses Ubuntu 24.04); path relocation alone cannot fix a newer libc ABI.
+Inside the development shell, with the native build dependencies available:
 
 ```sh
 flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -99,37 +81,29 @@ flatpak run --user io.github.goshitsarch_eng.NixosToolkit
 scripts/smoke-flatpak.sh
 ```
 
-The generator preserves the native archive, writes `.flatpak/manifest.bundle.tar.gz` with runtime ELF paths, and records its SHA-256 in `.flatpak/manifest.json`. `scripts/build-flatpak.sh` produces the `.flatpak` bundle and its checksum; it does not install it automatically. `scripts/smoke-flatpak.sh` runs the real packaged Rust API, templates, host probes and an unprivileged host stdin/stdout round trip with `--diagnose`, using an existing display or a private Xvfb server. `scripts/verify.sh --flatpak` adds build/install/diagnostics to the normal verification gate.
+The build script packages the native release for Freedesktop 25.08, adjusts ELF paths in a separate checksummed bundle, and exports a `.flatpak` file. It does not install automatically. `scripts/verify.sh --flatpak` adds build, installation, and sandbox diagnostics to the normal verification gate.
 
-Freedesktop Platform/SDK 25.08 downloaded successfully. The actual Flatpak build, export, installation and sandbox diagnostics passed. All eleven pages were inspected live, with package entry/local preview, Light/Dark display, dark preference persistence after restart, minimum-size layout and dirty-close confirmation. Native and Flatpak also passed physical 2× display rendering, nested Weston 14 Wayland rendering and real Wayland clipboard transfers. An actual sandbox screenshot is in `docs/screenshots/flatpak-dark.png`. The follow-up NixOS VM pass exercised authenticated host state/generation/disk requests, DryBuild, Build/state persistence and cooperative cancellation through the installed sandbox. Portal and screen-reader coverage is still limited.
+Flatpak needs a matching helper installed on the NixOS host and `services.flatpak.enable = true`. Its host bridge can run host commands; privileged operations still authenticate through polkit. Native and Flatpak recipes are maintained, but the published v0.1.0 release contains the prebuilt Nix installer/cache rather than those archive formats.
 
-For the cloud's relocated tools, source `/workspace/setup/activate-flatpak.sh`. This scopes Flatpak's data/cache/temp paths and points to the real relocated Flatpak, D-Bus proxy, icon validator, AppStream composer and debug tools. Nested user namespaces need execution outside the command sandbox. This container has no system bus; installation was tested against a private workspace D-Bus bus, without changing host services or disabling policy checks. The startup instructions record the exact cloud commands. Network domains `dl.flathub.org`, `cache.nixos.org` and `storage.googleapis.com` are saved in the environment configuration draft; saving the draft does not itself apply or publish settings.
+## Signed Nix releases
 
-Flatpak grants display sockets, IPC and DRI, and the Flatpak host bridge for the helper. Host probes read NixOS metadata through that bridge; reserved `/etc` bind mounts are unnecessary. On NixOS, enable `services.flatpak.enable = true` for the host service. It grants no general host filesystem or network access. The host bridge is a powerful permission required by this application; the separate helper still authenticates through polkit. URI opening uses the Linux Flutter plugin; portal/browser/file-manager behavior needs testing on a real desktop.
+Keep the private cache signing key outside the repository and artifacts, readable only by its owner (`chmod 600`). The public key lives in [packaging/nix/cache-public-key](packaging/nix/cache-public-key). Build the installer, then package a release into a new output directory:
 
-## CI and release review
-
-The GitHub workflow verifies Cargo and Flutter, generates a native archive, tests its packaged API, builds/installs Flatpak and runs diagnostics inside its sandbox. On tags/manual runs it also packages a signed prebuilt Nix runtime cache using the repository secret `NIXOS_TOOLKIT_CACHE_SIGNING_KEY`. A `v*` tag creates a **draft** release only after the required jobs succeed. Nix cache objects are signed; the separate Linux tar/Flatpak artifacts have checksums but are unsigned. Publication remains a release-owner action. While the account billing lock prevents CI from running, locally built releases must explicitly record their local validation and the missing hosted gate.
-
-## Additional host safety checks
-
-`nix develop .#qa` supplies the smaller Rust/Python/Bubblewrap/Git/nixos-rebuild environment. After building helper/core, run `scripts/test-flake-rebuild.py /path/to/nixpkgs` to evaluate real plain and Git flakes in isolated configuration namespaces, including newly generated profile/bundle modules and staged-content preservation. It never activates the host. `tests/nixos/reboot-recovery.nix` runs actual bootloader/reboot/rollback/recovery operations in a disposable guest. The published workflow runs this check on manual/tag runs before a release draft.
-
-On a backed-up disposable NixOS VM, the explicitly opted-in `NIXOS_TOOLKIT_LIVE_VM_QA=1 dart desktop/tool/qa_flatpak_host.dart` test exercises the Dart session transport through the installed Flatpak with normal polkit authentication. It also requires the backup marker described in the live QA report and performs real Build/state writes and a cancelled store verification.
-
-The workflow update was published in `89d4450` using the connected GitHub app's existing write access. It adds isolated recovery, real flake, pinned module-matrix and reboot checks. The terminal's OAuth credential still lacks `workflow` scope: future workflow edits can use the connected app, or an account owner can grant that scope with `gh auth refresh -h github.com -s workflow`. GitHub Actions itself remains blocked by an account billing lock, confirmed on the new workflow run. The remote gate must pass after the account is restored.
-
-## NixOS 25.05 activation compatibility
-
-Enabling the toolkit's default NixOS module also enables `programs.nixos-toolkit.serializeDbusReload` on NixOS 25.05. It patches that host's activation program to finish reloading D-Bus before submitting other reload requests. This prevents the observed firewall request timeout when D-Bus pauses on NSS lookups. Service failures still propagate through the normal activation result. The patch is disabled on newer releases and when the toolkit module is disabled.
-
-For an existing native or Flatpak installation, the host can import the compatibility module separately from the toolkit flake:
-
-```nix
-imports = [ toolkit.nixosModules.activationReloadCompat ];
-programs.nixos-toolkit.serializeDbusReload = true;
+```sh
+nix build .#installer
+python3 scripts/package-nix-release.py --version v0.1.0 \
+  --signing-key /private/location/cache-secret-key \
+  --output dist/nix-release-v0.1.0
 ```
 
-For a classic configuration, import `nix/modules/activation-reload-compat.nix` from a trusted checkout, keeping its adjacent `nix/patches` directory, and enable the same option. Rebuild the host normally to install it. This module explicitly targets NixOS 25.05; remove the standalone option when upgrading to a newer release.
+The packager creates a flat HTTP Nix cache for GitHub release assets: signed store metadata, compressed store objects, the installer script, architecture manifest, checksums, and build information. Published scripts pin the release version and public key. Upload and verify every asset before publishing; do not overwrite published release assets.
 
-The opt-in `scripts/test-network-activation-live.py` requires root, `NIXOS_TOOLKIT_LIVE_VM_QA=1`, an existing VM backup marker and an active iptables firewall. It alternates Tailscale/Fail2ban/WireGuard settings and test ports using the helper and direct CLI, then restores managed files, state and system selections. Its default six cycles per method perform 24 real activations. Run it only on a backed-up disposable VM.
+The [GitHub workflow](.github/workflows/verify.yml) checks Rust/Flutter, isolated host operations, Nix packaging, Flatpak, and guest recovery. Tag/manual release jobs require the `NIXOS_TOOLKIT_CACHE_SIGNING_KEY` repository secret. A `v*` tag creates a draft release only after its required jobs pass. Publish after reviewing the artifacts and results. Nix cache objects are signed; Linux archive/Flatpak outputs have checksums but are unsigned.
+
+The v0.1.0 release was built and checked locally because an account billing lock prevented hosted jobs from starting. Its [test report](docs/audit/LIVE_VM_QA.md#prebuilt-nixos-installer-2026-10-11) records this separately from CI. See [platform coverage](PLATFORM_SUPPORT.md) for remaining release tests.
+
+## NixOS 25.05 firewall compatibility
+
+The default module and prebuilt installer enable `programs.nixos-toolkit.serializeDbusReload` on NixOS 25.05. It waits for D-Bus reload to finish before other reload requests, fixing the observed intermittent firewall activation timeout. Genuine service failures still fail activation.
+
+For a separate host-helper installation, import `toolkit.nixosModules.activationReloadCompat` and enable the same option. In a classic configuration, import [nix/modules/activation-reload-compat.nix](nix/modules/activation-reload-compat.nix) from a trusted checkout with its adjacent `nix/patches` directory intact. Rebuild normally. A standalone setting must be removed when upgrading beyond 25.05; the default Toolkit module handles the release condition automatically.

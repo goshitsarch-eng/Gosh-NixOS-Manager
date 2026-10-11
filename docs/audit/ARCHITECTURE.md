@@ -1,3 +1,5 @@
+> **Historical: September 2026 libcosmic audit.** Findings and open tasks describe that snapshot. See [current platform coverage](../../PLATFORM_SUPPORT.md) and the [live NixOS report](LIVE_VM_QA.md) for later results.
+
 # Architecture and code quality audit (GUI / libcosmic)
 
 Reconnaissance only. No code was changed. Scope: iced/libcosmic application shape, state, messages, reducer, views, helper I/O, persistence, and how that sits on `common` / `helper`. Product remains NixOS Toolkit; the GUI never writes `/etc/nixos`.
