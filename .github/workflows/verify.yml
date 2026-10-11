@@ -199,10 +199,47 @@ jobs:
             dist/*.flatpak
             dist/*.flatpak.sha256
 
+  nix-native:
+    name: Signed prebuilt NixOS installation
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - name: Build matching GUI, helper and installer
+        run: nix build .#installer --out-link result-installer
+      - name: Package signed Nix runtime cache
+        env:
+          CACHE_SIGNING_KEY: ${{ secrets.NIXOS_TOOLKIT_CACHE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$CACHE_SIGNING_KEY" || { echo 'Configure NIXOS_TOOLKIT_CACHE_SIGNING_KEY before releasing.'; exit 1; }
+          umask 077
+          toolkit_key=$(mktemp)
+          trap 'rm -f "$toolkit_key"' EXIT
+          printf '%s' "$CACHE_SIGNING_KEY" > "$toolkit_key"
+          unset CACHE_SIGNING_KEY
+          toolkit_version="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            toolkit_version="v0.1.0-test.$GITHUB_RUN_NUMBER"
+          fi
+          python3 scripts/package-nix-release.py --version "$toolkit_version" \
+            --signing-key "$toolkit_key" --installer "$(readlink -f result-installer)" \
+            --output dist/nix-release
+          (cd dist/nix-release && sha256sum -c SHA256SUMS)
+          nix store verify --store "file://$PWD/dist/nix-release" --all --sigs-needed 1 \
+            --option trusted-public-keys "$(cat packaging/nix/cache-public-key)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nix-native-x86_64
+          path: dist/nix-release/*
+          compression-level: 0
+
   release:
     name: Draft Linux release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [cargo, flake, host-protocol, reboot-recovery, desktop, flatpak]
+    needs: [cargo, flake, host-protocol, reboot-recovery, desktop, flatpak, nix-native]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
