@@ -40,7 +40,7 @@ Apply now checks the host configuration before activation and keeps a private re
 
 The VM has an intermittent firewall/D-Bus activation failure that also occurs with direct `nixos-rebuild`. The app reports it and recovery was tested against a real occurrence. NixOS 25.05's insecure Electron check remains enabled; affected Gaming selections must be deselected or used on a channel with supported packages.
 
-GitHub Actions cannot start because the repository owner's account is locked by a billing issue. Local checks do not replace successful release CI. Physical hardware, ARM64, screen readers and login to every desktop still need dedicated validation; see [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md). Built native and Flatpak artifacts and checksums are under ignored `dist/`.
+GitHub Actions cannot start because the repository owner's account is locked by a billing issue. The prepared additional workflow checks also remain local because the current OAuth credential lacks `workflow` scope; see [BUILDING.md](BUILDING.md). Local checks do not replace successful release CI. Physical hardware, ARM64, screen readers and login to every desktop still need dedicated validation; see [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md). Built native and Flatpak artifacts and checksums are under ignored `dist/`.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains state and bridge ownership. [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) accounts for the reference features, changes and remaining QA. Older implementation documents under `docs/audit` and `docs/migration` are historical; the old frontend remains a reference until host parity checks pass.
 
