@@ -51,6 +51,11 @@ def prepare(output, installer, version, secret_key):
         if '\nSig: ' + public.split(':', 1)[0] + ':' not in contents:
             raise ValueError(f'Unsigned store object: {info.name}')
     (output / 'nar').rmdir()
+    # Nix may create an empty build-log directory even when copying outputs.
+    # Release assets must all be files, including when uploaded with a glob.
+    for directory in output.iterdir():
+        if directory.is_dir():
+            directory.rmdir()
     script = (ROOT / 'install.sh').read_text().replace("PUBLIC_KEY='@CACHE_PUBLIC_KEY@'", f"PUBLIC_KEY='{public}'")
     script = script.replace("VERSION='@RELEASE_VERSION@'", f"VERSION='{version}'")
     (output / 'install.sh').write_text(script)
