@@ -2,6 +2,8 @@
 
 Only native Linux and Linux Flatpak are in scope. “Implemented” means the code exists; it does not establish that the platform workflow passed.
 
+For the current NixOS audit, fixes, configuration matrix and outstanding release gates, see [NIXOS_RELEASE_QA.md](docs/audit/NIXOS_RELEASE_QA.md). The table below preserves earlier Debian/Flatpak migration evidence; it does not certify the changed revision's complete desktop workflow.
+
 | Feature | Native x86_64 Linux | Linux Flatpak |
 |---|---|---|
 | Debug and release build | Verified on Debian 13 | Release built/exported/installed on Freedesktop 25.08 |

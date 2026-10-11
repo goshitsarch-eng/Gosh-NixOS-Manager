@@ -172,7 +172,8 @@
             runtimeDependencies = [ pkgs.libglvnd ];
             NIXOS_TOOLKIT_PREBUILT_CORE = "${desktop-core}/lib/libnixos_toolkit_core.so";
             extraWrapProgramArgs = ''
-              --set NIXOS_TOOLKIT_HELPER "${nixos-toolkit-helper}/bin/nixos-toolkit-helper"
+              --set NIXOS_TOOLKIT_HELPER "${nixos-toolkit-helper}/bin/nixos-toolkit-helper" \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pciutils pkgs.hostname ]}
             '';
             postInstall = ''
               install -Dm644 ${./flatpak/io.github.goshitsarch_eng.NixosToolkit.desktop} \
@@ -205,7 +206,7 @@
             preFixup = ''
               wrapProgram $out/bin/nixos-toolkit-helper \
                 --set NIXOS_TOOLKIT_TEMPLATES_DIR "${templateFiles}/share/nixos-toolkit/templates" \
-                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix pkgs.nixos-rebuild pkgs.git pkgs.hostname ]}
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix pkgs.nixos-rebuild pkgs.git pkgs.hostname pkgs.coreutils ]}
             '';
 
             meta = with pkgs.lib; {
@@ -282,6 +283,9 @@
               mesa
               nil
               nixpkgs-fmt
+              (python3.withPackages (ps: [ ps.pyyaml ]))
+              bubblewrap
+              xvfb-run
               gdb
             ];
 

@@ -67,12 +67,11 @@ pub fn is_nix_attrpath(name: &str) -> bool {
     if name.is_empty() || name.len() > 128 {
         return false;
     }
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && !name.contains("..")
+    name.split('.').all(|segment| {
+        let mut chars = segment.chars();
+        matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    })
 }
 
 /// Look up a catalog package id and return the nixpkgs attribute to interpolate.
@@ -629,16 +628,27 @@ pub fn generate_hardware_nix(hw: &HardwareConfig) -> String {
             sections.push(
                 r#"  # PulseAudio
   services.pulseaudio.enable = true;
-  services.pipewire.enable = false;"#
-                    .to_string(),
+  # PipeWire can still provide screen capture for desktop services.
+  services.pipewire = {
+    audio.enable = false;
+    pulse.enable = lib.mkForce false;
+    alsa.enable = lib.mkForce false;
+    jack.enable = lib.mkForce false;
+  };"#
+                .to_string(),
             );
         }
         2 => {
             sections.push(
                 r#"  # Audio disabled
-  services.pipewire.enable = false;
-  services.pulseaudio.enable = false;"#
-                    .to_string(),
+  services.pulseaudio.enable = false;
+  services.pipewire = {
+    audio.enable = false;
+    pulse.enable = lib.mkForce false;
+    alsa.enable = lib.mkForce false;
+    jack.enable = lib.mkForce false;
+  };"#
+                .to_string(),
             );
         }
         _ => {
@@ -770,7 +780,7 @@ pub fn generate_services_nix(services: &[&str]) -> String {
             }
             "rustdesk" => {
                 r#"  # RustDesk client
-  environment.systemPackages = with pkgs; [ rustdesk ];"#
+  environment.systemPackages = with pkgs; [ rustdesk-flutter ];"#
             }
             "syncthing" => {
                 r#"  # Syncthing
@@ -786,7 +796,8 @@ pub fn generate_services_nix(services: &[&str]) -> String {
             "flatpak" => {
                 r#"  # Flatpak
   services.flatpak.enable = true;
-  xdg.portal.enable = true;"#
+  xdg.portal.enable = true;
+  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];"#
             }
             "gnome_keyring" => {
                 r#"  # GNOME Keyring
@@ -843,7 +854,7 @@ pub fn generate_services_nix(services: &[&str]) -> String {
             }
             _ => continue,
         };
-        sections.push(section.to_string());
+        sections.push(format!("    {{\n{section}\n    }}"));
     }
 
     format!(
@@ -853,7 +864,9 @@ pub fn generate_services_nix(services: &[&str]) -> String {
 {{ config, lib, pkgs, ... }}:
 
 {{
+  imports = [
 {}
+  ];
 }}
 "#,
         sections.join("\n\n")
@@ -971,7 +984,6 @@ pub fn bundle_module_stub(id: &str, packages: &[String]) -> String {
       package = pkgs.qemu_kvm;
       runAsRoot = true;
       swtpm.enable = true;
-      ovmf.enable = true;
     };
   };
   programs.virt-manager.enable = true;
@@ -998,7 +1010,7 @@ pub fn bundle_module_stub(id: &str, packages: &[String]) -> String {
             if package_selected(packages, "podman") {
                 r#"  virtualisation.podman = {
     enable = true;
-    dockerCompat = true;
+    dockerCompat = !config.virtualisation.docker.enable;
     defaultNetwork.settings.dns_enabled = true;
   };
 "#
@@ -1009,7 +1021,7 @@ pub fn bundle_module_stub(id: &str, packages: &[String]) -> String {
         }
         "flatpak" => {
             if package_selected(packages, "flatpak") {
-                "  services.flatpak.enable = true;\n  xdg.portal.enable = true;\n".to_string()
+                "  services.flatpak.enable = true;\n  xdg.portal.enable = true;\n  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];\n".to_string()
             } else {
                 String::new()
             }
@@ -1047,7 +1059,6 @@ pub fn needs_allow_unfree(options: &NixGenOptions<'_>) -> bool {
     for bundle in &options.bundles {
         match bundle.id.as_str() {
             "gaming" | "virtualbox" => return true,
-            "fonts" if !options.bundle_packages.contains_key(&bundle.id) => return true,
             _ => {}
         }
         for pkg_id in options.get_bundle_packages(bundle) {
@@ -1077,17 +1088,9 @@ pub fn generate_unfree_nix() -> String {
     .to_string()
 }
 
-fn bundle_preview_content(
-    options: &NixGenOptions<'_>,
-    templates_dir: &Path,
-    bundle: &BundleDef,
-) -> String {
-    let use_fallback = options.bundle_packages.contains_key(&bundle.id);
-    if !use_fallback {
-        if let Ok(content) = read_template_from(templates_dir, &bundle.template) {
-            return content;
-        }
-    }
+fn bundle_preview_content(options: &NixGenOptions<'_>, bundle: &BundleDef) -> String {
+    // The catalog shown to the user is authoritative, including for older state
+    // files without an explicit per-package selection.
     generate_fallback_bundle(&bundle.id, &options.get_bundle_packages(bundle))
 }
 
@@ -1105,9 +1108,8 @@ pub fn generate_fallback_profile(id: &str) -> String {
   services.displayManager.sddm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
   # Enable GDM
-  services.displayManager.gdm.enable = lib.mkForce true;
-  services.displayManager.gdm.wayland = true;
-  services.desktopManager.gnome.enable = true;
+  services.xserver.displayManager.gdm.enable = lib.mkForce true;
+  services.xserver.desktopManager.gnome.enable = true;
   services.gnome.core-utilities.enable = true;
   programs.dconf.enable = true;
   environment.systemPackages = with pkgs; [ gnome-tweaks dconf-editor gnome-extension-manager ];
@@ -1121,13 +1123,12 @@ pub fn generate_fallback_profile(id: &str) -> String {
 
 {
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
   # Enable SDDM
   services.displayManager.sddm.enable = lib.mkForce true;
   services.displayManager.sddm.wayland.enable = true;
   # Disable other desktop environments
-  services.desktopManager.gnome.enable = lib.mkForce false;
   services.xserver.desktopManager.gnome.enable = lib.mkForce false;
   # Enable KDE Plasma 6
   services.desktopManager.plasma6.enable = true;
@@ -1147,7 +1148,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
 {
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   # Enable LightDM
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
@@ -1166,7 +1167,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
 {
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   # Enable LightDM
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
@@ -1185,7 +1186,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
 {
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   # Enable LightDM
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
@@ -1201,14 +1202,14 @@ pub fn generate_fallback_profile(id: &str) -> String {
 {
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   # Enable LightDM
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
   services.xserver.desktopManager.pantheon.enable = true;
   services.pantheon.apps.enable = true;
   xdg.portal.enable = true;
-  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk pkgs.xdg-desktop-portal-pantheon ];
+  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk pkgs.pantheon.xdg-desktop-portal-pantheon ];
 }
 "#
         .to_string(),
@@ -1219,7 +1220,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
 
 {
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
   # Enable COSMIC greeter
@@ -1240,7 +1241,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
   programs.hyprland.enable = true;
   programs.hyprland.xwayland.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
   # Enable SDDM
   services.displayManager.sddm.enable = lib.mkForce true;
@@ -1260,7 +1261,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
   programs.sway.enable = true;
   programs.sway.wrapperFeatures.gtk = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
   # Enable SDDM
   services.displayManager.sddm.enable = lib.mkForce true;
@@ -1281,7 +1282,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
   services.xserver.enable = true;
   services.xserver.windowManager.i3.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   # Enable LightDM
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
@@ -1297,7 +1298,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
 {
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   # Enable LightDM
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
@@ -1315,13 +1316,13 @@ pub fn generate_fallback_profile(id: &str) -> String {
 {
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
   # Enable SDDM
   services.displayManager.sddm.enable = lib.mkForce true;
   services.xserver.desktopManager.lxqt.enable = true;
   xdg.portal.enable = true;
-  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-lxqt ];
+  xdg.portal.extraPortals = [ pkgs.lxqt.xdg-desktop-portal-lxqt ];
 }
 "#
         .to_string(),
@@ -1333,11 +1334,14 @@ pub fn generate_fallback_profile(id: &str) -> String {
 {
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   # Enable LightDM
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
   services.xserver.desktopManager.enlightenment.enable = true;
+  imports = lib.optionals (lib.versionAtLeast lib.version "26.05") [
+    { environment.enlightenment.excludePackages = [ pkgs.enlightenment.econnman ]; }
+  ];
   xdg.portal.enable = true;
   xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
 }
@@ -1353,7 +1357,7 @@ pub fn generate_fallback_profile(id: &str) -> String {
   # Profile: {}
   services.xserver.enable = true;
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce true;
 }}
@@ -1417,9 +1421,9 @@ pub fn generate_preview_full_from(options: &NixGenOptions, templates_dir: &Path)
         preview.push_str(&content);
     }
 
-    // Bundle templates (fallback when customized or the template file is missing)
+    // Bundle modules always use the visible catalog selections.
     for bundle in &options.bundles {
-        let content = bundle_preview_content(options, templates_dir, bundle);
+        let content = bundle_preview_content(options, bundle);
         preview.push_str(&format!(
             "\n--- /etc/nixos/nixos-toolkit/bundles/{}.nix ---\n",
             bundle.id
@@ -1554,17 +1558,18 @@ mod tests {
     }
 
     #[test]
-    fn pulseaudio_disables_pipewire() {
+    fn pulseaudio_disables_pipewire_audio_but_preserves_screen_capture() {
         let nix = generate_hardware_nix(&hw(|c| c.audio_server = 1));
         assert!(nix.contains("services.pulseaudio.enable = true;"));
-        assert!(nix.contains("services.pipewire.enable = false;"));
-        assert!(!nix.contains("services.pipewire = {"));
+        assert!(nix.contains("audio.enable = false;"));
+        assert!(nix.contains("pulse.enable = lib.mkForce false;"));
+        assert!(!nix.contains("services.pipewire.enable = false;"));
     }
 
     #[test]
     fn audio_none_disables_servers() {
         let nix = generate_hardware_nix(&hw(|c| c.audio_server = 2));
-        assert!(nix.contains("services.pipewire.enable = false;"));
+        assert!(nix.contains("audio.enable = false;"));
         assert!(nix.contains("services.pulseaudio.enable = false;"));
     }
 
@@ -1728,7 +1733,7 @@ mod tests {
     #[test]
     fn rustdesk_is_client_package_not_server() {
         let nix = generate_services_nix(&["rustdesk"]);
-        assert!(nix.contains("environment.systemPackages = with pkgs; [ rustdesk ];"));
+        assert!(nix.contains("environment.systemPackages = with pkgs; [ rustdesk-flutter ];"));
         assert!(!nix.contains("rustdesk-server"));
     }
 
@@ -1887,6 +1892,19 @@ mod tests {
         assert!(preview.contains("bundles/ai-tools.nix"));
         assert!(preview.contains("ollama"));
         assert!(preview.contains("environment.systemPackages"));
+    }
+
+    #[test]
+    fn default_bundle_installs_only_packages_shown_in_the_catalog() {
+        let office = bundle_by_id("office");
+        let options = NixGenOptions {
+            bundles: vec![&office],
+            ..Default::default()
+        };
+        let preview = generate_preview_full_from(&options, &repo_templates());
+        assert!(preview.contains("thunderbird"));
+        assert!(!preview.contains("logseq"));
+        assert!(!preview.contains("services.printing"));
     }
 
     #[test]

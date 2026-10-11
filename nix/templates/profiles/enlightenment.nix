@@ -11,7 +11,7 @@
   services.xserver.enable = true;
 
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
 
   # Enable LightDM display manager
@@ -19,6 +19,12 @@
 
   # Enable Enlightenment desktop
   services.xserver.desktopManager.enlightenment.enable = true;
+
+  # Use the NetworkManager applet below; econnman's Python EFL bindings do not
+  # support the Python version in current nixpkgs.
+  imports = lib.optionals (lib.versionAtLeast lib.version "26.05") [
+    { environment.enlightenment.excludePackages = [ pkgs.enlightenment.econnman ]; }
+  ];
 
   # Additional packages
   environment.systemPackages = with pkgs; [

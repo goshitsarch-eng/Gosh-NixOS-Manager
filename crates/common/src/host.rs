@@ -213,9 +213,11 @@ pub(crate) fn gpu_from_lspci(stdout: &str) -> String {
             fallback = Some(format!("AMD: {name}"));
         } else if lower.contains("intel") {
             fallback = Some(format!("Intel: {name}"));
+        } else {
+            fallback = Some(name.to_string());
         }
     }
-    fallback.unwrap_or_else(|| "Unknown GPU (lspci not available)".to_string())
+    fallback.unwrap_or_else(|| "No display controller detected".to_string())
 }
 
 /// Detect GPU via `lspci`. Host-spawns inside Flatpak.
@@ -266,10 +268,16 @@ mod tests {
     }
 
     #[test]
-    fn gpu_from_lspci_unknown_without_vga() {
+    fn gpu_from_lspci_handles_virtual_gpu_and_missing_display() {
+        assert_eq!(
+            gpu_from_lspci(
+                "00:01.0 VGA compatible controller: Red Hat, Inc. Virtio 1.0 GPU (rev 01)\n"
+            ),
+            "Red Hat, Inc. Virtio 1.0 GPU (rev 01)"
+        );
         assert_eq!(
             gpu_from_lspci("00:1f.3 Audio device: Intel Corporation\n"),
-            "Unknown GPU (lspci not available)"
+            "No display controller detected"
         );
     }
 }

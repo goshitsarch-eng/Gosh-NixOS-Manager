@@ -22,13 +22,18 @@ class RecordingHelper implements HelperApi {
   RecordingHelper(this.state);
   final Map<String, dynamic> state;
   bool failSave = false;
+  bool failRead = false;
   int applies = 0;
   String? rebuild;
   @override
   Future<Map<String, dynamic>> request(
     String type, [
     Map<String, dynamic>? payload,
-  ]) async => {'type': 'State', 'payload': state};
+  ]) async {
+    if (failRead) throw const HelperFailure('Could not load existing state');
+    return {'type': 'State', 'payload': state};
+  }
+
   @override
   Future<void> apply(Map<String, dynamic> state, String rebuild) async {
     applies++;
@@ -118,4 +123,64 @@ void main() {
     expect(controller.preview, contains('fonts.packages'));
     expect(controller.preview, isNot(contains('pkgs.inter')));
   });
+  test('concurrent package submissions cannot duplicate selections', () async {
+    await Future.wait([
+      controller.addPackages('ripgrep'),
+      controller.addPackages('ripgrep'),
+    ]);
+    expect(controller.configuration!.strings('custom_packages'), ['ripgrep']);
+  });
+  test('legacy Bluetooth state is visible and can be turned off', () async {
+    helper.state['bluetooth_enabled'] = true;
+    await controller.initialize();
+    expect(
+      controller.configuration!.value('bluetooth_enabled', 'hardware_config'),
+      true,
+    );
+    controller.setValue('bluetooth_enabled', false, 'hardware_config');
+    await controller.updatePreview();
+    expect(controller.configuration!.value('bluetooth_enabled'), false);
+    expect(controller.preview, isNot(contains('hardware.bluetooth')));
+  });
+  test(
+    'failed initial state load blocks replacing existing configuration',
+    () async {
+      helper.failRead = true;
+      await controller.initialize();
+      controller.clearError();
+      await controller.apply();
+      expect(helper.applies, 0);
+      expect(controller.error, contains('Saved system state was not loaded'));
+    },
+  );
+  test(
+    'every profile and bundle selection reaches preview and can be removed',
+    () async {
+      for (final profile in controller.catalog('profiles')) {
+        await controller.selectProfile(profile['id'] as String);
+        expect(controller.profilePreview, isNotEmpty);
+        await controller.updatePreview();
+        expect(controller.preview, contains('/profiles/${profile['id']}.nix'));
+      }
+      await controller.selectProfile(null);
+      expect(controller.profilePreview, isEmpty);
+      for (final bundle in controller.catalog('bundles')) {
+        final id = bundle['id'] as String;
+        controller.toggleBundle(bundle, true);
+        await controller.updatePreview();
+        expect(controller.preview, contains('/bundles/$id.nix'));
+        for (final package in bundle['packages'] as List) {
+          controller.toggleBundlePackage(id, package['id'] as String, false);
+        }
+        expect(
+          (controller.configuration!.value('bundle_packages') as Map)[id],
+          isEmpty,
+        );
+        controller.toggleBundle(bundle, false);
+        await controller.updatePreview();
+        expect(controller.preview, isNot(contains('/bundles/$id.nix')));
+      }
+      expect(controller.error, isNull);
+    },
+  );
 }

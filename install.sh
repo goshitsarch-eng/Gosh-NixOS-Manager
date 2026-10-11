@@ -23,27 +23,13 @@ if [ ! -f /etc/NIXOS ]; then
     fi
 fi
 
-# Check if flakes are enabled natively
-check_flakes() {
-    if nix flake --version &>/dev/null; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Build the correct nix run command based on flakes support
-get_nix_run_cmd() {
-    if check_flakes; then
-        echo "nix run $REPO"
-    else
-        echo "nix --extra-experimental-features 'nix-command flakes' run $REPO"
-    fi
-}
+# Explicit feature flags also work when already enabled in the host config.
+# `nix flake --version` does not establish that either feature is enabled.
+NIX_RUN_CMD="nix --extra-experimental-features 'nix-command flakes' run $REPO"
 
 # Detect shell config file
 detect_shell() {
-    case "$SHELL" in
+    case "${SHELL:-}" in
         */zsh) echo ".zshrc" ;;
         */bash) echo ".bashrc" ;;
         */fish) echo ".config/fish/config.fish" ;;
@@ -51,26 +37,8 @@ detect_shell() {
     esac
 }
 
-echo "Checking Nix configuration..."
-echo ""
-
-NIX_RUN_CMD=$(get_nix_run_cmd)
-
-if check_flakes; then
-    echo "✓ Flakes are enabled natively."
-    FLAKES_ENABLED=true
-else
-    echo "⚠ Flakes are NOT enabled in your Nix configuration."
-    echo ""
-    echo "The installer will use '--extra-experimental-features' flag."
-    echo ""
-    echo "To enable flakes permanently, add to /etc/nixos/configuration.nix:"
-    echo ""
-    echo "  nix.settings.experimental-features = [ \"nix-command\" \"flakes\" ];"
-    echo ""
-    echo "Then run: sudo nixos-rebuild switch"
-    FLAKES_ENABLED=false
-fi
+echo "The launcher enables nix-command and flakes for this command only."
+echo "No system Nix settings will be changed."
 echo ""
 
 # Offer to create alias
@@ -81,25 +49,16 @@ if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     SHELL_RC="$HOME/$(detect_shell)"
 
     # Check if alias already exists
-    if grep -qE "(alias|function) $ALIAS_NAME[=' ]" "$SHELL_RC" 2>/dev/null; then
+    if grep -qE "(alias|function) $ALIAS_NAME[=;[:space:]]" "$SHELL_RC" 2>/dev/null; then
         echo "Alias already exists in $SHELL_RC"
     else
+        mkdir -p "$(dirname "$SHELL_RC")"
         echo "" >> "$SHELL_RC"
         echo "# NixOS Toolkit" >> "$SHELL_RC"
-        if [[ "$SHELL" == */fish ]]; then
-            # Fish uses function syntax
-            if $FLAKES_ENABLED; then
-                echo "function $ALIAS_NAME; nix run $REPO; end" >> "$SHELL_RC"
-            else
-                echo "function $ALIAS_NAME; nix --extra-experimental-features 'nix-command flakes' run $REPO; end" >> "$SHELL_RC"
-            fi
+        if [[ "${SHELL:-}" == */fish ]]; then
+            echo "function $ALIAS_NAME; nix --extra-experimental-features 'nix-command flakes' run $REPO; end" >> "$SHELL_RC"
         else
-            # Bash/Zsh use alias syntax
-            if $FLAKES_ENABLED; then
-                echo "alias $ALIAS_NAME='nix run $REPO'" >> "$SHELL_RC"
-            else
-                echo "alias $ALIAS_NAME='nix --extra-experimental-features \"nix-command flakes\" run $REPO'" >> "$SHELL_RC"
-            fi
+            echo "alias $ALIAS_NAME='nix --extra-experimental-features \"nix-command flakes\" run $REPO'" >> "$SHELL_RC"
         fi
         echo "✓ Added alias to $SHELL_RC"
     fi
@@ -114,31 +73,17 @@ if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     DESKTOP_DIR="$HOME/.local/share/applications"
     mkdir -p "$DESKTOP_DIR"
 
-    if $FLAKES_ENABLED; then
-        cat > "$DESKTOP_DIR/nixos-toolkit.desktop" << EOF
+    cat > "$DESKTOP_DIR/nixos-toolkit.desktop" << EOF
 [Desktop Entry]
 Name=NixOS Toolkit
 Comment=Configure NixOS with a graphical interface
-Exec=nix run $REPO
+Exec=nix --extra-experimental-features "nix-command flakes" run $REPO
 Icon=preferences-system
 Terminal=false
 Type=Application
 Categories=System;Settings;
 Keywords=nixos;configuration;settings;
 EOF
-    else
-        cat > "$DESKTOP_DIR/nixos-toolkit.desktop" << EOF
-[Desktop Entry]
-Name=NixOS Toolkit
-Comment=Configure NixOS with a graphical interface
-Exec=nix --extra-experimental-features nix-command flakes run $REPO
-Icon=preferences-system
-Terminal=false
-Type=Application
-Categories=System;Settings;
-Keywords=nixos;configuration;settings;
-EOF
-    fi
 
     echo "✓ Created desktop entry at $DESKTOP_DIR/nixos-toolkit.desktop"
     echo "The app should now appear in your application menu."
@@ -159,14 +104,14 @@ if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     echo "Starting NixOS Toolkit..."
     echo "Command: $NIX_RUN_CMD"
     echo ""
-    eval exec "$NIX_RUN_CMD"
+    exec nix --extra-experimental-features "nix-command flakes" run "$REPO"
 else
     echo ""
     echo "To run later, use:"
     echo ""
     echo "  $NIX_RUN_CMD"
     echo ""
-    if grep -qE "(alias|function) $ALIAS_NAME[=' ]" "$HOME/$(detect_shell)" 2>/dev/null; then
+    if grep -qE "(alias|function) $ALIAS_NAME[=;[:space:]]" "$HOME/$(detect_shell)" 2>/dev/null; then
         echo "Or after reloading your shell:"
         echo ""
         echo "  $ALIAS_NAME"

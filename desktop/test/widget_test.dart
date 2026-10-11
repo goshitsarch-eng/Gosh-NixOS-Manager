@@ -8,6 +8,7 @@ import 'package:nixos_toolkit/bridge/core_api.dart';
 import 'package:nixos_toolkit/services/preferences.dart';
 import 'package:nixos_toolkit/state/app_controller.dart';
 import 'package:nixos_toolkit/ui/app_shell.dart';
+import 'package:nixos_toolkit/ui/components/settings.dart';
 
 /// Widget tests use the actual domain API synchronously; isolate dispatch is
 /// exercised separately in core_api_test.dart.
@@ -136,6 +137,61 @@ void main() {
       )['color_scheme'],
       'dark',
     );
+  });
+  testWidgets('every hardware, network and service control updates its field', (
+    tester,
+  ) async {
+    controller.host['gpu'] = 'NVIDIA test GPU';
+    controller.host['arch'] = 'X86_64';
+    await tester.pumpWidget(
+      ToolkitApp(controller: controller, onQuit: () async {}),
+    );
+    for (final page in [5, 6, 7]) {
+      controller.selectPage(page);
+      await tester.pumpAndSettle();
+      final switches = tester
+          .widgetList<SettingSwitch>(find.byType(SettingSwitch))
+          .toList();
+      for (final setting in switches) {
+        final finder = find.descendant(
+          of: find.byWidget(setting),
+          matching: find.byType(SwitchListTile),
+        );
+        final control = tester.widget<SwitchListTile>(finder);
+        if (control.onChanged == null) continue;
+        final before =
+            controller.configuration!.value(setting.field, setting.section) ==
+            true;
+        control.onChanged!(!before);
+        expect(
+          controller.configuration!.value(setting.field, setting.section),
+          !before,
+          reason: setting.field,
+        );
+        control.onChanged!(before);
+      }
+      final choices = tester
+          .widgetList<SettingChoice>(find.byType(SettingChoice))
+          .toList();
+      for (final setting in choices) {
+        final finder = find.descendant(
+          of: find.byWidget(setting),
+          matching: find.byType(DropdownButtonFormField<dynamic>),
+        );
+        final control = tester.widget<DropdownButtonFormField<dynamic>>(finder);
+        if (control.onChanged == null) continue;
+        for (final value in setting.values.keys) {
+          control.onChanged!(value);
+          expect(
+            controller.configuration!.value(setting.field, setting.section),
+            value,
+            reason: setting.field,
+          );
+        }
+      }
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
   });
   testWidgets(
     'invalid port drafts survive navigation and system theme follows brightness at 2x DPI',

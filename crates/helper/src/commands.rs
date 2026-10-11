@@ -13,6 +13,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 fn invalid_payload(
     selected_profile: Option<&str>,
     enabled_bundles: &[String],
@@ -21,6 +22,9 @@ fn invalid_payload(
     user_groups: &[String],
     username: Option<&str>,
     custom_packages: &[String],
+    bundle_packages: &std::collections::HashMap<String, Vec<String>>,
+    network_config: &NetworkConfig,
+    hardware_config: &HardwareConfig,
 ) -> Option<HelperResponse> {
     match validate_apply_fields(
         selected_profile,
@@ -30,7 +34,14 @@ fn invalid_payload(
         user_groups,
         username,
         custom_packages,
-    ) {
+    )
+    .and_then(|()| {
+        common::validate::validate_configuration_options(
+            bundle_packages,
+            network_config,
+            hardware_config,
+        )
+    }) {
         Ok(()) => None,
         Err(message) => Some(HelperResponse::Error {
             message,
@@ -231,14 +242,34 @@ pub fn generate(
         &user_groups,
         username.as_deref(),
         &custom_packages,
+        &bundle_packages,
+        &network_config,
+        &hardware_config,
     ) {
         return err;
     }
 
+    let snapshot = if dry_run {
+        None
+    } else {
+        match snapshot_managed_dir() {
+            Ok(snapshot) => Some(snapshot),
+            Err(error) => {
+                return HelperResponse::Error {
+                    message: "Failed to snapshot managed configuration".into(),
+                    details: Some(error.to_string()),
+                }
+            }
+        }
+    };
     // First ensure directories exist
     if !dry_run {
         if let HelperResponse::Error { message, details } = ensure_directories() {
-            return HelperResponse::Error { message, details };
+            let response = HelperResponse::Error { message, details };
+            return restored_operation_response(
+                response,
+                restore_managed_snapshot(snapshot.unwrap()),
+            );
         }
     }
 
@@ -268,10 +299,17 @@ pub fn generate(
 
             HelperResponse::GenerationResult { files, preview }
         }
-        Err(e) => HelperResponse::Error {
-            message: "Failed to generate configuration".into(),
-            details: Some(e.to_string()),
-        },
+        Err(e) => {
+            let response = HelperResponse::Error {
+                message: "Failed to generate configuration".into(),
+                details: Some(e.to_string()),
+            };
+            if let Some(snapshot) = snapshot {
+                restored_operation_response(response, restore_managed_snapshot(snapshot))
+            } else {
+                response
+            }
+        }
     }
 }
 
@@ -300,33 +338,34 @@ pub fn apply(
         &user_groups,
         username.as_deref(),
         &custom_packages,
+        &bundle_packages,
+        &network_config,
+        &hardware_config,
     ) {
         return err;
     }
 
     let dry = matches!(rebuild_type, RebuildType::DryBuild);
-    // Snapshot before EnsureDirectories so a first-time dry-build can restore
-    // "managed dir did not exist" instead of leaving the placeholder tree.
-    let snapshot = if dry {
-        match snapshot_managed_dir() {
-            Ok(snap) => Some(snap),
-            Err(e) => {
-                return HelperResponse::Error {
-                    message: "Failed to snapshot managed configuration for dry-run".into(),
-                    details: Some(e.to_string()),
-                };
+    if detect_integration() != IntegrationStatus::Integrated {
+        return HelperResponse::Error {
+            message: "Managed configuration is not imported by the host configuration".into(),
+            details: Some("Follow the integration instructions and import nixos-toolkit/state/selected.nix before applying.".into()),
+        };
+    }
+    // Every apply needs a recovery copy, including failures before rebuild starts.
+    let snapshot = match snapshot_managed_dir() {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            return HelperResponse::Error {
+                message: "Failed to snapshot managed configuration".into(),
+                details: Some(e.to_string()),
             }
         }
-    } else {
-        None
     };
 
     if let HelperResponse::Error { message, details } = ensure_directories() {
         let ensure_err = HelperResponse::Error { message, details };
-        if let Some(snapshot) = snapshot {
-            return dry_build_response(ensure_err, restore_managed_snapshot(snapshot));
-        }
-        return ensure_err;
+        return restored_operation_response(ensure_err, restore_managed_snapshot(snapshot));
     }
 
     // Dry-build still writes so nixos-rebuild can evaluate the proposed tree;
@@ -361,10 +400,7 @@ pub fn apply(
                 message: "Failed to generate configuration".into(),
                 details: Some(e.to_string()),
             };
-            if let Some(snapshot) = snapshot {
-                return dry_build_response(generate_err, restore_managed_snapshot(snapshot));
-            }
-            return generate_err;
+            return restored_operation_response(generate_err, restore_managed_snapshot(snapshot));
         }
     }
 
@@ -376,13 +412,18 @@ pub fn apply(
     };
 
     let response = rebuild::run_rebuild(rebuild_type, config_mode);
-    if let Some(snapshot) = snapshot {
-        return dry_build_response(response, restore_managed_snapshot(snapshot));
+    if dry
+        || !matches!(
+            response,
+            HelperResponse::ApplyComplete { success: true, .. }
+        )
+    {
+        return restored_operation_response(response, restore_managed_snapshot(snapshot));
     }
     response
 }
 
-/// Restore a dry-build snapshot. Returns the restore error, if any.
+/// Restore a managed-tree snapshot. Returns the restore error, if any.
 fn restore_managed_snapshot(snapshot: ManagedDirSnapshot) -> Option<String> {
     match snapshot.restore() {
         Ok(()) => {
@@ -402,11 +443,14 @@ fn restore_managed_snapshot(snapshot: ManagedDirSnapshot) -> Option<String> {
     }
 }
 
-/// Combine a dry-build rebuild result with snapshot restore outcome.
+/// Combine an operation result with its snapshot restore outcome.
 ///
 /// Restore failure always becomes [`HelperResponse::Error`]. If the rebuild
 /// also failed, the message mentions both.
-fn dry_build_response(rebuild: HelperResponse, restore_err: Option<String>) -> HelperResponse {
+fn restored_operation_response(
+    rebuild: HelperResponse,
+    restore_err: Option<String>,
+) -> HelperResponse {
     let Some(restore_err) = restore_err else {
         return rebuild;
     };
@@ -417,7 +461,7 @@ fn dry_build_response(rebuild: HelperResponse, restore_err: Option<String>) -> H
             message,
         } => HelperResponse::Error {
             message: format!(
-                "Dry-build failed ({message}) and the managed tree could not be restored"
+                "Operation failed ({message}) and the managed tree could not be restored"
             ),
             details: Some(restore_err),
         },
@@ -425,7 +469,7 @@ fn dry_build_response(rebuild: HelperResponse, restore_err: Option<String>) -> H
             let rebuild_details = details.unwrap_or_default();
             HelperResponse::Error {
                 message: format!(
-                    "Dry-build failed ({message}) and the managed tree could not be restored"
+                    "Operation failed ({message}) and the managed tree could not be restored"
                 ),
                 details: Some(if rebuild_details.is_empty() {
                     restore_err
@@ -435,7 +479,7 @@ fn dry_build_response(rebuild: HelperResponse, restore_err: Option<String>) -> H
             }
         }
         _ => HelperResponse::Error {
-            message: "Dry-build finished but the managed tree could not be restored".into(),
+            message: "Operation finished but the managed tree could not be restored".into(),
             details: Some(restore_err),
         },
     }
@@ -444,29 +488,35 @@ fn dry_build_response(rebuild: HelperResponse, restore_err: Option<String>) -> H
 struct ManagedDirSnapshot {
     backup: Option<tempfile::TempDir>,
     existed: bool,
+    destination: std::path::PathBuf,
 }
 
 fn snapshot_managed_dir() -> anyhow::Result<ManagedDirSnapshot> {
-    let src = Path::new(paths::MANAGED_DIR);
-    if !src.exists() {
-        return Ok(ManagedDirSnapshot {
-            backup: None,
-            existed: false,
-        });
-    }
-    let backup = tempfile::Builder::new()
-        .prefix("nixos-toolkit-dryrun-")
-        .tempdir()?;
-    copy_dir_all(src, backup.path())?;
-    Ok(ManagedDirSnapshot {
-        backup: Some(backup),
-        existed: true,
-    })
+    ManagedDirSnapshot::capture(Path::new(paths::MANAGED_DIR))
 }
 
 impl ManagedDirSnapshot {
+    fn capture(src: &Path) -> anyhow::Result<Self> {
+        reject_symlink_tree(src)?;
+        if !src.exists() {
+            return Ok(ManagedDirSnapshot {
+                backup: None,
+                existed: false,
+                destination: src.to_path_buf(),
+            });
+        }
+        let backup = tempfile::Builder::new()
+            .prefix("nixos-toolkit-recovery-")
+            .tempdir()?;
+        copy_dir_all(src, backup.path())?;
+        Ok(ManagedDirSnapshot {
+            backup: Some(backup),
+            existed: true,
+            destination: src.to_path_buf(),
+        })
+    }
     fn restore(self) -> anyhow::Result<()> {
-        let dest = Path::new(paths::MANAGED_DIR);
+        let dest = &self.destination;
         if !self.existed {
             if dest.exists() {
                 fs::remove_dir_all(dest)?;
@@ -475,12 +525,33 @@ impl ManagedDirSnapshot {
         }
         let backup = self
             .backup
-            .as_ref()
             .expect("existed snapshot always has a backup dir");
-        if dest.exists() {
-            fs::remove_dir_all(dest)?;
+        // Prepare the complete restored tree before replacing the proposed tree.
+        let restored = (|| -> anyhow::Result<()> {
+            let parent = dest
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("Missing parent"))?;
+            let staging = tempfile::Builder::new()
+                .prefix(".toolkit-restore-")
+                .tempdir_in(parent)?;
+            let tree = staging.path().join("tree");
+            copy_dir_all(backup.path(), &tree)?;
+            let displaced = staging.path().join("proposed");
+            if dest.exists() {
+                fs::rename(dest, &displaced)?;
+            }
+            if let Err(error) = fs::rename(&tree, dest) {
+                if displaced.exists() {
+                    fs::rename(&displaced, dest)?;
+                }
+                return Err(error.into());
+            }
+            Ok(())
+        })();
+        if let Err(error) = restored {
+            let retained = backup.keep();
+            anyhow::bail!("{error}; recovery copy retained at {}", retained.display());
         }
-        copy_dir_all(backup.path(), dest)?;
         Ok(())
     }
 }
@@ -496,11 +567,44 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
             fs::copy(entry.path(), dest)?;
         }
     }
+    fs::set_permissions(dst, fs::metadata(src)?.permissions())?;
+    Ok(())
+}
+
+/// Never traverse links while taking a privileged snapshot or cleaning files.
+fn reject_symlink_tree(path: &Path) -> anyhow::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        anyhow::bail!(
+            "Refusing symlink in managed configuration: {}",
+            path.display()
+        );
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            reject_symlink_tree(&entry?.path())?;
+        }
+    } else if !metadata.is_file() {
+        anyhow::bail!(
+            "Refusing special file in managed configuration: {}",
+            path.display()
+        );
+    }
     Ok(())
 }
 
 /// Ensure required directories exist and create placeholder files
 pub fn ensure_directories() -> HelperResponse {
+    if let Err(error) = reject_symlink_tree(Path::new(paths::MANAGED_DIR)) {
+        return HelperResponse::Error {
+            message: "Unsafe managed configuration path".into(),
+            details: Some(error.to_string()),
+        };
+    }
     let dirs = [
         paths::MANAGED_DIR,
         paths::STATE_DIR,
@@ -794,8 +898,8 @@ fn parse_selected_nix(content: &str) -> (Option<String>, Vec<String>) {
 
 /// Reconstruct catalog package ids from a generated fallback bundle file.
 ///
-/// Full templates (`# Managed by NixOS Toolkit`) are left alone so the next
-/// apply still copies the template instead of switching to a packages fallback.
+/// Historical templates cannot reliably identify checkbox selections. Without
+/// a generated package list, use the visible catalog defaults on the next apply.
 fn reconstruct_bundle_packages(bundle_id: &str) -> Option<Vec<String>> {
     let path = format!("{}/{}.nix", paths::BUNDLES_DIR, bundle_id);
     let content = fs::read_to_string(path).ok()?;
@@ -1007,6 +1111,8 @@ fn parse_hardware_snippet(content: &str) -> HardwareConfig {
             }
             if lhs.ends_with("services.pipewire.enable")
                 || (context == "services.pipewire" && lhs == "enable")
+                || lhs.ends_with("services.pipewire.audio.enable")
+                || (context == "services.pipewire" && lhs == "audio.enable")
             {
                 pipewire = Some(val);
             }
@@ -1143,7 +1249,7 @@ fn parse_services_snippet(content: &str) -> ServicesConfig {
             continue;
         };
 
-        if line_has_pkg(line, "rustdesk") {
+        if line_has_pkg(line, "rustdesk") || line_has_pkg(line, "rustdesk-flutter") {
             cfg.rustdesk = true;
         }
         if line_has_pkg(line, "gnome-tweaks") {
@@ -1228,6 +1334,9 @@ pub fn write_state(state: AppState) -> HelperResponse {
         &state.user_groups,
         state.username.as_deref(),
         &state.custom_packages,
+        &state.bundle_packages,
+        &state.network_config,
+        &state.hardware_config,
     ) {
         return err;
     }
@@ -1366,6 +1475,23 @@ pub fn rollback_generation(generation: u32, activate: String) -> HelperResponse 
         };
     }
 
+    let generations = match list_generations() {
+        HelperResponse::Generations(generations) => generations,
+        error => return error,
+    };
+    if !generations.iter().any(|g| g.number == generation) {
+        return HelperResponse::Error {
+            message: format!("Unknown generation: {generation}"),
+            details: None,
+        };
+    }
+    let Some(previous) = generations.iter().find(|g| g.current).map(|g| g.number) else {
+        return HelperResponse::Error {
+            message: "Could not determine the current generation".into(),
+            details: None,
+        };
+    };
+
     // Switch to the specified generation
     let switch_output = Command::new("nix-env")
         .args([
@@ -1384,16 +1510,33 @@ pub fn rollback_generation(generation: u32, activate: String) -> HelperResponse 
                     .arg(&activate)
                     .output();
 
-            match activate_output {
-                Ok(output) if output.status.success() => HelperResponse::Ok,
-                Ok(output) => HelperResponse::Error {
-                    message: "Failed to activate generation".into(),
-                    details: Some(String::from_utf8_lossy(&output.stderr).to_string()),
-                },
-                Err(e) => HelperResponse::Error {
-                    message: "Failed to run switch-to-configuration".into(),
-                    details: Some(e.to_string()),
-                },
+            let details = match activate_output {
+                Ok(output) if output.status.success() => return HelperResponse::Ok,
+                Ok(output) => String::from_utf8_lossy(&output.stderr).to_string(),
+                Err(error) => error.to_string(),
+            };
+            let restored = Command::new("nix-env")
+                .args([
+                    "-p",
+                    "/nix/var/nix/profiles/system",
+                    "--switch-generation",
+                    &previous.to_string(),
+                ])
+                .output();
+            let recovery = match restored {
+                Ok(output) if output.status.success() => {
+                    format!("System profile restored to generation {previous}.")
+                }
+                Ok(output) => format!(
+                    "Restoring the system profile failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+                Err(error) => format!("Restoring the system profile failed: {error}"),
+            };
+            HelperResponse::Error {
+                message: "Failed to activate generation; verify the running system before retrying"
+                    .into(),
+                details: Some(format!("{details}\n{recovery}")),
             }
         }
         Ok(output) => HelperResponse::Error {
@@ -1410,6 +1553,33 @@ pub fn rollback_generation(generation: u32, activate: String) -> HelperResponse 
 /// Delete specific generations
 pub fn delete_generations(generations: Vec<u32>) -> HelperResponse {
     use std::process::Command;
+
+    if generations.is_empty() || generations.contains(&0) {
+        return HelperResponse::Error {
+            message: "Select valid generations to delete".into(),
+            details: None,
+        };
+    }
+    let listed = match list_generations() {
+        HelperResponse::Generations(listed) => listed,
+        error => return error,
+    };
+    let running = fs::canonicalize("/run/current-system").ok();
+    for number in &generations {
+        let Some(generation) = listed.iter().find(|g| g.number == *number) else {
+            return HelperResponse::Error {
+                message: format!("Unknown generation: {number}"),
+                details: None,
+            };
+        };
+        let path = fs::canonicalize(format!("/nix/var/nix/profiles/system-{number}-link")).ok();
+        if generation.current || (running.is_some() && path == running) {
+            return HelperResponse::Error {
+                message: format!("Refusing to delete current or running generation {number}"),
+                details: None,
+            };
+        }
+    }
 
     let gen_args: Vec<String> = generations.iter().map(|g| g.to_string()).collect();
 
@@ -1463,7 +1633,7 @@ pub fn run_maintenance(command: String) -> HelperResponse {
 
     let flake_nix_exists = Path::new("/etc/nixos/flake.nix").exists();
     let requested = command;
-    let Some(command) = maintenance_command_to_run(&requested, flake_nix_exists) else {
+    let Some(mut command) = maintenance_command_to_run(&requested, flake_nix_exists) else {
         return HelperResponse::Error {
             message: "Command not allowed".into(),
             details: Some(format!(
@@ -1473,7 +1643,34 @@ pub fn run_maintenance(command: String) -> HelperResponse {
         };
     };
 
-    if requested != command {
+    if command == "nix-collect-garbage -d" {
+        // The UI promises system-generation cleanup. `-d` also deletes other
+        // users' profile history, so delete only the eligible system entries.
+        let generations = match list_generations() {
+            HelperResponse::Generations(generations) => generations,
+            error => return error,
+        };
+        let running = fs::canonicalize("/run/current-system").ok();
+        let old = generations
+            .iter()
+            .filter(|g| !g.current)
+            .filter(|g| {
+                let path =
+                    fs::canonicalize(format!("/nix/var/nix/profiles/system-{}-link", g.number))
+                        .ok();
+                running.is_none() || path != running
+            })
+            .map(|g| g.number)
+            .collect::<Vec<_>>();
+        if !old.is_empty() {
+            if let error @ HelperResponse::Error { .. } = delete_generations(old) {
+                return error;
+            }
+        }
+        command = "nix-collect-garbage".into();
+    }
+
+    if requested == NIX_CHANNEL_UPDATE && command == NIX_FLAKE_UPDATE {
         send_log(
             LogLevel::Info,
             "Detected flake at /etc/nixos/flake.nix; running nix flake update --flake /etc/nixos"
@@ -1572,6 +1769,60 @@ mod tests {
     };
 
     #[test]
+    fn snapshots_restore_existing_and_first_time_trees() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("managed");
+        let absent = ManagedDirSnapshot::capture(&tree).unwrap();
+        fs::create_dir_all(tree.join("state")).unwrap();
+        fs::write(tree.join("state/selected.nix"), "proposed").unwrap();
+        absent.restore().unwrap();
+        assert!(!tree.exists());
+        fs::create_dir_all(tree.join("state")).unwrap();
+        fs::write(tree.join("state/selected.nix"), "original").unwrap();
+        fs::write(tree.join("notes"), "retain me").unwrap();
+        let existing = ManagedDirSnapshot::capture(&tree).unwrap();
+        fs::write(tree.join("state/selected.nix"), "proposed").unwrap();
+        fs::write(tree.join("new-file"), "new").unwrap();
+        existing.restore().unwrap();
+        assert_eq!(
+            fs::read_to_string(tree.join("state/selected.nix")).unwrap(),
+            "original"
+        );
+        assert_eq!(fs::read_to_string(tree.join("notes")).unwrap(), "retain me");
+        assert!(!tree.join("new-file").exists());
+    }
+
+    #[test]
+    fn snapshot_rejects_symlinks_including_dangling_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("managed");
+        fs::create_dir(&tree).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), tree.join("link")).unwrap();
+        assert!(ManagedDirSnapshot::capture(&tree).is_err());
+    }
+
+    #[test]
+    fn failed_restore_retains_original_recovery_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("managed");
+        fs::create_dir(&tree).unwrap();
+        fs::write(tree.join("original"), "recover me").unwrap();
+        let mut snapshot = ManagedDirSnapshot::capture(&tree).unwrap();
+        let backup_path = snapshot.backup.as_ref().unwrap().path().to_path_buf();
+        snapshot.destination = dir.path().join("missing/managed");
+        assert!(snapshot
+            .restore()
+            .unwrap_err()
+            .to_string()
+            .contains("recovery copy retained"));
+        assert_eq!(
+            fs::read_to_string(backup_path.join("original")).unwrap(),
+            "recover me"
+        );
+        fs::remove_dir_all(backup_path).unwrap();
+    }
+
+    #[test]
     fn kernel_version_from_store_path() {
         let path = Path::new("/nix/store/xxx-linux-6.1.0/bzImage");
         assert_eq!(kernel_version_from_link(path).as_deref(), Some("6.1.0"));
@@ -1618,7 +1869,7 @@ mod tests {
             success: true,
             message: "ok".into(),
         };
-        match dry_build_response(rebuild, None) {
+        match restored_operation_response(rebuild, None) {
             HelperResponse::ApplyComplete { success: true, .. } => {}
             other => panic!("expected ApplyComplete success, got {other:?}"),
         }
@@ -1626,7 +1877,7 @@ mod tests {
 
     #[test]
     fn dry_build_restore_failure_after_success_is_error() {
-        match dry_build_response(
+        match restored_operation_response(
             HelperResponse::ApplyComplete {
                 success: true,
                 message: "nixos-rebuild dry-build completed successfully".into(),
@@ -1643,7 +1894,7 @@ mod tests {
 
     #[test]
     fn dry_build_restore_and_rebuild_failure_mentions_both() {
-        match dry_build_response(
+        match restored_operation_response(
             HelperResponse::ApplyComplete {
                 success: false,
                 message: "nixos-rebuild dry-build failed with exit code 1".into(),
@@ -1651,7 +1902,7 @@ mod tests {
             Some("restore io".into()),
         ) {
             HelperResponse::Error { message, details } => {
-                assert!(message.contains("Dry-build failed"));
+                assert!(message.contains("Operation failed"));
                 assert!(message.contains("managed tree could not be restored"));
                 assert!(details.is_some_and(|d| d.contains("restore io")));
             }
@@ -1661,7 +1912,7 @@ mod tests {
 
     #[test]
     fn dry_build_restore_failure_with_rebuild_error_mentions_both() {
-        match dry_build_response(
+        match restored_operation_response(
             HelperResponse::Error {
                 message: "Failed to spawn nixos-rebuild".into(),
                 details: Some("enoent".into()),

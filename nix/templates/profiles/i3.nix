@@ -21,7 +21,7 @@
   };
 
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
 
   # Display manager
@@ -59,7 +59,6 @@
 
     # System tray utilities
     blueman
-    nm-applet
   ];
 
   # Enable dconf for application settings

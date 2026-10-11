@@ -15,11 +15,10 @@
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
 
   # Enable GDM display manager (new location as of NixOS 24.05+)
-  services.displayManager.gdm.enable = lib.mkForce true;
-  services.displayManager.gdm.wayland = true;
+  services.xserver.displayManager.gdm.enable = lib.mkForce true;
 
   # Enable GNOME desktop environment (new location as of NixOS 24.05+)
-  services.desktopManager.gnome.enable = true;
+  services.xserver.desktopManager.gnome.enable = true;
 
   # GNOME core utilities
   services.gnome.core-utilities.enable = true;

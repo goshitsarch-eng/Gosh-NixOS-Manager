@@ -11,7 +11,7 @@
   services.xserver.enable = true;
 
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
 
   # Enable SDDM display manager (Qt-based, matches LXQt)
@@ -28,18 +28,18 @@
     lxqt.pavucontrol-qt
 
     # File manager
-    pcmanfm-qt
+    lxqt.pcmanfm-qt
 
     # Terminal
-    qterminal
+    lxqt.qterminal
 
     # Applications
-    qps  # Qt Process manager
+    lxqt.qps  # Qt Process manager
     featherpad  # Qt text editor
-    lximage-qt  # Image viewer
+    lxqt.lximage-qt  # Image viewer
 
     # Qt theming
-    qt5ct
+    libsForQt5.qt5ct
     libsForQt5.qtstyleplugin-kvantum
 
     # System utilities
@@ -53,7 +53,7 @@
   # XDG portal
   xdg.portal = {
     enable = true;
-    extraPortals = [ pkgs.xdg-desktop-portal-lxqt ];
+    extraPortals = [ pkgs.lxqt.xdg-desktop-portal-lxqt ];
   };
 
   # Polkit for privilege escalation

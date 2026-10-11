@@ -246,6 +246,12 @@ pub mod paths {
         }
 
         let managed = Path::new(MANAGED_DIR);
+        if managed
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return false;
+        }
         if !path.starts_with(managed) {
             return false;
         }

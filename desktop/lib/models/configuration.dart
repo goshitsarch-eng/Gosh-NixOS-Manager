@@ -4,7 +4,16 @@ import 'dart:convert';
 /// Parsing, validation and configuration generation remain in Rust.
 class ConfigurationDto {
   ConfigurationDto(Map<String, dynamic> source)
-    : _data = jsonDecode(jsonEncode(source)) as Map<String, dynamic>;
+    : _data = jsonDecode(jsonEncode(source)) as Map<String, dynamic> {
+    final hardware = _data['hardware_config'] as Map<String, dynamic>?;
+    if (hardware != null) {
+      final bluetooth =
+          _data['bluetooth_enabled'] == true ||
+          hardware['bluetooth_enabled'] == true;
+      hardware['bluetooth_enabled'] = bluetooth;
+      _data['bluetooth_enabled'] = bluetooth;
+    }
+  }
   final Map<String, dynamic> _data;
 
   dynamic value(String key, [String? section]) => section == null

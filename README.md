@@ -34,6 +34,10 @@ programs.nixos-toolkit.enable = true;
 
 ## Validation and release status
 
+The latest [NixOS release audit](docs/audit/NIXOS_RELEASE_QA.md) records the safety fixes, 251 Rust tests, 28 Flutter tests, isolated helper/installer checks, and 127 generated-configuration cases. Real activation, authenticated cancellation and hardware/desktop behavior still require disposable VM and device testing before release approval. NixOS 25.05 blocks two Gaming cases through its insecure Electron dependency check.
+
+The following results are historical migration checks, not a fresh Flatpak/desktop certification of this revision.
+
 Native Linux debug/release builds, 245 Rust tests, 22 Flutter tests, analyzer, formatting, bridge calls, live page navigation, Light/Dark appearance and minimum-size layout passed in the cloud environment. Checksummed native and Flatpak release bundles are generated in `dist/`.
 
 The Flatpak was built, exported, installed and tested inside its sandbox with the real Rust API. Its eleven pages, package entry, local preview, resizing and saved dark theme were checked live. Native and Flatpak also passed 2× display rendering, nested Wayland rendering and clipboard transfer. The Nix package also passes packaged API diagnostics with a Nix Mesa driver. Real NixOS rebuild, rollback, maintenance, authenticated cancellation, desktop portals/accessibility and OS theme notifications remain release gates; this Debian container cannot establish those results. Remote CI has not been run from this workspace. [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) records the exact limits.

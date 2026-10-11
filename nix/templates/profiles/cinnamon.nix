@@ -11,7 +11,7 @@
   services.xserver.enable = true;
 
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
 
   # Enable LightDM display manager
@@ -22,9 +22,9 @@
 
   # Cinnamon packages
   environment.systemPackages = with pkgs; [
-    cinnamon.nemo-with-extensions
-    cinnamon.cinnamon-screensaver
-    cinnamon.cinnamon-control-center
+    nemo
+    cinnamon-screensaver
+    cinnamon-control-center
     gnome-screenshot
     gnome-calculator
     gnome-system-monitor

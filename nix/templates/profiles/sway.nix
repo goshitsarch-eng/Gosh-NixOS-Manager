@@ -19,7 +19,7 @@
   };
 
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
 
   # Display manager
@@ -55,7 +55,7 @@
     wdisplays       # Display configuration
 
     # Theme and appearance
-    qt5ct
+    libsForQt5.qt5ct
     libsForQt5.qtstyleplugin-kvantum
   ];
 

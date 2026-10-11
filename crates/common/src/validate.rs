@@ -1,7 +1,9 @@
 //! Shared validation for values that become Nix or helper IPC payloads.
 
 use crate::actions::{default_bundles, default_profiles};
+use crate::ipc::{AppState, HardwareConfig, NetworkConfig};
 use crate::nix::is_nix_attrpath;
+use std::collections::HashMap;
 
 /// Maximum hostname length (DNS label).
 pub const MAX_HOSTNAME_LEN: usize = 63;
@@ -120,6 +122,10 @@ pub fn validate_apply_fields(
         }
     }
 
+    if !user_groups.is_empty() && username.is_none() {
+        return Err("Enter a username before assigning groups".into());
+    }
+
     for pkg in custom_packages {
         if !is_nix_attrpath(pkg) {
             return Err(format!("Invalid package attribute: {pkg}"));
@@ -127,6 +133,58 @@ pub fn validate_apply_fields(
     }
 
     Ok(())
+}
+
+/// Validate the structured selections at both the preview and privileged boundary.
+pub fn validate_configuration_options(
+    bundle_packages: &HashMap<String, Vec<String>>,
+    net: &NetworkConfig,
+    hw: &HardwareConfig,
+) -> Result<(), String> {
+    if net.ssh_port == 0
+        || net.wireguard_listen_port == 0
+        || net.allowed_tcp_ports.contains(&0)
+        || net.allowed_udp_ports.contains(&0)
+    {
+        return Err("Ports must be between 1 and 65535".into());
+    }
+    if !["no", "prohibit-password", "yes"].contains(&net.ssh_root_login.as_str()) {
+        return Err("Unknown SSH root login policy".into());
+    }
+    if hw.audio_server > 2 || hw.power_profile > 2 || hw.nvidia_driver.is_some_and(|v| v > 3) {
+        return Err("Unknown hardware configuration option".into());
+    }
+    let catalog = default_bundles();
+    for (id, packages) in bundle_packages {
+        let bundle = catalog
+            .iter()
+            .find(|b| &b.id == id)
+            .ok_or("Unknown bundle package selection")?;
+        if packages
+            .iter()
+            .any(|p| !bundle.packages.iter().any(|def| &def.id == p))
+        {
+            return Err(format!("Unknown package selected in bundle {id}"));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_state(state: &AppState) -> Result<(), String> {
+    validate_apply_fields(
+        state.selected_profile.as_deref(),
+        &state.enabled_bundles,
+        state.hostname.as_deref(),
+        &state.dns_servers,
+        &state.user_groups,
+        state.username.as_deref(),
+        &state.custom_packages,
+    )?;
+    validate_configuration_options(
+        &state.bundle_packages,
+        &state.network_config,
+        &state.hardware_config,
+    )
 }
 
 #[cfg(test)]
@@ -189,5 +247,23 @@ mod tests {
     #[test]
     fn apply_fields_reject_unknown_profile() {
         assert!(validate_apply_fields(Some("../etc"), &[], None, &[], &[], None, &[]).is_err());
+    }
+
+    #[test]
+    fn package_attributes_require_valid_nonempty_segments() {
+        for invalid in [
+            "hello.",
+            "python3Packages.0",
+            "foo..bar",
+            ".hello",
+            "foo.-bar",
+        ] {
+            assert!(
+                validate_apply_fields(None, &[], None, &[], &[], None, &[invalid.into()]).is_err(),
+                "{invalid}"
+            );
+        }
+        assert!(is_nix_attrpath("python3Packages.numpy"));
+        assert!(is_nix_attrpath("nerd-fonts.fira-code"));
     }
 }

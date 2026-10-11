@@ -28,3 +28,6 @@ Thumbs.db
 
 # Linux release artifacts
 /dist/
+
+# Python QA script bytecode
+__pycache__/

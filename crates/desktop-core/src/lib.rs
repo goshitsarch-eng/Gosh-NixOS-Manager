@@ -98,47 +98,7 @@ fn probe_host() -> Value {
 }
 
 fn validate(state: &AppState) -> Result<(), String> {
-    common::validate::validate_apply_fields(
-        state.selected_profile.as_deref(),
-        &state.enabled_bundles,
-        state.hostname.as_deref(),
-        &state.dns_servers,
-        &state.user_groups,
-        state.username.as_deref(),
-        &state.custom_packages,
-    )?;
-    if !state.user_groups.is_empty() && state.username.is_none() {
-        return Err("Enter a username before assigning groups".into());
-    }
-    let net = &state.network_config;
-    if net.ssh_port == 0
-        || net.wireguard_listen_port == 0
-        || net.allowed_tcp_ports.contains(&0)
-        || net.allowed_udp_ports.contains(&0)
-    {
-        return Err("Ports must be between 1 and 65535".into());
-    }
-    if !["no", "prohibit-password", "yes"].contains(&net.ssh_root_login.as_str()) {
-        return Err("Unknown SSH root login policy".into());
-    }
-    let hw = &state.hardware_config;
-    if hw.audio_server > 2 || hw.power_profile > 2 || hw.nvidia_driver.is_some_and(|v| v > 3) {
-        return Err("Unknown hardware configuration option".into());
-    }
-    for (id, packages) in &state.bundle_packages {
-        let catalog = default_bundles();
-        let bundle = catalog
-            .iter()
-            .find(|b| &b.id == id)
-            .ok_or("Unknown bundle package selection")?;
-        if packages
-            .iter()
-            .any(|p| !bundle.packages.iter().any(|def| &def.id == p))
-        {
-            return Err(format!("Unknown package selected in bundle {id}"));
-        }
-    }
-    Ok(())
+    common::validate::validate_state(state)
 }
 
 fn preview(mut state: AppState, templates: &Path) -> Result<String, String> {
@@ -291,7 +251,7 @@ mod tests {
             ..Default::default()
         };
         let text = preview(state, Path::new("/nonexistent-templates")).unwrap();
-        assert!(text.contains("services.desktopManager.gnome.enable = true"));
+        assert!(text.contains("services.xserver.desktopManager.gnome.enable = true"));
         assert!(text.contains("ripgrep"));
     }
     #[test]

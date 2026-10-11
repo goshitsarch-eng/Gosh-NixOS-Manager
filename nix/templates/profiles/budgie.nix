@@ -11,7 +11,7 @@
   services.xserver.enable = true;
 
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.displayManager.sddm.enable = lib.mkForce false;
 
   # Enable LightDM display manager
@@ -25,7 +25,6 @@
     # Budgie extras
     budgie-backgrounds
     budgie-control-center
-    budgie-screensaver
 
     # Common applications
     gnome-calculator
@@ -38,7 +37,7 @@
     nemo
 
     # Media
-    gnome-photos
+    shotwell
     totem  # Video player
 
     # Utilities

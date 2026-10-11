@@ -33,8 +33,7 @@
 
     # Node.js
     nodejs_22
-    nodePackages.npm
-    nodePackages.pnpm
+    pnpm
 
     # Python
     python3

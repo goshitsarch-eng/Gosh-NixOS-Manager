@@ -30,6 +30,8 @@ dart format --output=none --set-exit-if-changed lib test
 
 From the repository root, `scripts/verify.sh` runs Rust formatting, Clippy, tests (including all features), the native bridge build, Flutter lock/format/analyzer/tests and the Nix-readable lock snapshot check. Widget tests use the actual Rust API; separate bridge tests exercise isolate dispatch. Helper tests launch a temporary protocol peer and never mutate NixOS files. After intentionally updating the Flutter lock, run `python3 scripts/sync-pubspec-lock.py` (requires PyYAML), and commit both lock representations.
 
+On NixOS, use `nix develop` for the pinned toolchain. `scripts/verify.sh --isolated` additionally exercises the real helper and installer in Bubblewrap fixtures with recording system commands and temporary configuration/home directories. `scripts/test-generated-nix.py /path/to/nixpkgs` evaluates every catalog profile/bundle/service and selected hardware/network combinations without activation. See the [current NixOS audit](docs/audit/NIXOS_RELEASE_QA.md) for exact coverage and release limits.
+
 ## Native release (verified)
 
 ```sh

@@ -3,7 +3,7 @@
 use crate::helper::client::HelperClient;
 use crate::helper::spawn::SpawnSpec;
 use crate::message::{HelperEvent, HelperOp};
-use common::ipc::{HelperRequest, HelperResponse, LogLevel, RebuildType};
+use common::ipc::{HelperRequest, HelperResponse, LogLevel};
 use futures::stream::Stream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,7 +28,7 @@ pub fn stream(
 }
 
 /// Run one helper process to completion.
-/// Switch/Boot/Test/Build: EnsureDirectories → Apply → optional WriteState.
+/// Switch/Boot/Test/Build: Apply → optional WriteState.
 /// DryBuild: Apply only (the helper snapshots before creating directories).
 #[cfg(test)]
 pub(crate) fn run_blocking(
@@ -137,49 +137,7 @@ fn run_apply_chain(
     cancel: &AtomicBool,
     emit: &mut impl FnMut(HelperEvent),
 ) {
-    let dry_build = matches!(
-        op,
-        HelperOp::Apply {
-            rebuild: RebuildType::DryBuild,
-            ..
-        }
-    );
-    // Dry-build snapshots inside Apply before EnsureDirectories. Sending
-    // EnsureDirectories first would create a placeholder tree and make restore
-    // leave that placeholder instead of the pre-dry-run state.
-    if !dry_build {
-        push_log(emit, op, "Ensuring directories exist...");
-        if let Err(err) = client.send(&HelperRequest::EnsureDirectories) {
-            emit(HelperEvent::SpawnFailed {
-                op: event_op(op),
-                error: err.to_string(),
-            });
-            return;
-        }
-
-        match recv_until_terminal(
-            client,
-            op,
-            timeout_for(&HelperOp::EnsureDirectories),
-            cancel,
-            emit,
-            true,
-            true,
-        ) {
-            Some(HelperResponse::Ok) => {
-                push_log(emit, op, "Directories ready.");
-            }
-            Some(other) => {
-                emit(HelperEvent::Response {
-                    op: event_op(op),
-                    response: Box::new(other),
-                });
-                return;
-            }
-            None => return,
-        }
-    }
-
+    // Apply owns directory creation so its recovery snapshot sees the original tree.
     if let Err(err) = client.send(apply_request) {
         emit(HelperEvent::SpawnFailed {
             op: event_op(op),
@@ -475,10 +433,7 @@ for raw in sys.stdin:
             apply_request(),
         );
         assert_eq!(spawn_count(&spawns), 1, "Apply+save must use one process");
-        assert_eq!(
-            request_types(&requests),
-            ["EnsureDirectories", "Apply", "WriteState"]
-        );
+        assert_eq!(request_types(&requests), ["Apply", "WriteState"]);
         assert!(events.iter().any(|event| matches!(
             event,
             HelperEvent::Response { response, .. }
@@ -532,7 +487,7 @@ for raw in sys.stdin:
             apply_request(),
         );
         assert_eq!(spawn_count(&spawns), 1);
-        assert_eq!(request_types(&requests), ["EnsureDirectories", "Apply"]);
+        assert_eq!(request_types(&requests), ["Apply"]);
         assert!(events.iter().any(|event| matches!(
             event,
             HelperEvent::Response { response, .. }

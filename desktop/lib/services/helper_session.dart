@@ -81,6 +81,11 @@ class HostHelper implements HelperApi {
         .listen((line) => onLog(line));
     final replies = StreamIterator(_boundedLines(process.stdout));
     try {
+      if (_cancelled) {
+        throw const HelperFailure(
+          'Operation cancelled before sending a request',
+        );
+      }
       final result = await action(_Connection(process, replies, onLog));
       await process.stdin.close();
       final code = await process.exitCode.timeout(const Duration(seconds: 5));
@@ -111,7 +116,7 @@ class HostHelper implements HelperApi {
   Future<void> apply(Map<String, dynamic> state, String rebuild) => _session((
     connection,
   ) async {
-    if (rebuild != 'DryBuild') await connection.send('EnsureDirectories');
+    // Apply owns directory creation and snapshots the original tree first.
     final payload = Map<String, dynamic>.from(state)
       ..remove('last_applied')
       ..['rebuild_type'] = rebuild;
@@ -124,6 +129,11 @@ class HostHelper implements HelperApi {
       );
     }
     if (rebuild != 'DryBuild') {
+      if (_cancelled) {
+        throw const HelperFailure(
+          'Operation interrupted; verify the host state before retrying',
+        );
+      }
       try {
         await connection.send('WriteState', {'state': state});
       } catch (error) {
@@ -134,8 +144,16 @@ class HostHelper implements HelperApi {
 
   @override
   void cancel() {
-    _cancelled = true;
-    _process?.kill(ProcessSignal.sigterm);
+    final process = _process;
+    if (process == null || process.kill(ProcessSignal.sigterm)) {
+      _cancelled = true;
+    } else {
+      // An unprivileged UI may not signal a helper after pkexec becomes root.
+      // Keep waiting and save successful state instead of pretending it stopped.
+      onLog(
+        'The host helper could not be interrupted; waiting for completion.',
+      );
+    }
   }
 }
 

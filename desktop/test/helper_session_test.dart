@@ -30,10 +30,10 @@ void main() {
     () async {
       await peer('success')
           .apply({'hostname': 'desktop', 'last_applied': null}, 'Switch');
-      expect(await requests(), ['EnsureDirectories', 'Apply', 'WriteState']);
+      expect(await requests(), ['Apply', 'WriteState']);
       expect(logs, ['Rebuilding']);
       final apply =
-          jsonDecode((await trace.readAsLines())[1])['payload'] as Map;
+          jsonDecode((await trace.readAsLines())[0])['payload'] as Map;
       expect(apply['rebuild_type'], 'Switch');
       expect(apply.containsKey('last_applied'), false);
     },
@@ -59,7 +59,7 @@ void main() {
       peer('apply-failure').apply({}, 'Switch'),
       throwsA(isA<HelperFailure>()),
     );
-    expect(await requests(), ['EnsureDirectories', 'Apply']);
+    expect(await requests(), ['Apply']);
   });
   test('unexpected response and disconnected helper fail explicitly', () async {
     await expectLater(
@@ -84,6 +84,13 @@ void main() {
     await started.future.timeout(const Duration(seconds: 10));
     helper.cancel();
     await assertion;
+  });
+  test('cancelling during process startup sends no host request', () async {
+    final helper = peer('success');
+    final result = helper.apply({}, 'Switch');
+    helper.cancel();
+    await expectLater(result, throwsA(isA<HelperFailure>()));
+    expect(await trace.exists() ? await requests() : <String>[], isEmpty);
   });
   test(
     'oversized response fails before an unbounded line is decoded',

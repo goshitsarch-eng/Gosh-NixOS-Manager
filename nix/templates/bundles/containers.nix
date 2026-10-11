@@ -34,7 +34,7 @@
   # Option 2: Podman (daemonless, rootless)
   virtualisation.podman = {
     enable = true;
-    dockerCompat = true;  # Create docker alias
+    dockerCompat = !config.virtualisation.docker.enable;  # Create docker alias
     defaultNetwork.settings.dns_enabled = true;
   };
 }

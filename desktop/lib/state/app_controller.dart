@@ -32,6 +32,7 @@ class AppController extends ChangeNotifier {
   int _revision = 0;
   bool dirty = false;
   bool _disposed = false;
+  bool _stateLoadFailed = false;
   @override
   void notifyListeners() {
     if (!_disposed) super.notifyListeners();
@@ -75,7 +76,9 @@ class AppController extends ChangeNotifier {
           configuration = ConfigurationDto(
             reply['payload'] as Map<String, dynamic>,
           );
+          _stateLoadFailed = false;
         } catch (failure) {
+          _stateLoadFailed = true;
           error = 'Saved system state could not be loaded: $failure';
         }
       }
@@ -220,10 +223,10 @@ class AppController extends ChangeNotifier {
     });
     final added = List<String>.from(parsed['added'] as List);
     if (added.isNotEmpty) {
-      setValue('custom_packages', [
-        ...configuration!.strings('custom_packages'),
-        ...added,
-      ]);
+      setValue(
+        'custom_packages',
+        {...configuration!.strings('custom_packages'), ...added}.toList(),
+      );
     }
     final bundled = parsed['bundled'] as List;
     return [
@@ -268,6 +271,11 @@ class AppController extends ChangeNotifier {
       if (!canManage) {
         throw const HelperFailure(
           'A NixOS host and installed privileged helper are required',
+        );
+      }
+      if (_stateLoadFailed) {
+        throw const HelperFailure(
+          'Saved system state was not loaded. Reopen the app and load it successfully before applying changes.',
         );
       }
       if (fieldErrors.isNotEmpty) {

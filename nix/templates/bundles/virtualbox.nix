@@ -19,12 +19,6 @@
     enableExtensionPack = true;  # Non-free extension pack
   };
 
-  # Enable guest additions (for running NixOS as VM guest)
-  virtualisation.virtualbox.guest = {
-    enable = true;
-    x11 = true;
-  };
-
   # VirtualBox packages
   environment.systemPackages = with pkgs; [
     virtualbox

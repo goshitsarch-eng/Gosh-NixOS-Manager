@@ -73,10 +73,6 @@ pub fn generate_all_files(
         content: selected_content.clone(),
     });
 
-    if !dry_run {
-        atomic_write(paths::SELECTED_NIX, &selected_content)?;
-    }
-
     // Generate hostname.nix if needed
     if let Some(h) = hostname {
         let hostname_content = generate_hostname_nix(h);
@@ -84,10 +80,6 @@ pub fn generate_all_files(
             path: paths::HOSTNAME_NIX.to_string(),
             content: hostname_content.clone(),
         });
-
-        if !dry_run {
-            atomic_write(paths::HOSTNAME_NIX, &hostname_content)?;
-        }
         keep_snippets.push("hostname.nix");
     }
 
@@ -98,10 +90,6 @@ pub fn generate_all_files(
             path: paths::DNS_NIX.to_string(),
             content: dns_content.clone(),
         });
-
-        if !dry_run {
-            atomic_write(paths::DNS_NIX, &dns_content)?;
-        }
         keep_snippets.push("dns.nix");
     }
 
@@ -113,10 +101,6 @@ pub fn generate_all_files(
                 path: paths::USERS_NIX.to_string(),
                 content: users_content.clone(),
             });
-
-            if !dry_run {
-                atomic_write(paths::USERS_NIX, &users_content)?;
-            }
             keep_snippets.push("users.nix");
         }
     }
@@ -128,10 +112,6 @@ pub fn generate_all_files(
             path: paths::HARDWARE_NIX.to_string(),
             content: hardware_content.clone(),
         });
-
-        if !dry_run {
-            atomic_write(paths::HARDWARE_NIX, &hardware_content)?;
-        }
         keep_snippets.push("hardware.nix");
     }
 
@@ -143,10 +123,6 @@ pub fn generate_all_files(
                 path: dest_path.clone(),
                 content: content.clone(),
             });
-
-            if !dry_run {
-                atomic_write(&dest_path, &content)?;
-            }
         } else {
             // Use fallback template
             let fallback = generate_fallback_profile(&p.id);
@@ -154,10 +130,6 @@ pub fn generate_all_files(
                 path: dest_path.clone(),
                 content: fallback.clone(),
             });
-
-            if !dry_run {
-                atomic_write(&dest_path, &fallback)?;
-            }
         }
     }
 
@@ -166,33 +138,12 @@ pub fn generate_all_files(
         let dest_path = format!("{}/{}.nix", paths::BUNDLES_DIR, bundle.id);
 
         let packages_to_use = options.get_bundle_packages(bundle);
-        let has_custom_packages = bundle_packages.contains_key(&bundle.id);
-
-        if !has_custom_packages {
-            // No customization - try to use the pre-made template
-            if let Ok(content) = read_template(&bundle.template) {
-                files.push(GeneratedFile {
-                    path: dest_path.clone(),
-                    content: content.clone(),
-                });
-
-                if !dry_run {
-                    atomic_write(&dest_path, &content)?;
-                }
-                continue;
-            }
-        }
-
-        // Either customized packages or no template available - generate fallback
+        // Generate only the packages displayed in the catalog/selection.
         let fallback = generate_fallback_bundle(&bundle.id, &packages_to_use);
         files.push(GeneratedFile {
             path: dest_path.clone(),
             content: fallback.clone(),
         });
-
-        if !dry_run {
-            atomic_write(&dest_path, &fallback)?;
-        }
     }
 
     // Generate custom-packages.nix if custom packages exist
@@ -202,10 +153,6 @@ pub fn generate_all_files(
             path: paths::CUSTOM_PACKAGES_NIX.to_string(),
             content: custom_content.clone(),
         });
-
-        if !dry_run {
-            atomic_write(paths::CUSTOM_PACKAGES_NIX, &custom_content)?;
-        }
         keep_snippets.push("custom-packages.nix");
     }
 
@@ -217,10 +164,6 @@ pub fn generate_all_files(
             path: paths::NETWORK_NIX.to_string(),
             content: network_content.clone(),
         });
-
-        if !dry_run {
-            atomic_write(paths::NETWORK_NIX, &network_content)?;
-        }
         keep_snippets.push("network.nix");
     }
 
@@ -233,10 +176,6 @@ pub fn generate_all_files(
             path: paths::SERVICES_NIX.to_string(),
             content: services_content.clone(),
         });
-
-        if !dry_run {
-            atomic_write(paths::SERVICES_NIX, &services_content)?;
-        }
         keep_snippets.push("services.nix");
     }
 
@@ -246,14 +185,13 @@ pub fn generate_all_files(
             path: paths::UNFREE_NIX.to_string(),
             content: unfree_content.clone(),
         });
-
-        if !dry_run {
-            atomic_write(paths::UNFREE_NIX, &unfree_content)?;
-        }
         keep_snippets.push("unfree.nix");
     }
 
     if !dry_run {
+        for file in files.iter().skip(1).chain(files.first()) {
+            atomic_write(&file.path, &file.content)?;
+        }
         cleanup_stale_managed_files(
             Path::new(paths::PROFILES_DIR),
             Path::new(paths::BUNDLES_DIR),
@@ -311,7 +249,16 @@ pub(crate) fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
     }
     tmp.write_all(content.as_bytes())?;
     tmp.flush()?;
+    // Nix modules contain no secrets and must also be evaluable by the normal
+    // user running nixos-rebuild. Keep the JSON state private.
+    if path.extension().is_some_and(|extension| extension == "nix") {
+        use std::os::unix::fs::PermissionsExt;
+        tmp.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o644))?;
+    }
+    tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(|err| err.error)?;
+    fs::File::open(parent)?.sync_all()?;
 
     let written = fs::read_to_string(path)?;
     if written != content {
@@ -325,7 +272,11 @@ pub(crate) fn atomic_write(path: &str, content: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn delete_unlisted_nix(dir: &Path, keep_stems: &[&str]) -> anyhow::Result<()> {
+fn delete_unlisted_nix(
+    dir: &Path,
+    keep_stems: &[&str],
+    managed_stems: &[&str],
+) -> anyhow::Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
@@ -339,7 +290,7 @@ fn delete_unlisted_nix(dir: &Path, keep_stems: &[&str]) -> anyhow::Result<()> {
             continue;
         }
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if !keep_stems.contains(&stem) {
+        if managed_stems.contains(&stem) && !keep_stems.contains(&stem) {
             fs::remove_file(&path)?;
             tracing::info!("Removed stale {}", path.display());
         }
@@ -357,10 +308,14 @@ pub fn cleanup_stale_managed_files(
     keep_snippets: &[&str],
 ) -> anyhow::Result<()> {
     let keep_profile: Vec<&str> = keep_profile.into_iter().collect();
-    delete_unlisted_nix(profiles_dir, &keep_profile)?;
+    let profiles = default_profiles();
+    let managed_profiles: Vec<&str> = profiles.iter().map(|p| p.id.as_str()).collect();
+    delete_unlisted_nix(profiles_dir, &keep_profile, &managed_profiles)?;
 
     let keep_bundle_stems: Vec<&str> = keep_bundles.iter().map(String::as_str).collect();
-    delete_unlisted_nix(bundles_dir, &keep_bundle_stems)?;
+    let bundles = default_bundles();
+    let managed_bundles: Vec<&str> = bundles.iter().map(|b| b.id.as_str()).collect();
+    delete_unlisted_nix(bundles_dir, &keep_bundle_stems, &managed_bundles)?;
 
     if state_dir.is_dir() {
         for snippet in MANAGED_SNIPPETS {
@@ -532,6 +487,7 @@ mod tests {
 
         fs::write(profiles.join("gnome.nix"), "keep").unwrap();
         fs::write(profiles.join("kde.nix"), "stale").unwrap();
+        fs::write(profiles.join("my-local-module.nix"), "user file").unwrap();
         fs::write(bundles.join("gaming.nix"), "keep").unwrap();
         fs::write(bundles.join("office.nix"), "stale").unwrap();
         fs::write(state.join("hostname.nix"), "stale").unwrap();
@@ -553,6 +509,10 @@ mod tests {
 
         assert!(profiles.join("gnome.nix").exists());
         assert!(!profiles.join("kde.nix").exists());
+        assert_eq!(
+            fs::read_to_string(profiles.join("my-local-module.nix")).unwrap(),
+            "user file"
+        );
         assert!(bundles.join("gaming.nix").exists());
         assert!(!bundles.join("office.nix").exists());
         assert!(!state.join("hostname.nix").exists());

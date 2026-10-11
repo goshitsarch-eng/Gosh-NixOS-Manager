@@ -29,6 +29,8 @@ fn main() -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut input = stdin.lock();
+    // Keep this lock through Apply + WriteState, across requests in the session.
+    let mut mutation_lock = None;
 
     loop {
         match read_json_line(&mut input, MAX_HELPER_JSON_LINE) {
@@ -51,7 +53,25 @@ fn main() -> Result<()> {
                 }
 
                 let response = match serde_json::from_str::<HelperRequest>(&line) {
-                    Ok(request) => handle_request(request),
+                    Ok(request) => {
+                        if request_mutates(&request) && mutation_lock.is_none() {
+                            match acquire_mutation_lock(std::path::Path::new(
+                                "/run/lock/nixos-toolkit.lock",
+                            )) {
+                                Ok(lock) => mutation_lock = Some(lock),
+                                Err(error) => {
+                                    let response = HelperResponse::Error {
+                                        message: "Cannot start host operation; another toolkit session may be running".into(),
+                                        details: Some(error.to_string()),
+                                    };
+                                    writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
+                                    stdout.flush()?;
+                                    continue;
+                                }
+                            }
+                        }
+                        handle_request(request)
+                    }
                     Err(e) => {
                         tracing::error!("Failed to parse request: {}", e);
                         HelperResponse::Error {
@@ -85,6 +105,29 @@ fn main() -> Result<()> {
 
     tracing::info!("NixOS Toolkit Helper shutting down");
     Ok(())
+}
+
+fn request_mutates(request: &HelperRequest) -> bool {
+    matches!(
+        request,
+        HelperRequest::Apply { .. }
+            | HelperRequest::Generate { dry_run: false, .. }
+            | HelperRequest::EnsureDirectories
+            | HelperRequest::WriteState { .. }
+            | HelperRequest::RollbackGeneration { .. }
+            | HelperRequest::DeleteGenerations { .. }
+            | HelperRequest::RunMaintenance { .. }
+    )
+}
+
+fn acquire_mutation_lock(path: &std::path::Path) -> anyhow::Result<std::fs::File> {
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    lock.try_lock()?;
+    Ok(lock)
 }
 
 /// Read one stdin line without growing past `max` bytes.
@@ -211,6 +254,15 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
 #[cfg(test)]
 mod protocol_tests {
     use super::*;
+    #[test]
+    fn mutating_sessions_are_exclusive_and_unlock_on_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.lock");
+        let first = acquire_mutation_lock(&path).unwrap();
+        assert!(acquire_mutation_lock(&path).is_err());
+        drop(first);
+        assert!(acquire_mutation_lock(&path).is_ok());
+    }
     #[test]
     fn oversized_record_is_drained_and_next_request_remains_readable() {
         let mut input = io::Cursor::new(b"oversized\n{}\n");

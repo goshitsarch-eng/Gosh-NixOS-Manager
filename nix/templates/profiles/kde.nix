@@ -9,7 +9,7 @@
 
 {
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
 
   # Enable SDDM display manager with Wayland
@@ -46,6 +46,6 @@
   # XDG portal for Flatpak/sandboxed apps
   xdg.portal = {
     enable = true;
-    extraPortals = [ pkgs.xdg-desktop-portal-kde ];
+    extraPortals = [ pkgs.kdePackages.xdg-desktop-portal-kde ];
   };
 }

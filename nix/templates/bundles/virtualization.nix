@@ -20,10 +20,6 @@
       package = pkgs.qemu_kvm;
       runAsRoot = true;
       swtpm.enable = true;  # TPM emulation for Windows 11
-      ovmf = {
-        enable = true;
-        packages = [ pkgs.OVMFFull.fd ];
-      };
     };
   };
 

@@ -14,7 +14,7 @@
   };
 
   # Disable other display managers
-  services.displayManager.gdm.enable = lib.mkForce false;
+  services.xserver.displayManager.gdm.enable = lib.mkForce false;
   services.xserver.displayManager.lightdm.enable = lib.mkForce false;
 
   # Display manager
@@ -50,7 +50,7 @@
 
     # Theme and appearance
     nwg-look        # GTK settings
-    qt5ct
+    libsForQt5.qt5ct
     libsForQt5.qtstyleplugin-kvantum
   ];
 

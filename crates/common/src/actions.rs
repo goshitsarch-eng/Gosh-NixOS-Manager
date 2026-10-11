@@ -592,7 +592,8 @@ pub fn default_bundles() -> Vec<BundleDef> {
                 PackageDef::new("chromium", "Chromium"),
                 PackageDef::new("google-chrome", "Google Chrome"),
                 PackageDef::new("brave", "Brave"),
-                PackageDef::new("tor-browser-bundle-bin", "Tor Browser"),
+                PackageDef::new("tor-browser-bundle-bin", "Tor Browser")
+                    .with_nix_attr("tor-browser"),
             ],
             arm_compat: ArmCompat::Partial,
             arm_note: Some("Google Chrome binary not available on ARM".into()),
@@ -773,9 +774,9 @@ pub fn default_maintenance_actions() -> Vec<MaintenanceActionDef> {
         MaintenanceActionDef {
             id: "gc_all".into(),
             name: "Delete Old Generations".into(),
-            description: "Delete all old system generations (keeps current only)".into(),
+            description: "Delete old system generations, preserving the current and running system".into(),
             icon: "user-trash-full-symbolic".into(),
-            warning: Some("This will delete all old configurations. You won't be able to roll back to previous generations!".into()),
+            warning: Some("This deletes old system generations and collects unreachable store objects. The selected and running system generations are kept; deleted generations cannot be used for rollback.".into()),
             command: "nix-collect-garbage -d".into(),
         },
         MaintenanceActionDef {
