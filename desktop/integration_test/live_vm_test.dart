@@ -533,12 +533,15 @@ void main() {
             );
             record('network service: $unit');
           }
-          final wireguard = await Process.run('/run/current-system/sw/bin/wg', [
-            '--version',
-          ]);
-          expect(wireguard.exitCode, 0);
+          // NixOS installs wg only when an interface is configured. This UI
+          // enables the module and opens the port; peers/keys stay user-owned.
+          final network = File('/etc/nixos/nixos-toolkit/state/network.nix')
+              .readAsStringSync();
+          expect(network, contains('networking.wireguard.enable = true;'));
+          expect(network, contains('allowedTCPPorts = [ 18080 ];'));
+          expect(network, contains('allowedUDPPorts = [ 51821 ];'));
           record(
-            'WireGuard tools and custom firewall-port configuration activated',
+            'WireGuard module and custom firewall-port configuration activated',
           );
         } finally {
           c.configuration = saved;

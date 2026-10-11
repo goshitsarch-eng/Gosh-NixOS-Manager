@@ -20,12 +20,20 @@ The integration target drives real widgets, dialogs, clipboard, launchers, Rust 
 | Maintenance | Real GC, old-system-generation cleanup, optimization, full content verification and channel update all passed; store usage refreshed; user profile generations 1–3 survived cleanup |
 | Automated regression gate | 253 Rust tests, 28 Flutter tests, 18 isolated helper tests and the installer suite passed; rustfmt, Clippy, Dart formatter and analyzer passed |
 | Services | All 21 options built together. Nineteen were activated (automatic upgrade/GC timers excluded); NetworkManager, resolved, CUPS, Avahi, Syncthing, Docker, libvirt, PostgreSQL, Redis and earlyoom were confirmed active. Saved configuration restored; no failed systemd units afterward |
-| Desktop lifecycle | Fresh startup restored saved state; Follow System responded to real GNOME light/dark changes; keyboard/menu refresh and unsaved-close protection passed |
+| Network | SSH, Fail2ban, Tailscale and firewall units confirmed active; live firewall rules included TCP 18080 and UDP 51821; WireGuard module configuration checked. Final six-checkpoint run and restoration passed; earlier intermittent activation errors are recorded below |
+| Desktop lifecycle | Fresh startup restored saved state; Follow System responded to real GNOME light/dark changes; keyboard/menu refresh and unsaved-close protection passed on both Xwayland and native Wayland |
 | Release packages | Final Nix GUI/helper builds passed; packaged diagnostics passed on native Wayland, including helper discovery and Virtio GPU detection |
+| Cleanup | Empty selection applied successfully; QA packages removed; normal polkit authentication restored; no failed systemd units or surviving privileged test commands; final packaged app left running |
 
-Additional network activation checks and final VM cleanup are pending at this checkpoint.
+The ten live phases contain 129 successful checkpoints. The final installed helper also passed a separate authenticated cancellation probe, stopping store verification about 53 milliseconds after the cancellation request. The integration target passed Dart analysis and formatting after its final correction.
 
 The update action created a new root channel generation with the same nixpkgs revision. The original channel selection was restored afterward. The original system closure remains protected from GC. Boot-mode checks exercised the bootloader configuration; a power-cycle test has not been performed.
+
+The app/helper and managed import remain installed for continued use. Test services and package selections were removed; the temporary polkit rule was deleted and polkit restarted. The original host backup remains at `/var/lib/nixos-toolkit-qa-FMTuQ4Z6`, protected by root-only permissions, with its matching GC root retained. Local test logs, checkpoint JSON, build paths, diagnostics and the final window screenshot are copied to ignored `dist/qa-evidence/live/`; host configuration backups are not committed.
+
+Two earlier network attempts encountered a host activation error: `nixos-rebuild switch` reported a missing D-Bus reply for firewall reload, while the firewall journal recorded a successful reload. One occurred while enabling the settings and one during restoration. The app surfaced the nonzero exit and restored managed files; reapplying the intended selection recovered the host. A final complete network run passed without that error. This intermittent NixOS activation issue remains a release caveat; managed-file recovery does not undo every partially activated service. Logs from both unsuccessful attempts are retained with the local evidence.
+
+The initial network test also assumed enabling WireGuard installs `wg`. The NixOS module installs those tools only after an interface is configured. The corrected test checks the app's stated behavior: enabling the module and opening the configured port. It does not claim a working tunnel without user-provided peers and keys.
 
 ## Defects found by live testing
 
@@ -46,7 +54,7 @@ NIXOS_TOOLKIT_LIVE_VM_QA=1 GDK_BACKEND=x11 \
   flutter test integration_test/live_vm_test.dart -d linux --dart-define=QA_PHASE=ui
 ```
 
-Other phases are `apply`, `generations`, `failure`, `cancel`, `maintenance`, `services`, `lifecycle`, and `cleanup`. Run apply before generation checks; the generation phase needs a previous QA generation. Maintenance really collects store paths, removes old system generations, optimizes/verifies the store and updates inputs. The services phase builds all options, activates services, and restores the saved configuration. It does not activate the automatic upgrade/GC timers alongside its own mutations. Cleanup applies an empty selection. Evidence defaults to `/tmp/toolkit-live-evidence/`.
+Other phases are `apply`, `generations`, `failure`, `cancel`, `maintenance`, `services`, `network`, `lifecycle`, and `cleanup`. Run apply before generation checks; the generation phase needs a previous QA generation. Maintenance really collects store paths, removes old system generations, optimizes/verifies the store and updates inputs. The services phase builds all options, activates services, and restores the saved configuration. It does not activate the automatic upgrade/GC timers alongside its own mutations. Network activates VPN/firewall services and restores the saved configuration. Cleanup applies an empty selection. Evidence defaults to `/tmp/toolkit-live-evidence/`.
 
 ## Scope limits
 
