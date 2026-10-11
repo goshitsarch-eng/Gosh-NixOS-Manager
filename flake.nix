@@ -242,6 +242,13 @@
             reference = reference-gui;
             core = desktop-core;
 
+            installer = import ./packaging/nix/installer.nix {
+              inherit pkgs;
+              gui = nixos-toolkit-gui;
+              helper = nixos-toolkit-helper;
+              version = "0.1.0";
+            };
+
             full = pkgs.symlinkJoin {
               name = "nixos-toolkit-full";
               paths = [ nixos-toolkit-gui nixos-toolkit-helper templateFiles ];

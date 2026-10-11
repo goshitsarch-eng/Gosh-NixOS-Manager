@@ -50,6 +50,13 @@ The diagnostic checks real bridge/catalog/preview calls and read-only host capab
 
 ## Nix packaging
 
+For the one-command prebuilt installation and signed Nix release process, see
+[INSTALLING.md](INSTALLING.md). `nix build .#installer` also builds the matching
+app/helper and the privileged integration program. `scripts/test-installer-isolated.py`
+checks the bootstrap, configuration editing, repeat install, uninstall, failed
+build/activation recovery, interrupted installs and concurrent edits in private
+Bubblewrap filesystems.
+
 ```sh
 nix develop
 nix build .#gui
@@ -102,7 +109,7 @@ Flatpak grants display sockets, IPC and DRI, and the Flatpak host bridge for the
 
 ## CI and release review
 
-The GitHub workflow verifies Cargo and Flutter, generates a native archive, tests its packaged API, builds/installs Flatpak and runs diagnostics inside its sandbox. A `v*` tag creates a **draft** release only after these jobs succeed. Artifacts are unsigned; publication and any future signing remain release-owner actions. Workflow configuration was inspected locally; remote execution has not been claimed.
+The GitHub workflow verifies Cargo and Flutter, generates a native archive, tests its packaged API, builds/installs Flatpak and runs diagnostics inside its sandbox. On tags/manual runs it also packages a signed prebuilt Nix runtime cache using the repository secret `NIXOS_TOOLKIT_CACHE_SIGNING_KEY`. A `v*` tag creates a **draft** release only after the required jobs succeed. Nix cache objects are signed; the separate Linux tar/Flatpak artifacts have checksums but are unsigned. Publication remains a release-owner action. While the account billing lock prevents CI from running, locally built releases must explicitly record their local validation and the missing hosted gate.
 
 ## Additional host safety checks
 

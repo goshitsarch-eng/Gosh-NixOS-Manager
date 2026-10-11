@@ -214,3 +214,27 @@ The welcome guidance was inspected in the running app. Local screenshots,
 transport/build logs and host checks are retained in ignored
 `dist/qa-evidence/safety/`. GitHub account billing remains an external CI blocker;
 these local results do not establish a passing hosted workflow.
+
+## Prebuilt NixOS installer: 2026-10-11
+
+The source-building alias installer was replaced with a versioned, signed Nix
+download and an installer stored with the matching app/helper. Twenty isolated
+tests passed, including malformed/unavailable manifests, disabled compilation
+fallback, conservative import editing, repeat install, uninstall, symlink/manual
+file protection, failed build/activation recovery, interrupted-install recovery,
+external edits during a build, explicit flake targets and helper lock contention.
+Generated configuration edits also parsed successfully with real Nix.
+
+The VM completed real install, repeat install, uninstall and reinstall. The
+menu entry was installed, running and boot systems agreed, no units failed,
+the firewall remained active, and both managed selection/state hashes matched
+the original values. Uninstall retained applied settings. Configuration backups
+remain root-private. The previous QA-only package declarations were removed
+from `toolkit-qa.nix` to avoid duplicate ownership; their original version is
+retained in the existing private VM backup directory.
+
+The release cache contains the complete x86_64 runtime dependency set, compressed
+to about 184 MiB before reuse of existing store paths. Nix verified its signed
+contents and rejected it when the release public key was omitted. This does not
+establish an installation-time guarantee on a fresh host: system integration
+still requires NixOS evaluation, any host-specific builds, and activation.

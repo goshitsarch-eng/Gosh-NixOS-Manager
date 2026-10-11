@@ -1,120 +1,109 @@
 #!/usr/bin/env bash
-# NixOS Toolkit Installer
-# https://github.com/goshitsarch-eng/Gosh-NixOS-Manager
+# Download a signed, prebuilt NixOS Toolkit installer. Run as your normal user.
+set -euo pipefail
 
-set -e
+RELEASES=https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/releases
+# Substituted with the repository's public key by the release packager.
+PUBLIC_KEY='@CACHE_PUBLIC_KEY@'
+VERSION='@RELEASE_VERSION@'
 
-REPO="github:goshitsarch-eng/Gosh-NixOS-Manager"
-ALIAS_NAME="nixos-toolkit"
+usage() {
+    cat <<'EOF'
+NixOS Toolkit — prebuilt installation
+Usage: bash install.sh [--no-launch] [--flake /etc/nixos#HOST]
+                       [--version vVERSION] [--uninstall | --recover]
 
-echo "==================================="
-echo "  NixOS Toolkit Installer"
-echo "==================================="
-echo ""
-
-# Check if running on NixOS
-if [ ! -f /etc/NIXOS ]; then
-    echo "Warning: This doesn't appear to be a NixOS system."
-    echo "The toolkit is designed for NixOS."
-    read -p "Continue anyway? [y/N] " -n 1 -r < /dev/tty
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
-# Explicit feature flags also work when already enabled in the host config.
-# `nix flake --version` does not establish that either feature is enabled.
-NIX_RUN_CMD="nix --extra-experimental-features 'nix-command flakes' run $REPO"
-
-# Detect shell config file
-detect_shell() {
-    case "${SHELL:-}" in
-        */zsh) echo ".zshrc" ;;
-        */bash) echo ".bashrc" ;;
-        */fish) echo ".config/fish/config.fish" ;;
-        *) echo ".bashrc" ;;
-    esac
+Installs the app, authenticated helper and menu entry, then opens the app.
+Uses /etc/nixos/configuration.nix. Flakes require an explicit local host target
+that imports that file. Existing configuration changes are activated too.
+Uninstall removes the application and helper; applied system settings remain.
+EOF
 }
 
-echo "The launcher enables nix-command and flakes for this command only."
-echo "No system Nix settings will be changed."
-echo ""
-
-# Offer to create alias
-echo "-----------------------------------"
-read -p "Create shell alias '$ALIAS_NAME'? [Y/n] " -n 1 -r < /dev/tty
-echo ""
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    SHELL_RC="$HOME/$(detect_shell)"
-
-    # Check if alias already exists
-    if grep -qE "(alias|function) $ALIAS_NAME[=;[:space:]]" "$SHELL_RC" 2>/dev/null; then
-        echo "Alias already exists in $SHELL_RC"
-    else
-        mkdir -p "$(dirname "$SHELL_RC")"
-        echo "" >> "$SHELL_RC"
-        echo "# NixOS Toolkit" >> "$SHELL_RC"
-        if [[ "${SHELL:-}" == */fish ]]; then
-            echo "function $ALIAS_NAME; nix --extra-experimental-features 'nix-command flakes' run $REPO; end" >> "$SHELL_RC"
-        else
-            echo "alias $ALIAS_NAME='nix --extra-experimental-features \"nix-command flakes\" run $REPO'" >> "$SHELL_RC"
-        fi
-        echo "✓ Added alias to $SHELL_RC"
-    fi
-    echo ""
+launch=true
+action=install
+args=()
+while (($#)); do
+    case "$1" in
+        --help|-h) usage; exit 0 ;;
+        --no-launch) launch=false ;;
+        --version) [[ $# -ge 2 ]] || { usage; exit 1; }; VERSION=$2; shift ;;
+        --flake) [[ $# -ge 2 ]] || { usage; exit 1; }; args+=(--flake "$2"); shift ;;
+        --uninstall) action=uninstall; launch=false ;;
+        --recover) action=recover; launch=false ;;
+        *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+    esac
+    shift
+done
+[[ $EUID -ne 0 ]] || { echo 'Run this as your normal desktop user; it asks for sudo itself.' >&2; exit 1; }
+[[ -f /etc/NIXOS ]] || { echo 'This installer requires NixOS.' >&2; exit 1; }
+for command in curl nix-store sudo mktemp; do
+    command -v "$command" >/dev/null || { echo "Required command unavailable: $command" >&2; exit 1; }
+done
+case "$(uname -m)" in
+    x86_64) system=x86_64-linux ;;
+    *) echo 'Prebuilt installation currently supports x86_64 NixOS only.' >&2; exit 1 ;;
+esac
+if [[ -f /etc/nixos/flake.nix && ${#args[@]} -eq 0 && $action == install ]]; then
+    echo 'This host uses flakes. Rerun with --flake /etc/nixos#YOUR_HOST.' >&2
+    echo 'The selected host must import /etc/nixos/configuration.nix.' >&2
+    exit 1
 fi
 
-# Offer to create desktop entry
-echo "-----------------------------------"
-read -p "Create desktop entry (application menu)? [Y/n] " -n 1 -r < /dev/tty
-echo ""
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    DESKTOP_DIR="$HOME/.local/share/applications"
-    mkdir -p "$DESKTOP_DIR"
-
-    cat > "$DESKTOP_DIR/nixos-toolkit.desktop" << EOF
-[Desktop Entry]
-Name=NixOS Toolkit
-Comment=Configure NixOS with a graphical interface
-Exec=nix --extra-experimental-features "nix-command flakes" run $REPO
-Icon=preferences-system
-Terminal=false
-Type=Application
-Categories=System;Settings;
-Keywords=nixos;configuration;settings;
-EOF
-
-    echo "✓ Created desktop entry at $DESKTOP_DIR/nixos-toolkit.desktop"
-    echo "The app should now appear in your application menu."
+# A checkout can bootstrap the published release, using the checked-in key.
+if [[ $PUBLIC_KEY == '@CACHE_PUBLIC_KEY@' ]]; then
+    script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    [[ -f $script_dir/packaging/nix/cache-public-key ]] || {
+        echo 'Use install.sh from a published GitHub release, or a complete checkout.' >&2; exit 1;
+    }
+    PUBLIC_KEY=$(<"$script_dir/packaging/nix/cache-public-key")
 fi
-
-echo ""
-echo "==================================="
-echo "  Installation complete!"
-echo "==================================="
-echo ""
-
-# Offer to run immediately
-echo "-----------------------------------"
-read -p "Run NixOS Toolkit now? [Y/n] " -n 1 -r < /dev/tty
-echo ""
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    echo ""
-    echo "Starting NixOS Toolkit..."
-    echo "Command: $NIX_RUN_CMD"
-    echo ""
-    exec nix --extra-experimental-features "nix-command flakes" run "$REPO"
+[[ $VERSION == '@RELEASE_VERSION@' ]] && VERSION=latest
+if [[ $VERSION == latest ]]; then
+    manifest_url="$RELEASES/latest/download/release-$system.txt"
+elif [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
+    manifest_url="$RELEASES/download/$VERSION/release-$system.txt"
 else
-    echo ""
-    echo "To run later, use:"
-    echo ""
-    echo "  $NIX_RUN_CMD"
-    echo ""
-    if grep -qE "(alias|function) $ALIAS_NAME[=;[:space:]]" "$HOME/$(detect_shell)" 2>/dev/null; then
-        echo "Or after reloading your shell:"
-        echo ""
-        echo "  $ALIAS_NAME"
-        echo ""
+    echo 'Invalid release version.' >&2; exit 1
+fi
+
+umask 077
+temporary=$(mktemp -d)
+trap 'rm -rf -- "$temporary"' EXIT
+echo 'Finding the prebuilt NixOS Toolkit release…'
+curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --retry 3 --connect-timeout 15 --max-time 120 "$manifest_url" -o "$temporary/release"
+mapfile -t manifest < "$temporary/release"
+[[ ${#manifest[@]} -eq 4 && ${manifest[0]} == nixos-toolkit-release-v1 && \
+   ${manifest[1]} =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ && \
+   ${manifest[2]} == "$system" && \
+   ${manifest[3]} =~ ^/nix/store/[0-9a-z]{32}-nixos-toolkit-installer-[0-9A-Za-z.+-]+$ ]] || {
+    echo 'Invalid release manifest; nothing was installed.' >&2; exit 1;
+}
+[[ $VERSION == latest || $VERSION == "${manifest[1]}" ]] || {
+    echo 'Release manifest version mismatch.' >&2; exit 1;
+}
+version=${manifest[1]}
+installer=${manifest[3]}
+cache="$RELEASES/download/$version"
+echo "NixOS Toolkit $version: $action"
+echo 'The app and helper are prebuilt. NixOS will evaluate and activate your system configuration.'
+echo 'Your configuration is backed up before changes. The desktop app runs without root privileges.'
+sudo -v
+# Trust is scoped to this download, not added permanently to nix.conf. Explicit
+# output paths and disabled builders prevent an unavailable app falling back to
+# compiling a toolchain on the user's computer.
+sudo nix-store --realise "$installer" --option substituters "https://cache.nixos.org $cache" \
+    --option extra-trusted-public-keys "$PUBLIC_KEY" --option require-sigs true \
+    --option max-jobs 0 --option builders '' --add-root "$temporary/installer" --indirect
+sudo "$installer/bin/nixos-toolkit-install" "$action" "${args[@]}"
+if $launch; then
+    if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
+        echo 'Opening NixOS Toolkit…'
+        log_dir=${XDG_STATE_HOME:-$HOME/.local/state}/nixos-toolkit
+        mkdir -p "$log_dir"
+        nohup /run/current-system/sw/bin/nixos-toolkit >"$log_dir/launcher.log" 2>&1 </dev/null &
+    else
+        echo 'Installed. Open NixOS Toolkit from your desktop application menu.'
     fi
 fi

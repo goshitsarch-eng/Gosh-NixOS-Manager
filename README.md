@@ -11,6 +11,21 @@ notes. Only tools with managed installation support appear in the catalog.
 ![Linux Light appearance](docs/screenshots/linux-light.png)
 ![Linux Dark appearance](docs/screenshots/linux-dark.png)
 
+## Install on NixOS
+
+The prebuilt x86_64 installer downloads signed Nix packages, installs the matching
+helper and application-menu entry, and launches the app. Run it as your normal
+user; it asks for sudo itself:
+
+```sh
+curl -fsSL https://github.com/goshitsarch-eng/Gosh-NixOS-Manager/releases/latest/download/install.sh | bash
+```
+
+See [INSTALLING.md](INSTALLING.md) for supported configurations, explicit flake
+targets, updates, private backups, recovery and uninstall. The app is prebuilt;
+NixOS still builds and activates the system integration. ARM64 needs separate
+validation before prebuilt releases are offered.
+
 ## Develop
 
 With stable Flutter, Rust and the Linux dependencies in [BUILDING.md](BUILDING.md):
