@@ -238,3 +238,16 @@ to about 184 MiB before reuse of existing store paths. Nix verified its signed
 contents and rejected it when the release public key was omitted. This does not
 establish an installation-time guarantee on a fresh host: system integration
 still requires NixOS evaluation, any host-specific builds, and activation.
+
+Release `v0.1.0` was published after all 427 uploaded assets matched GitHub's
+server-reported SHA-256 digests. The public installer and architecture manifest
+matched the tested files, and Nix verified the installer's signed contents via
+the public release-cache URL. The documented curl-to-bash command completed in
+an interactive terminal and automatically opened the GUI as UID 1000. The live
+app showed NixOS 25.05, integrated configuration, and an available helper. The
+menu entry and icon were installed through the system package. Evidence is in
+ignored `dist/qa-evidence/installer/`.
+
+The tagged hosted workflow still did not start: its annotation reports the
+repository owner's billing lock. The release notes explicitly identify this as
+a locally validated release, without a successful hosted CI gate.
