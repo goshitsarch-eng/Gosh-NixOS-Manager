@@ -86,8 +86,23 @@ The GitHub workflow verifies Cargo and Flutter, generates a native archive, test
 
 ## Additional host safety checks
 
-`nix develop .#qa` supplies the smaller Rust/Python/Bubblewrap/Git/nixos-rebuild environment. After building helper/core, run `scripts/test-flake-rebuild.py /path/to/nixpkgs` to evaluate real plain and Git flakes in isolated configuration namespaces, including newly generated profile/bundle modules and staged-content preservation. It never activates the host. `tests/nixos/reboot-recovery.nix` runs actual bootloader/reboot/rollback/recovery operations in a disposable guest. The prepared workflow adds this check to manual/tag runs before a release draft.
+`nix develop .#qa` supplies the smaller Rust/Python/Bubblewrap/Git/nixos-rebuild environment. After building helper/core, run `scripts/test-flake-rebuild.py /path/to/nixpkgs` to evaluate real plain and Git flakes in isolated configuration namespaces, including newly generated profile/bundle modules and staged-content preservation. It never activates the host. `tests/nixos/reboot-recovery.nix` runs actual bootloader/reboot/rollback/recovery operations in a disposable guest. The published workflow runs this check on manual/tag runs before a release draft.
 
 On a backed-up disposable NixOS VM, the explicitly opted-in `NIXOS_TOOLKIT_LIVE_VM_QA=1 dart desktop/tool/qa_flatpak_host.dart` test exercises the Dart session transport through the installed Flatpak with normal polkit authentication. It also requires the backup marker described in the live QA report and performs real Build/state writes and a cancelled store verification.
 
-GitHub Actions currently cannot start because of an account billing lock. GitHub also rejected the prepared workflow update because the current OAuth credential lacks `workflow` scope. The edit remains local, with a backup on local branch `qa/preserved-workflow-fixes-7207549`; it adds isolated recovery, real flake, pinned module-matrix and reboot checks. The test runners themselves are pushed, and local evidence is recorded in the live QA report. Publish the workflow and pass the remote gate after access is restored.
+The workflow update was published in `89d4450` using the connected GitHub app's existing write access. It adds isolated recovery, real flake, pinned module-matrix and reboot checks. The terminal's OAuth credential still lacks `workflow` scope: future workflow edits can use the connected app, or an account owner can grant that scope with `gh auth refresh -h github.com -s workflow`. GitHub Actions itself remains blocked by an account billing lock, confirmed on the new workflow run. The remote gate must pass after the account is restored.
+
+## NixOS 25.05 activation compatibility
+
+Enabling the toolkit's default NixOS module also enables `programs.nixos-toolkit.serializeDbusReload` on NixOS 25.05. It patches that host's activation program to finish reloading D-Bus before submitting other reload requests. This prevents the observed firewall request timeout when D-Bus pauses on NSS lookups. Service failures still propagate through the normal activation result. The patch is disabled on newer releases and when the toolkit module is disabled.
+
+For an existing native or Flatpak installation, the host can import the compatibility module separately from the toolkit flake:
+
+```nix
+imports = [ toolkit.nixosModules.activationReloadCompat ];
+programs.nixos-toolkit.serializeDbusReload = true;
+```
+
+For a classic configuration, import `nix/modules/activation-reload-compat.nix` from a trusted checkout, keeping its adjacent `nix/patches` directory, and enable the same option. Rebuild the host normally to install it. This module explicitly targets NixOS 25.05; remove the standalone option when upgrading to a newer release.
+
+The opt-in `scripts/test-network-activation-live.py` requires root, `NIXOS_TOOLKIT_LIVE_VM_QA=1`, an existing VM backup marker and an active iptables firewall. It alternates Tailscale/Fail2ban/WireGuard settings and test ports using the helper and direct CLI, then restores managed files, state and system selections. Its default six cycles per method perform 24 real activations. Run it only on a backed-up disposable VM.

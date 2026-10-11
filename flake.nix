@@ -312,6 +312,8 @@
           cfg = config.programs.nixos-toolkit;
         in
         {
+          imports = [ ./nix/modules/activation-reload-compat.nix ];
+
           options.programs.nixos-toolkit = {
             enable = lib.mkEnableOption "NixOS Toolkit GUI management application";
 
@@ -329,6 +331,8 @@
           };
 
           config = lib.mkIf cfg.enable {
+            programs.nixos-toolkit.serializeDbusReload =
+              lib.mkDefault (config.system.nixos.release == "25.05");
             security.polkit.enable = true;
             environment.systemPackages = [
               cfg.package
@@ -336,6 +340,8 @@
             ];
           };
         };
+
+      nixosModules.activationReloadCompat = import ./nix/modules/activation-reload-compat.nix;
 
       # Overlay
       overlays.default = final: prev: {

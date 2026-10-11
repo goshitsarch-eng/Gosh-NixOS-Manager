@@ -1,0 +1,16 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1771,6 +1771,13 @@
+                     exit_code = 4;
+                 }
+             }
++
++            // ReloadConfig can block dbus-daemon on NSS lookups. Do not send
++            // another synchronous method call through that bus until its
++            // reload job has finished. Keep the normal job failure checks.
++            if matches!(unit, "dbus.service" | "dbus-broker.service") {
++                block_on_jobs(&dbus_conn, &submitted_jobs);
++            }
+         }
+ 
+         block_on_jobs(&dbus_conn, &submitted_jobs);
