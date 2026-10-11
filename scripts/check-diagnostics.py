@@ -19,4 +19,5 @@ assert v['api_version'] == 1 and v['profile_count'] == 13 and v['bundle_count'] 
 assert v['preview_bytes'] > 0 and v['profile_preview_bytes'] > 0
 if '--flatpak' in sys.argv:
     assert v['host']['flatpak'] is True
+    assert v['host_bridge_stdio'] is True, 'Flatpak host stdin/stdout transport failed'
 print('Packaged Rust API, catalogs, previews and host diagnostics passed')

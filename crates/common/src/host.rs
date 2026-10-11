@@ -144,10 +144,13 @@ pub fn classic_integration_snippet() -> String {
     r#"# Step 1: Create the toolkit directory (run once):
 sudo mkdir -p /etc/nixos/nixos-toolkit/state
 
-# Step 2: Create a placeholder file (run once):
-sudo tee /etc/nixos/nixos-toolkit/state/selected.nix > /dev/null << 'EOF'
-{ config, lib, pkgs, ... }: { imports = []; }
-EOF
+# Step 2: Create a placeholder only if it is missing:
+sudo sh -c '
+  if [ ! -e "$1" ]; then
+    set -C
+    printf "%s\n" "{ config, lib, pkgs, ... }: { imports = []; }" > "$1"
+  fi
+' sh /etc/nixos/nixos-toolkit/state/selected.nix
 
 # Step 3: Add this import to /etc/nixos/configuration.nix:
   imports =
@@ -167,10 +170,13 @@ pub fn flake_integration_snippet() -> String {
     r#"# Step 1: Create the toolkit directory (run once):
 sudo mkdir -p /etc/nixos/nixos-toolkit/state
 
-# Step 2: Create a placeholder file (run once):
-sudo tee /etc/nixos/nixos-toolkit/state/selected.nix > /dev/null << 'EOF'
-{ config, lib, pkgs, ... }: { imports = []; }
-EOF
+# Step 2: Create a placeholder only if it is missing:
+sudo sh -c '
+  if [ ! -e "$1" ]; then
+    set -C
+    printf "%s\n" "{ config, lib, pkgs, ... }: { imports = []; }" > "$1"
+  fi
+' sh /etc/nixos/nixos-toolkit/state/selected.nix
 
 # Step 3: Add this import to your modules list in /etc/nixos/flake.nix:
   modules = [
@@ -178,8 +184,14 @@ EOF
     ./nixos-toolkit/state/selected.nix  # <-- Add this line
   ];
 
-# Step 4: Rebuild your system:
-sudo nixos-rebuild switch --flake .#"#
+# Step 4: If /etc/nixos uses Git, track the integration files once:
+# Review your changes, then run:
+#   sudo git -C /etc/nixos add flake.nix nixos-toolkit/state/selected.nix
+# Track configuration.nix too if you added the import there.
+# Generated modules are embedded in selected.nix; the app never stages files.
+
+# Step 5: Rebuild your system:
+sudo nixos-rebuild switch --flake /etc/nixos"#
         .to_string()
 }
 

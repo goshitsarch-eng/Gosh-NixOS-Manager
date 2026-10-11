@@ -23,6 +23,7 @@ class RecordingHelper implements HelperApi {
   final Map<String, dynamic> state;
   bool failSave = false;
   bool failRead = false;
+  Map<String, dynamic>? recovery;
   int applies = 0;
   String? rebuild;
   @override
@@ -31,6 +32,13 @@ class RecordingHelper implements HelperApi {
     Map<String, dynamic>? payload,
   ]) async {
     if (failRead) throw const HelperFailure('Could not load existing state');
+    if (type == 'GetRecovery') {
+      return {'type': 'RecoveryStatus', 'payload': recovery};
+    }
+    if (type == 'RecoverApply') {
+      recovery = null;
+      return {'type': 'Ok'};
+    }
     return {'type': 'State', 'payload': state};
   }
 
@@ -112,6 +120,38 @@ void main() {
     expect(controller.preview, contains('51820'));
     expect(controller.error, isNull);
   });
+
+  test(
+    'unfinished apply survives dismissed errors and blocks another apply',
+    () async {
+      helper.recovery = {'message': 'An apply did not finish'};
+      await controller.refresh();
+      controller.clearError();
+      await controller.apply();
+      expect(helper.applies, 0);
+      expect(controller.recovery, isNotNull);
+      expect(controller.error, contains('unfinished apply'));
+      await controller.recoverApply();
+      expect(controller.recovery, isNull);
+      expect(controller.error, isNull);
+      expect(controller.dirty, isFalse);
+    },
+  );
+
+  test(
+    'failed recovery inspection blocks apply until refresh succeeds',
+    () async {
+      helper.failRead = true;
+      await controller.refresh();
+      controller.clearError();
+      await controller.apply();
+      expect(helper.applies, 0);
+      expect(controller.recoveryUnknown, isTrue);
+      helper.failRead = false;
+      await controller.refresh();
+      expect(controller.recoveryUnknown, isFalse);
+    },
+  );
   test('bundle package deselection reaches authoritative preview', () async {
     final fonts = controller
         .catalog('bundles')

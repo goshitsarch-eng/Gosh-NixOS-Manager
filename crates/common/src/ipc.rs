@@ -88,6 +88,11 @@ pub enum HelperRequest {
 
     /// Get disk usage information
     GetDiskUsage,
+
+    /// Inspect an unfinished apply, including after a helper or app crash.
+    GetRecovery,
+    /// Restore the saved managed files and previous running/boot systems.
+    RecoverApply,
 }
 
 /// Type of nixos-rebuild to run
@@ -165,10 +170,16 @@ pub enum HelperResponse {
     },
 
     /// Log output during apply
-    Log { level: LogLevel, message: String },
+    Log {
+        level: LogLevel,
+        message: String,
+    },
 
     /// Apply completed
-    ApplyComplete { success: bool, message: String },
+    ApplyComplete {
+        success: bool,
+        message: String,
+    },
 
     /// Current application state
     State(AppState),
@@ -185,6 +196,19 @@ pub enum HelperResponse {
 
     /// Disk usage information
     DiskUsage(DiskUsageInfo),
+
+    RecoveryStatus(Option<RecoveryInfo>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryInfo {
+    pub message: String,
+    pub backup_path: String,
+    pub files_restored: bool,
+    pub previous_running: Option<String>,
+    pub previous_selected: Option<String>,
+    pub current_running: Option<String>,
+    pub current_selected: Option<String>,
 }
 
 /// Information about a NixOS generation

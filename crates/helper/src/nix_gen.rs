@@ -188,6 +188,13 @@ pub fn generate_all_files(
         keep_snippets.push("unfree.nix");
     }
 
+    // Git flakes exclude newly generated files until they are tracked. Keep the
+    // already integrated selected.nix self-contained without changing the Git
+    // index or including unrelated untracked files in the flake's store source.
+    if Path::new("/etc/nixos/flake.nix").exists() {
+        inline_selected_imports(&mut files);
+    }
+
     if !dry_run {
         for file in files.iter().skip(1).chain(files.first()) {
             atomic_write(&file.path, &file.content)?;
@@ -203,6 +210,40 @@ pub fn generate_all_files(
     }
 
     Ok(files)
+}
+
+fn inline_selected_imports(files: &mut [GeneratedFile]) {
+    let modules: HashMap<String, String> = files
+        .iter()
+        .skip(1)
+        .map(|file| {
+            let relative =
+                if let Some(name) = file.path.strip_prefix(&format!("{}/", paths::STATE_DIR)) {
+                    format!("./{name}")
+                } else {
+                    format!(
+                        "../{}",
+                        file.path
+                            .strip_prefix(&format!("{}/", paths::MANAGED_DIR))
+                            .expect("generated managed path")
+                    )
+                };
+            let module = format!(
+                "    # nixos-toolkit-inline-module: {relative}\n    (\n{}\n    )",
+                file.content
+            );
+            (relative, module)
+        })
+        .collect();
+    if let Some(selected) = files.first_mut() {
+        selected.content = selected
+            .content
+            .lines()
+            .map(|line| modules.get(line.trim()).map(String::as_str).unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+    }
 }
 
 const MANAGED_SNIPPETS: &[&str] = &[

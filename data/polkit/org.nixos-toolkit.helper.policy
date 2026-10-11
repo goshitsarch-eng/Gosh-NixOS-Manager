@@ -21,31 +21,4 @@
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 
-  <action id="org.nixos-toolkit.helper.write-config">
-    <description>Write NixOS configuration files</description>
-    <description xml:lang="en">Write NixOS configuration files</description>
-    <message>Authentication is required to write NixOS configuration files</message>
-    <message xml:lang="en">Authentication is required to write NixOS configuration files</message>
-    <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
-    </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/run/current-system/sw/bin/nixos-toolkit-helper</annotate>
-    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
-  </action>
-
-  <action id="org.nixos-toolkit.helper.rebuild">
-    <description>Run nixos-rebuild</description>
-    <description xml:lang="en">Run nixos-rebuild to apply system configuration</description>
-    <message>Authentication is required to rebuild the NixOS system</message>
-    <message xml:lang="en">Authentication is required to rebuild the NixOS system</message>
-    <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin</allow_active>
-    </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/run/current-system/sw/bin/nixos-toolkit-helper</annotate>
-    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
-  </action>
 </policyconfig>

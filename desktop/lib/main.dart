@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/core_api.dart';
+import 'services/helper_session.dart';
 import 'services/preferences.dart';
 import 'state/app_controller.dart';
 import 'ui/app_shell.dart';
@@ -30,6 +31,8 @@ Future<void> main(List<String> arguments) async {
               .length,
           'preview_bytes': utf8.encode(preview['content'] as String).length,
           'host': host,
+          if (host['flatpak'] == true)
+            'host_bridge_stdio': await probeFlatpakStdio(),
         }),
       );
       await stdout.flush();

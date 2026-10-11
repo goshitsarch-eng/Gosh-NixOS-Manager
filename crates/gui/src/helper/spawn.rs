@@ -136,14 +136,7 @@ impl SpawnSpec {
             if let Some(path) = inputs.probed_helper {
                 return Self {
                     program: PathBuf::from("flatpak-spawn"),
-                    args: vec![
-                        "--host".into(),
-                        "--forward-fd=0".into(),
-                        "--forward-fd=1".into(),
-                        "--".into(),
-                        "pkexec".into(),
-                        path,
-                    ],
+                    args: vec!["--host".into(), "--".into(), "pkexec".into(), path],
                     extra_env,
                     remove_env,
                     templates_dir,
@@ -325,7 +318,7 @@ mod tests {
         assert!(spec.helper_available);
         assert_eq!(spec.program, PathBuf::from("flatpak-spawn"));
         assert!(spec.args.iter().any(|a| a == "pkexec"));
-        assert!(spec.args.iter().any(|a| a == "--forward-fd=0"));
+        assert!(!spec.args.iter().any(|a| a.starts_with("--forward-fd")));
         assert!(spec.args.iter().any(|a| a == "--host"));
     }
 

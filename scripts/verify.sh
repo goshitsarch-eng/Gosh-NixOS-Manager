@@ -9,7 +9,7 @@ cargo build --locked -p desktop-core -p helper
 python3 scripts/sync-pubspec-lock.py --check
 cd desktop
 flutter pub get --enforce-lockfile
-dart format --output=none --set-exit-if-changed lib test
+dart format --output=none --set-exit-if-changed lib test integration_test tool
 flutter analyze
 NIXOS_TOOLKIT_CORE_LIBRARY="$ROOT/target/debug/libnixos_toolkit_core.so" flutter test
 cd "$ROOT"

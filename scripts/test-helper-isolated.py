@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,7 +42,7 @@ class HelperTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="toolkit-helper-qa-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for name in ["etc/nixos", "run/lock", "profiles", "bin"]:
+        for name in ["etc/nixos", "run/lock", "profiles", "bin", "var", "gcroots"]:
             (self.root / name).mkdir(parents=True)
         (self.root / "etc/NIXOS").touch()
         (self.root / "etc/nixos/configuration.nix").write_text(
@@ -60,7 +61,8 @@ if name == 'nixos-rebuild':
     assert pathlib.Path('/etc/nixos/nixos-toolkit/state/selected.nix').exists()
     print('building fixture', flush=True)
     time.sleep(float(os.environ.get('QA_REBUILD_DELAY', '0')))
-    sys.exit(int(os.environ.get('QA_REBUILD_EXIT', '0')))
+    code = os.environ.get('QA_PREFLIGHT_EXIT' if 'dry-build' in sys.argv else 'QA_REBUILD_EXIT', os.environ.get('QA_REBUILD_EXIT', '0'))
+    sys.exit(int(code))
 if name == 'nix-env' and '--list-generations' in sys.argv:
     print('1 2026-10-01 12:00:00\\n2 2026-10-02 12:00:00 (current)')
 elif name == 'du':
@@ -87,6 +89,8 @@ elif name == 'switch-to-configuration':
             "--bind", str(self.root / "etc"), "/etc",
             "--bind", str(self.root / "run"), "/run",
             "--bind", str(self.root / "profiles"), "/nix/var/nix/profiles",
+            "--bind", str(self.root / "gcroots"), "/nix/var/nix/gcroots",
+            "--bind", str(self.root / "var"), "/var",
             "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
             "--chdir", "/fixture", "--setenv", "PATH", "/fixture/bin",
             "--setenv", "TMPDIR", "/tmp",
@@ -169,8 +173,19 @@ elif name == 'switch-to-configuration':
 
     def test_flake_rebuild_uses_explicit_host_configuration(self):
         (self.root / "etc/nixos/flake.nix").write_text("{}")
+        self.state['custom_packages'] = ['hello']
+        self.state['selected_profile'] = 'xfce'
+        self.state['enabled_bundles'] = ['devtools']
         self.run_requests([self.apply_request("Build")])
         self.assertIn(["nixos-rebuild", "build", "--flake", "/etc/nixos"], self.commands())
+        selected = (self.managed / 'state/selected.nix').read_text()
+        self.assertIn('hello', selected)
+        self.assertNotIn('\n    ./custom-packages.nix\n', selected)
+        self.assertNotIn('\n    ./hostname.nix\n', selected)
+        reconstructed = self.run_requests([{'type': 'ReadState'}])[0]['payload']
+        self.assertEqual(reconstructed['selected_profile'], 'xfce')
+        self.assertEqual(reconstructed['enabled_bundles'], ['devtools'])
+        self.assertEqual(reconstructed['custom_packages'], ['hello'])
 
     def test_apply_without_integration_does_not_report_false_success(self):
         (self.root / "etc/nixos/configuration.nix").write_text("{}")
@@ -280,6 +295,104 @@ elif name == 'switch-to-configuration':
         self.assertEqual([r["type"] for r in replies], ["Generations", "Ok", "Ok", "Error", "Error"])
         self.assertEqual(replies[0]["payload"][0]["number"], 2)
         self.assertIn(["switch-to-configuration", "boot"], self.commands())
+
+    def test_preflight_failure_never_activates_and_preserves_selection(self):
+        self.seed()
+        before = self.contents()
+        reply = self.run_requests([self.apply_request()], QA_PREFLIGHT_EXIT=1)[0]
+        self.assertFalse(reply['payload']['success'])
+        self.assertEqual(self.commands(), [['nixos-rebuild', 'dry-build']])
+        self.assertEqual(self.contents(), before)
+        self.assertIsNone(self.run_requests([{'type': 'GetRecovery'}])[0]['payload'])
+
+    def test_integration_snippets_never_replace_existing_configuration(self):
+        (self.managed / 'state').mkdir(parents=True)
+        selected = self.managed / 'state/selected.nix'
+        for name in ['classic_snippet', 'flake_snippet']:
+            step = self.catalog[name].split('# Step 2:', 1)[1].split('# Step 3:', 1)[0]
+            script = '\n'.join(step.splitlines()[1:]).replace('sudo sh', shlex.quote(shutil.which('sh')), 1)
+            command = self.command()[:-1] + [shutil.which('sh'), '-c', script]
+            if selected.exists():
+                selected.unlink()
+            subprocess.run(command, check=True, capture_output=True)
+            self.assertIn('imports = []', selected.read_text())
+            selected.write_text('keep the user selection exactly')
+            subprocess.run(command, check=True, capture_output=True)
+            self.assertEqual(selected.read_text(), 'keep the user selection exactly')
+
+    def test_partial_activation_keeps_recovery_and_blocks_other_mutations(self):
+        self.seed()
+        before = self.contents()
+        self.run_requests([self.apply_request()], QA_PREFLIGHT_EXIT=0, QA_REBUILD_EXIT=1)
+        self.assertEqual(self.contents(), before)
+        status = self.run_requests([{'type': 'GetRecovery'}])[0]['payload']
+        self.assertTrue(status['files_restored'])
+        self.assertIn('Services', status['message'])
+        for request in [self.apply_request(), {'type': 'WriteState', 'payload': {'state': self.state}},
+                        {'type': 'RunMaintenance', 'payload': {'command': 'nix-collect-garbage'}}]:
+            self.assertIn('unfinished apply', self.run_requests([request])[0]['payload']['message'])
+        # This fixture has no real previous system. Recovery must not claim
+        # success or delete its backup when it cannot reactivate that system.
+        self.assertEqual(self.run_requests([{'type': 'RecoverApply'}])[0]['type'], 'Error')
+        self.assertIsNotNone(self.run_requests([{'type': 'GetRecovery'}])[0]['payload'])
+
+    def test_unsaved_success_can_restore_original_files(self):
+        self.seed()
+        before = self.contents()
+        original_mode = self.managed.stat().st_mode & 0o777
+        self.run_requests([self.apply_request('Build')])
+        status = self.run_requests([{'type': 'GetRecovery'}])[0]['payload']
+        self.assertIn('saving the selection', status['message'])
+        self.assertEqual(self.run_requests([{'type': 'RecoverApply'}])[0]['type'], 'Ok')
+        self.assertEqual(self.contents(), before)
+        self.assertEqual(self.managed.stat().st_mode & 0o777, original_mode)
+        self.assertIsNone(self.run_requests([{'type': 'GetRecovery'}])[0]['payload'])
+
+    def test_missing_recovery_copy_never_deletes_current_files(self):
+        self.seed()
+        self.run_requests([self.apply_request('Build')])
+        current = self.contents()
+        shutil.rmtree(self.root / 'var/lib/nixos-toolkit/recovery/managed')
+        result = self.run_requests([{'type': 'RecoverApply'}])[0]
+        self.assertEqual(result['type'], 'Error')
+        self.assertIn('recovery copy is missing', result['payload']['details'])
+        self.assertEqual(self.contents(), current)
+        self.assertIsNotNone(self.run_requests([{'type': 'GetRecovery'}])[0]['payload'])
+
+    def test_killed_helper_retains_durable_preflight_backup(self):
+        self.seed()
+        before = self.contents()
+        process = subprocess.Popen(self.command(QA_REBUILD_DELAY=30), stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        try:
+            process.stdin.write(json.dumps(self.apply_request()) + '\n')
+            process.stdin.flush()
+            while True:
+                line = process.stdout.readline()
+                self.assertTrue(line, 'Helper exited before preflight')
+                if json.loads(line).get('payload', {}).get('message') == 'building fixture':
+                    break
+            process.kill()
+            process.communicate(timeout=5)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+        status = self.run_requests([{'type': 'GetRecovery'}])[0]['payload']
+        self.assertIsNotNone(status)
+        backup = self.root / 'var/lib/nixos-toolkit/recovery'
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.run_requests([{'type': 'RecoverApply'}])[0]['type'], 'Ok')
+        self.assertEqual(self.contents(), before)
+
+    def test_corrupt_recovery_record_blocks_apply(self):
+        journal = self.root / 'var/lib/nixos-toolkit/recovery'
+        journal.mkdir(parents=True)
+        (journal / 'record.json').write_text('corrupt')
+        reply = self.run_requests([self.apply_request()])[0]
+        self.assertEqual(reply['type'], 'Error')
+        self.assertIn('recovery', reply['payload']['message'])
+        self.assertEqual(self.commands(), [])
 
     def test_all_maintenance_commands_and_allowlist(self):
         for action in self.catalog["maintenance"]:

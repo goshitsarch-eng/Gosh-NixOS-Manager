@@ -3,6 +3,33 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+// Standard streams are forwarded automatically. Older flatpak-spawn releases
+// reject --forward-fd=0/1; that option is only needed for additional descriptors.
+List<String> flatpakHostArguments(List<String> command) => [
+  '--host',
+  '--',
+  ...command,
+];
+
+/// Read-only diagnostic of the same transport used by authenticated sessions.
+Future<bool> probeFlatpakStdio() async {
+  final process = await Process.start(
+    'flatpak-spawn',
+    flatpakHostArguments(['cat']),
+  );
+  final output = process.stdout.transform(utf8.decoder).join();
+  final errors = process.stderr.drain<void>();
+  try {
+    process.stdin.write('toolkit-stdio-probe\n');
+    await process.stdin.close();
+    final code = await process.exitCode.timeout(const Duration(seconds: 10));
+    await errors;
+    return code == 0 && await output == 'toolkit-stdio-probe\n';
+  } finally {
+    process.kill();
+  }
+}
+
 class HelperFailure implements Exception {
   const HelperFailure(this.message);
   final String message;
@@ -41,14 +68,7 @@ class HostHelper implements HelperApi {
     if (host['flatpak'] == true) {
       return HostHelper(
         program: 'flatpak-spawn',
-        arguments: [
-          '--host',
-          '--forward-fd=0',
-          '--forward-fd=1',
-          '--',
-          'pkexec',
-          path,
-        ],
+        arguments: flatpakHostArguments(['pkexec', path]),
         onLog: onLog,
       );
     }
@@ -226,6 +246,8 @@ class _Connection {
         'DeleteGenerations': 'Ok',
         'RunMaintenance': 'MaintenanceOutput',
         'GetDiskUsage': 'DiskUsage',
+        'GetRecovery': 'RecoveryStatus',
+        'RecoverApply': 'Ok',
       };
       if (expected[type] == null || response['type'] != expected[type]) {
         throw HelperFailure('Unexpected ${response['type']} response to $type');

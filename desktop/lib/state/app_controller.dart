@@ -20,6 +20,8 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic> host = {};
   List<Map<String, dynamic>> generations = [];
   Map<String, dynamic>? diskUsage;
+  Map<String, dynamic>? recovery;
+  bool recoveryUnknown = false;
   final List<String> logs = [];
   final Map<String, String> fieldErrors = {};
   final Map<String, String> fieldDrafts = {};
@@ -32,7 +34,7 @@ class AppController extends ChangeNotifier {
   int _revision = 0;
   bool dirty = false;
   bool _disposed = false;
-  bool _stateLoadFailed = false;
+  bool _stateLoadFailed = true;
   @override
   void notifyListeners() {
     if (!_disposed) super.notifyListeners();
@@ -77,6 +79,7 @@ class AppController extends ChangeNotifier {
             reply['payload'] as Map<String, dynamic>,
           );
           _stateLoadFailed = false;
+          await _loadRecovery();
         } catch (failure) {
           _stateLoadFailed = true;
           error = 'Saved system state could not be loaded: $failure';
@@ -93,8 +96,62 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> refresh() =>
-      perform('Refreshing host information', _refreshHost);
+  Future<void> refresh() => perform('Refreshing host information', () async {
+    await _refreshHost();
+    if (canManage) {
+      if (_stateLoadFailed) {
+        if (dirty) {
+          throw const HelperFailure(
+            'Reopen the app to load saved system state before applying preview selections',
+          );
+        }
+        final reply = await helper!.request('ReadState');
+        if (reply['type'] != 'State') {
+          throw const HelperFailure('Invalid saved-state response');
+        }
+        configuration = ConfigurationDto(
+          reply['payload'] as Map<String, dynamic>,
+        );
+        _stateLoadFailed = false;
+        await updatePreview();
+      }
+      await _loadRecovery();
+    }
+  });
+
+  Future<void> _loadRecovery() async {
+    recoveryUnknown = true;
+    final result = await helper!.request('GetRecovery');
+    if (result['type'] != 'RecoveryStatus') {
+      throw const HelperFailure(
+        'Update the host helper to inspect apply recovery',
+      );
+    }
+    recovery = result['payload'] as Map<String, dynamic>?;
+    recoveryUnknown = false;
+  }
+
+  Future<void> recoverApply() => perform('Restoring previous system', () async {
+    try {
+      await helper!.request('RecoverApply');
+      final state = await helper!.request('ReadState');
+      if (state['type'] != 'State') {
+        throw const HelperFailure('Invalid saved-state response');
+      }
+      configuration = ConfigurationDto(
+        state['payload'] as Map<String, dynamic>,
+      );
+      fieldDrafts.clear();
+      fieldErrors.clear();
+      dirty = false;
+      _stateLoadFailed = false;
+      _revision++;
+      await updatePreview();
+      appendLog('Previous managed configuration and system restored');
+    } finally {
+      await _loadRecovery();
+    }
+  });
 
   Future<void> perform(String title, Future<void> Function() action) async {
     if (!idle) return;
@@ -279,6 +336,11 @@ class AppController extends ChangeNotifier {
           'Saved system state was not loaded. Reopen the app and load it successfully before applying changes.',
         );
       }
+      if (recovery != null || recoveryUnknown) {
+        throw const HelperFailure(
+          'Resolve the unfinished apply or refresh recovery status before applying changes',
+        );
+      }
       if (fieldErrors.isNotEmpty) {
         throw const CoreFailure(
           'validation',
@@ -288,7 +350,15 @@ class AppController extends ChangeNotifier {
       final snapshot = configuration!.copy();
       final revision = _revision;
       await core.call('validate', {'state': snapshot.toJson()});
-      await helper!.apply(snapshot.toJson(), dryRun ? 'DryBuild' : rebuild);
+      try {
+        await helper!.apply(snapshot.toJson(), dryRun ? 'DryBuild' : rebuild);
+      } finally {
+        try {
+          await _loadRecovery();
+        } catch (failure) {
+          appendLog('Recovery status could not be read: $failure');
+        }
+      }
       if (!dryRun && revision == _revision) dirty = false;
       appendLog(
         dryRun

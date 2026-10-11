@@ -25,7 +25,7 @@ flutter run -d linux
 ```sh
 NIXOS_TOOLKIT_CORE_LIBRARY="$PWD/../target/debug/libnixos_toolkit_core.so" flutter test
 flutter analyze
-dart format --output=none --set-exit-if-changed lib test
+dart format --output=none --set-exit-if-changed lib test integration_test tool
 ```
 
 From the repository root, `scripts/verify.sh` runs Rust formatting, Clippy, tests (including all features), the native bridge build, Flutter lock/format/analyzer/tests and the Nix-readable lock snapshot check. Widget tests use the actual Rust API; separate bridge tests exercise isolate dispatch. Helper tests launch a temporary protocol peer and never mutate NixOS files. After intentionally updating the Flutter lock, run `python3 scripts/sync-pubspec-lock.py` (requires PyYAML), and commit both lock representations.
@@ -61,7 +61,7 @@ The default GUI is Flutter. The pinned nixpkgs provides Flutter 3.47.4/Dart 3.13
 
 ## Flatpak build, install and QA (verified)
 
-The complete recipe uses Freedesktop 25.08 and the checksummed Linux Flutter release archive. Dependency downloads/compilation happen during the native release build; Flatpak assembly copies that exact bundle, without fetching Flutter or crates inside its sandbox. Build a portable archive on a compatible Linux baseline (CI uses Ubuntu 24.04).
+The complete recipe uses Freedesktop 25.08 and the checksummed Linux Flutter release archive. Dependency downloads/compilation happen during the native release build; Flatpak assembly relocates ELF paths into a separate checksummed bundle, without fetching Flutter or crates inside its sandbox. Install `flatpak`, `flatpak-builder`, `appstream`, `patchelf` and Python 3.12+ (included in `nix develop`). Build on a compatible libc baseline (CI uses Ubuntu 24.04); path relocation alone cannot fix a newer libc ABI.
 
 ```sh
 flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -72,14 +72,22 @@ flatpak run --user io.github.goshitsarch_eng.NixosToolkit
 scripts/smoke-flatpak.sh
 ```
 
-The generator writes `.flatpak/manifest.json` with the archive SHA-256 and launcher. `scripts/build-flatpak.sh` produces the `.flatpak` bundle and its checksum; it does not install it automatically. `scripts/smoke-flatpak.sh` runs the real packaged Rust API, templates and host probes with `--diagnose`, using an existing display or a private Xvfb server. `scripts/verify.sh --flatpak` adds build/install/diagnostics to the normal verification gate.
+The generator preserves the native archive, writes `.flatpak/manifest.bundle.tar.gz` with runtime ELF paths, and records its SHA-256 in `.flatpak/manifest.json`. `scripts/build-flatpak.sh` produces the `.flatpak` bundle and its checksum; it does not install it automatically. `scripts/smoke-flatpak.sh` runs the real packaged Rust API, templates, host probes and an unprivileged host stdin/stdout round trip with `--diagnose`, using an existing display or a private Xvfb server. `scripts/verify.sh --flatpak` adds build/install/diagnostics to the normal verification gate.
 
-Freedesktop Platform/SDK 25.08 downloaded successfully. The actual Flatpak build, export, installation and sandbox diagnostics passed. All eleven pages were inspected live, with package entry/local preview, Light/Dark display, dark preference persistence after restart, minimum-size layout and dirty-close confirmation. Native and Flatpak also passed physical 2× display rendering, nested Weston 14 Wayland rendering and real Wayland clipboard transfers. An actual sandbox screenshot is in `docs/screenshots/flatpak-dark.png`. Authenticated NixOS host operations and desktop portals still need a suitable desktop.
+Freedesktop Platform/SDK 25.08 downloaded successfully. The actual Flatpak build, export, installation and sandbox diagnostics passed. All eleven pages were inspected live, with package entry/local preview, Light/Dark display, dark preference persistence after restart, minimum-size layout and dirty-close confirmation. Native and Flatpak also passed physical 2× display rendering, nested Weston 14 Wayland rendering and real Wayland clipboard transfers. An actual sandbox screenshot is in `docs/screenshots/flatpak-dark.png`. The follow-up NixOS VM pass exercised authenticated host state/generation/disk requests, DryBuild, Build/state persistence and cooperative cancellation through the installed sandbox. Portal and screen-reader coverage is still limited.
 
 For the cloud's relocated tools, source `/workspace/setup/activate-flatpak.sh`. This scopes Flatpak's data/cache/temp paths and points to the real relocated Flatpak, D-Bus proxy, icon validator, AppStream composer and debug tools. Nested user namespaces need execution outside the command sandbox. This container has no system bus; installation was tested against a private workspace D-Bus bus, without changing host services or disabling policy checks. The startup instructions record the exact cloud commands. Network domains `dl.flathub.org`, `cache.nixos.org` and `storage.googleapis.com` are saved in the environment configuration draft; saving the draft does not itself apply or publish settings.
 
-Flatpak grants display sockets, IPC and DRI, the Flatpak host bridge for the helper, and read-only `/etc/NIXOS`. It grants no general host filesystem or network access. The host bridge is a powerful permission required by this application; the separate helper still authenticates through polkit. URI opening uses the Linux Flutter plugin; portal/browser/file-manager behavior needs testing on a real desktop.
+Flatpak grants display sockets, IPC and DRI, and the Flatpak host bridge for the helper. Host probes read NixOS metadata through that bridge; reserved `/etc` bind mounts are unnecessary. On NixOS, enable `services.flatpak.enable = true` for the host service. It grants no general host filesystem or network access. The host bridge is a powerful permission required by this application; the separate helper still authenticates through polkit. URI opening uses the Linux Flutter plugin; portal/browser/file-manager behavior needs testing on a real desktop.
 
 ## CI and release review
 
 The GitHub workflow verifies Cargo and Flutter, generates a native archive, tests its packaged API, builds/installs Flatpak and runs diagnostics inside its sandbox. A `v*` tag creates a **draft** release only after these jobs succeed. Artifacts are unsigned; publication and any future signing remain release-owner actions. Workflow configuration was inspected locally; remote execution has not been claimed.
+
+## Additional host safety checks
+
+`nix develop .#qa` supplies the smaller Rust/Python/Bubblewrap/Git/nixos-rebuild environment. After building helper/core, run `scripts/test-flake-rebuild.py /path/to/nixpkgs` to evaluate real plain and Git flakes in isolated configuration namespaces, including newly generated profile/bundle modules and staged-content preservation. It never activates the host. `tests/nixos/reboot-recovery.nix` runs actual bootloader/reboot/rollback/recovery operations in a disposable guest; manual/tag CI runs it before a release draft.
+
+On a backed-up disposable NixOS VM, the explicitly opted-in `NIXOS_TOOLKIT_LIVE_VM_QA=1 dart desktop/tool/qa_flatpak_host.dart` test exercises the Dart session transport through the installed Flatpak with normal polkit authentication. It also requires the backup marker described in the live QA report and performs real Build/state writes and a cancelled store verification.
+
+GitHub Actions currently cannot start because of an account billing lock. The workflow now includes isolated recovery, real flake, pinned module-matrix and reboot checks; local evidence is recorded in the live QA report. The remote gate must pass after the account is restored.

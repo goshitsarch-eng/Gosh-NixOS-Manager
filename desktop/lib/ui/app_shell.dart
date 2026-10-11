@@ -266,12 +266,54 @@ class _Shell extends StatelessWidget {
                         ],
                         if (controller.error != null)
                           MaterialBanner(
-                            content: SelectableText(controller.error!),
+                            content: ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 100),
+                              child: SingleChildScrollView(
+                                child: SelectableText(controller.error!),
+                              ),
+                            ),
                             actions: [
                               TextButton(
                                 onPressed: controller.clearError,
                                 child: const Text('Dismiss'),
                               ),
+                            ],
+                          ),
+                        if (controller.recovery != null ||
+                            controller.recoveryUnknown)
+                          MaterialBanner(
+                            content: ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 100),
+                              child: SingleChildScrollView(
+                                child: Text(
+                                  controller.recovery?['message'] as String? ?? 'Recovery status is unavailable. Refresh before making further system changes.',
+                                ),
+                              ),
+                            ),
+                            actions: [
+                              if (controller.recovery != null)
+                                TextButton(
+                                  onPressed: controller.idle
+                                      ? () async {
+                                          if (await confirm(
+                                            context,
+                                            'Restore previous system?',
+                                            'Restore the saved managed files, running system and boot selection. Service data is not rolled back. The backup is retained if recovery fails.',
+                                            action: 'Restore',
+                                          )) {
+                                            await controller.recoverApply();
+                                          }
+                                        }
+                                      : null,
+                                  child: const Text('Restore previous system'),
+                                )
+                              else
+                                TextButton(
+                                  onPressed: controller.idle
+                                      ? controller.refresh
+                                      : null,
+                                  child: const Text('Refresh'),
+                                ),
                             ],
                           ),
                         Expanded(

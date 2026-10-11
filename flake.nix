@@ -261,6 +261,10 @@
           };
 
           # Development shell
+          devShells.qa = pkgs.mkShell {
+            packages = [ rustToolchain pkgs.python3 pkgs.bubblewrap pkgs.git pkgs.nixos-rebuild ];
+          };
+
           devShells.default = craneLib.devShell {
             checks = self.checks.${system};
 
@@ -275,6 +279,10 @@
               cargo-edit
               cargo-expand
               pkg-config
+              patchelf
+              flatpak
+              flatpak-builder
+              appstream
               libxkbcommon
               wayland
               expat

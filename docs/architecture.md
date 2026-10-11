@@ -65,7 +65,7 @@ Pages: `onboarding`, `profiles`, `bundles`, `packages`, `system`, `hardware`, `n
 | Host, helper missing | `program` is still `pkexec`, but `helper_available = false`; GUI does not spawn |
 | `NIXOS_TOOLKIT_NO_PKEXEC` | helper path, no extra args |
 | `NIXOS_TOOLKIT_SPAWN` | that program + `SPAWN_ARGS` + helper |
-| Flatpak + probed host helper | `flatpak-spawn --host --forward-fd=0 --forward-fd=1 -- pkexec <path>` |
+| Flatpak + probed host helper | `flatpak-spawn --host -- pkexec <path>` |
 | Flatpak + no helper | `helper_available = false`; no pkexec |
 
 Discovery (host): `NIXOS_TOOLKIT_HELPER`, sibling of `current_exe`, then `/run/current-system/sw/bin/nixos-toolkit-helper`, `/usr/local/bin/…`, `/usr/bin/…`, else the name `nixos-toolkit-helper`.

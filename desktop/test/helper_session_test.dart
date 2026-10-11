@@ -107,7 +107,7 @@ void main() {
       );
     },
   );
-  test('Flatpak invokes explicit host argv and forwards protocol pipes', () {
+  test('Flatpak invokes explicit host argv with implicit standard streams', () {
     final helper = HostHelper.fromCapabilities({
       'flatpak': true,
       'helper_path': '/run/current-system/sw/bin/nixos-toolkit-helper',
@@ -115,8 +115,6 @@ void main() {
     expect(helper.program, 'flatpak-spawn');
     expect(helper.arguments, [
       '--host',
-      '--forward-fd=0',
-      '--forward-fd=1',
       '--',
       'pkexec',
       '/run/current-system/sw/bin/nixos-toolkit-helper',

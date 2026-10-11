@@ -230,7 +230,7 @@ Status: **working** (end-to-end wired), **partial** (UI or backend incomplete / 
 | feature | where exposed | expected behavior | implementation path | status | test coverage | verification method |
 |---|---|---|---|---|---|---|
 | pkexec spawn | host GUI | `pkexec <helper>` + remove SHELL | `SpawnSpec::from_env` | working | spawn.rs | Apply prompts polkit |
-| Flatpak spawn | Flatpak GUI | `flatpak-spawn --host --forward-fd=0/1 -- pkexec <probed>` | spawn.rs | working | spawn.rs unit | Flatpak with host helper |
+| Flatpak spawn | Flatpak GUI | `flatpak-spawn --host -- pkexec <probed>` | spawn.rs | working | spawn.rs unit | Flatpak with host helper |
 | Env overrides | `NIXOS_TOOLKIT_*` | HELPER, NO_PKEXEC, SPAWN, TEMPLATES_DIR, SKIP_* | Flags/spawn | working | flags.rs, spawn.rs | `NIXOS_TOOLKIT_NO_PKEXEC=1` |
 | CLI flags | desktop Exec | No clap; env only | `main.rs` | working (by design) | none | `--help` not implemented |
 | ReadState / reconstruct | startup | JSON then Nix reconstruct | helper `read_state` | working | helper reconstruct tests | Delete state.json; GUI restores from Nix |

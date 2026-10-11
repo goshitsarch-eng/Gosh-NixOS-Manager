@@ -202,6 +202,54 @@ void main() {
       expect(tester.takeException(), isNull);
     }
   });
+  testWidgets('recovery and long errors stay accessible at minimum size', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(640, 480);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final semantics = tester.ensureSemantics();
+    controller.error = List.filled(
+      80,
+      'An operation failed; review its log.',
+    ).join('\n');
+    controller.recovery = {'message': 'An unfinished apply needs recovery.'};
+    await tester.pumpWidget(
+      ToolkitApp(controller: controller, onQuit: () async {}),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.bySemanticsLabel('Restore previous system'), findsOneWidget);
+    final restore = find.widgetWithText(TextButton, 'Restore previous system');
+    var reached = false;
+    for (var i = 0; i < 20; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pumpAndSettle();
+      final focused = FocusManager.instance.primaryFocus?.context;
+      if (focused != null &&
+          (focused == tester.element(restore) ||
+              focused.findAncestorWidgetOfExactType<TextButton>() ==
+                  tester.widget(restore))) {
+        reached = true;
+        break;
+      }
+    }
+    expect(
+      reached,
+      isTrue,
+      reason: 'Recovery action must be reachable with Tab',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Restore previous system?'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(controller.recovery, isNotNull);
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
+  });
   testWidgets(
     'invalid port drafts survive navigation and system theme follows brightness at 2x DPI',
     (tester) async {

@@ -2,7 +2,7 @@
 
 Only native Linux and Linux Flatpak are in scope. “Implemented” means the code exists; it does not establish that the platform workflow passed.
 
-The [live NixOS VM report](docs/audit/LIVE_VM_QA.md) records actual native UI, rebuild, generation, cancellation and maintenance checks. The [initial audit](docs/audit/NIXOS_RELEASE_QA.md) records the configuration matrix and earlier fixes. Native results below combine that VM run with earlier Debian desktop checks; Flatpak results retain the earlier migration evidence.
+The [live NixOS VM report](docs/audit/LIVE_VM_QA.md) records actual native UI, rebuild, generation, cancellation and maintenance checks. The [initial audit](docs/audit/NIXOS_RELEASE_QA.md) records the configuration matrix and earlier fixes. Native results below combine that VM run with earlier Debian desktop checks; Flatpak results combine earlier migration evidence with the follow-up installed-sandbox host checks.
 
 | Feature | Native x86_64 Linux | Linux Flatpak |
 |---|---|---|
@@ -19,12 +19,12 @@ The [live NixOS VM report](docs/audit/LIVE_VM_QA.md) records actual native UI, r
 | About/menu/shortcuts/dialogs | Live menu/dirty-close coverage; widget coverage | Live menu/dirty-close coverage; shared widget tests pass |
 | Clipboard | Actual Wayland copy/read transfer verified | Actual Wayland sandbox copy/read transfer verified |
 | Browser and configuration-folder integration | Actual desktop launchers exercised on NixOS | Plugin/portal behavior pending |
-| Host helper apply/dry build | All five rebuild modes and failed-apply recovery passed on NixOS | Explicit forwarded host argv tested; authenticated host execution unverified |
-| Generations/rollback/maintenance/disk | Actual activation, next-boot selection, deletion protection, all maintenance actions and store usage passed; no power-cycle test | Requires authenticated NixOS host QA |
-| Cancellation | Actual authenticated rebuild and store verification stopped; process-group and queued-request regression tests passed | Authenticated host/process tree unverified |
+| Host helper apply/dry build | All five rebuild modes and failed-apply recovery passed on NixOS | Installed sandbox: authenticated state requests, DryBuild, Build/state save and transport cancellation passed |
+| Generations/rollback/maintenance/disk | Actual activation, next-boot selection, deletion protection, all maintenance actions and store usage passed; separate guest bootloader/reboot/recovery test passed | Authenticated generation listing and disk usage passed; full destructive generation/maintenance UI parity remains native-only |
+| Cancellation | Actual authenticated rebuild and store verification stopped; process-group and queued-request regression tests passed | Real authenticated store verification cancelled through the sandbox transport |
 | Nix default Flutter package | Full GUI/core/helper build and packaged diagnostics verified | Host helper package required separately |
 | Wayland | Native rendering/package preview on nested Weston 14 verified | Actual Wayland socket rendering and sandbox API verified |
-| Screen reader / keyboard-only desktop QA | Real desktop QA pending | Real desktop QA pending |
+| Screen reader / keyboard-only desktop QA | Recovery keyboard focus/dialog semantics covered; real screen reader pending | Real screen reader pending |
 | ARM64 Linux | Architecture rules/build path configured; no ARM runner tested | No ARM sandbox tested |
 
-The initial cloud run used Debian. The subsequent native NixOS VM run established successful rebuild, generation and maintenance workflows. X11, physical 2× scaling, nested Wayland rendering and real Wayland clipboard checks also passed during the earlier desktop checks. Remaining release coverage includes reboot, accessibility, physical hardware, other desktop sessions, ARM64 and fresh authenticated Flatpak host operations. The former frontend remains available for comparison.
+The initial cloud run used Debian. The subsequent native NixOS VM run established successful rebuild, generation and maintenance workflows. X11, physical 2× scaling, nested Wayland rendering and real Wayland clipboard checks also passed during the earlier desktop checks. Remaining release coverage includes screen readers, physical hardware, login to other desktop sessions, ARM64 and the remaining Flatpak portal/destructive UI cases. Reboot and recovery passed in a separate guest. GitHub CI remains blocked by an account billing lock. The host firewall activation error remains reproducible through direct CLI as well as the app; recovery is tested but the OS cause is unresolved. The former frontend remains available for comparison.

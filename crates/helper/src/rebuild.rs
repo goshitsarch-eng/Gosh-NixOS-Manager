@@ -36,7 +36,9 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
         LogLevel::Info,
         format!("Running: nixos-rebuild {rebuild_arg}"),
     );
+    let mut insecure_package = false;
     let result = crate::operation::run(&mut cmd, |is_error, message| {
+        insecure_package |= message.contains("marked as insecure");
         let level = if is_error && (message.contains("error:") || message.contains("Error:")) {
             LogLevel::Error
         } else if message.contains("warning:") || message.contains("Warning:") {
@@ -52,10 +54,15 @@ pub fn run_rebuild(rebuild_type: RebuildType, config_mode: ConfigMode) -> Helper
             message: if output.status.success() {
                 format!("nixos-rebuild {rebuild_arg} completed successfully")
             } else {
-                format!(
+                let message = format!(
                     "nixos-rebuild {rebuild_arg} failed with exit code {}",
                     output.status.code().unwrap_or(-1)
-                )
+                );
+                if insecure_package {
+                    format!("{message}. Nix blocked an insecure package. Deselect the affected package or use a host channel with a supported version. The log names the dependency; security checks remain enabled.")
+                } else {
+                    message
+                }
             },
         },
         Err(error) => HelperResponse::Error {

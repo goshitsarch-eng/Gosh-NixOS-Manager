@@ -73,7 +73,7 @@ There is no `window.rs` and no `pages/` directory. UI is `crates/gui/src/view/*.
 
 ### Communication model
 
-- GUI runs unprivileged. Default spawn: `pkexec <helper>`. Flatpak: `flatpak-spawn --host --forward-fd=0 --forward-fd=1 -- pkexec <host-helper>`.
+- GUI runs unprivileged. Default spawn: `pkexec <helper>`. Flatpak: `flatpak-spawn --host -- pkexec <host-helper>`.
 - IPC: internally tagged JSON (`type` / `payload`), one object per line, stdout; tracing on stderr.
 - Apply chain on one helper process: `EnsureDirectories` → `Apply` → `WriteState` on success for Switch/Boot/Test/Build. DryBuild sends `Apply` only so the helper can snapshot before creating directories.
 - Local preview does **not** call the helper (`common::nix::generate_preview_full_from`).

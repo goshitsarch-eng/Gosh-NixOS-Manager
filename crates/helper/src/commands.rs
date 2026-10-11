@@ -51,7 +51,7 @@ fn invalid_payload(
 }
 
 /// Send a log message to the GUI
-fn send_log(level: LogLevel, message: String) {
+pub(crate) fn send_log(level: LogLevel, message: String) {
     let log = HelperResponse::Log { level, message };
     if let Ok(json) = serde_json::to_string(&log) {
         let mut stdout = std::io::stdout();
@@ -363,9 +363,28 @@ pub fn apply(
         }
     };
 
+    {
+        if let Err(error) = crate::recovery::begin(
+            snapshot
+                .backup
+                .as_ref()
+                .map(|b| b.path().join("tree"))
+                .as_deref(),
+            rebuild_type,
+        ) {
+            return restored_apply_response(
+                HelperResponse::Error {
+                    message: "Could not prepare durable apply recovery".into(),
+                    details: Some(error.to_string()),
+                },
+                restore_managed_snapshot(snapshot),
+            );
+        }
+    }
+
     if let HelperResponse::Error { message, details } = ensure_directories() {
         let ensure_err = HelperResponse::Error { message, details };
-        return restored_operation_response(ensure_err, restore_managed_snapshot(snapshot));
+        return restored_apply_response(ensure_err, restore_managed_snapshot(snapshot));
     }
 
     // Dry-build still writes so nixos-rebuild can evaluate the proposed tree;
@@ -400,7 +419,7 @@ pub fn apply(
                 message: "Failed to generate configuration".into(),
                 details: Some(e.to_string()),
             };
-            return restored_operation_response(generate_err, restore_managed_snapshot(snapshot));
+            return restored_apply_response(generate_err, restore_managed_snapshot(snapshot));
         }
     }
 
@@ -411,6 +430,42 @@ pub fn apply(
         ConfigMode::Classic
     };
 
+    if matches!(
+        rebuild_type,
+        RebuildType::Switch | RebuildType::Boot | RebuildType::Test
+    ) {
+        send_log(
+            LogLevel::Info,
+            "Checking the host configuration before activation".into(),
+        );
+        let mut checked = rebuild::run_rebuild(RebuildType::DryBuild, config_mode);
+        if !matches!(checked, HelperResponse::ApplyComplete { success: true, .. }) {
+            send_log(
+                LogLevel::Warning,
+                "Preflight failed. No system activation was attempted.".into(),
+            );
+            match &mut checked {
+                HelperResponse::ApplyComplete { message, .. }
+                | HelperResponse::Error { message, .. } => {
+                    *message =
+                        format!("Preflight failed; no system activation was attempted. {message}");
+                }
+                _ => {}
+            }
+            return restored_apply_response(checked, restore_managed_snapshot(snapshot));
+        }
+    }
+    if !dry {
+        if let Err(error) = crate::recovery::start_rebuild() {
+            return restored_apply_response(
+                HelperResponse::Error {
+                    message: "Could not record activation start".into(),
+                    details: Some(error.to_string()),
+                },
+                restore_managed_snapshot(snapshot),
+            );
+        }
+    }
     let response = rebuild::run_rebuild(rebuild_type, config_mode);
     if dry
         || !matches!(
@@ -418,9 +473,28 @@ pub fn apply(
             HelperResponse::ApplyComplete { success: true, .. }
         )
     {
-        return restored_operation_response(response, restore_managed_snapshot(snapshot));
+        return restored_apply_response(response, restore_managed_snapshot(snapshot));
+    }
+    if let Err(error) = crate::recovery::mark(true, false) {
+        return HelperResponse::Error {
+            message: "Rebuild succeeded, but the recovery journal could not be updated".into(),
+            details: Some(error.to_string()),
+        };
     }
     response
+}
+
+fn restored_apply_response(
+    response: HelperResponse,
+    restore_error: Option<String>,
+) -> HelperResponse {
+    if let Err(error) = crate::recovery::failed(restore_error.is_none()) {
+        send_log(
+            LogLevel::Warning,
+            format!("Recovery journal needs attention: {error}"),
+        );
+    }
+    restored_operation_response(response, restore_error)
 }
 
 /// Restore a managed-tree snapshot. Returns the restore error, if any.
@@ -508,7 +582,9 @@ impl ManagedDirSnapshot {
         let backup = tempfile::Builder::new()
             .prefix("nixos-toolkit-recovery-")
             .tempdir()?;
-        copy_dir_all(src, backup.path())?;
+        copy_dir_all(src, &backup.path().join("tree"))?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(backup.path(), fs::Permissions::from_mode(0o700))?;
         Ok(ManagedDirSnapshot {
             backup: Some(backup),
             existed: true,
@@ -520,6 +596,9 @@ impl ManagedDirSnapshot {
         if !self.existed {
             if dest.exists() {
                 fs::remove_dir_all(dest)?;
+                if let Some(parent) = dest.parent() {
+                    fs::File::open(parent)?.sync_all()?;
+                }
             }
             return Ok(());
         }
@@ -535,7 +614,8 @@ impl ManagedDirSnapshot {
                 .prefix(".toolkit-restore-")
                 .tempdir_in(parent)?;
             let tree = staging.path().join("tree");
-            copy_dir_all(backup.path(), &tree)?;
+            copy_dir_all(&backup.path().join("tree"), &tree)?;
+            crate::recovery::sync_tree(&tree)?;
             let displaced = staging.path().join("proposed");
             if dest.exists() {
                 fs::rename(dest, &displaced)?;
@@ -546,6 +626,7 @@ impl ManagedDirSnapshot {
                 }
                 return Err(error.into());
             }
+            fs::File::open(parent)?.sync_all()?;
             Ok(())
         })();
         if let Err(error) = restored {
@@ -556,7 +637,25 @@ impl ManagedDirSnapshot {
     }
 }
 
-fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
+pub(crate) fn restore_recovery_files(recovery: &Path, existed: bool) -> anyhow::Result<()> {
+    if existed {
+        let mut snapshot = ManagedDirSnapshot::capture(&recovery.join("managed"))?;
+        if !snapshot.existed {
+            anyhow::bail!("The managed-file recovery copy is missing; current files were retained");
+        }
+        snapshot.destination = Path::new(paths::MANAGED_DIR).to_path_buf();
+        snapshot.restore()
+    } else {
+        ManagedDirSnapshot {
+            backup: None,
+            existed: false,
+            destination: Path::new(paths::MANAGED_DIR).to_path_buf(),
+        }
+        .restore()
+    }
+}
+
+pub(crate) fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -572,7 +671,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
 }
 
 /// Never traverse links while taking a privileged snapshot or cleaning files.
-fn reject_symlink_tree(path: &Path) -> anyhow::Result<()> {
+pub(crate) fn reject_symlink_tree(path: &Path) -> anyhow::Result<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -869,7 +968,11 @@ fn parse_selected_nix(content: &str) -> (Option<String>, Vec<String>) {
     let mut profile = None;
     let mut bundles = Vec::new();
     for line in content.lines() {
-        let Some(line) = skip_nix_comment(line) else {
+        let Some(line) = line
+            .trim()
+            .strip_prefix("# nixos-toolkit-inline-module: ")
+            .or_else(|| skip_nix_comment(line))
+        else {
             continue;
         };
         if let Some(rest) = line.split("../profiles/").nth(1) {
@@ -1351,7 +1454,13 @@ pub fn write_state(state: AppState) -> HelperResponse {
 
     match serde_json::to_string_pretty(&state) {
         Ok(content) => match crate::nix_gen::atomic_write(paths::STATE_JSON, &content) {
-            Ok(()) => HelperResponse::Ok,
+            Ok(()) => match crate::recovery::complete() {
+                Ok(()) => HelperResponse::Ok,
+                Err(error) => HelperResponse::Error {
+                    message: "State was saved, but recovery cleanup failed".into(),
+                    details: Some(error.to_string()),
+                },
+            },
             Err(e) => HelperResponse::Error {
                 message: "Failed to write state".into(),
                 details: Some(e.to_string()),
@@ -1834,7 +1943,7 @@ mod tests {
             .to_string()
             .contains("recovery copy retained"));
         assert_eq!(
-            fs::read_to_string(backup_path.join("original")).unwrap(),
+            fs::read_to_string(backup_path.join("tree/original")).unwrap(),
             "recover me"
         );
         fs::remove_dir_all(backup_path).unwrap();

@@ -30,17 +30,17 @@ The UI stays unprivileged. Install `nixos-toolkit-helper` and its polkit policy 
 programs.nixos-toolkit.enable = true;
 ```
 
-`nix build .#gui` and `nix run` now select Flutter. `.#helper` remains the host helper; `.#reference` retains the former GUI for parity checks. The Flutter Nix package, core and helper build successfully. System activation requires validation on a NixOS host.
+`nix build .#gui` and `nix run` now select Flutter. `.#helper` remains the host helper; `.#reference` retains the former GUI for parity checks. The Flutter Nix package, core and helper build successfully. The app and helper have been exercised on a disposable NixOS 25.05 VM.
 
 ## Validation and release status
 
-The latest [NixOS release audit](docs/audit/NIXOS_RELEASE_QA.md) records the safety fixes, 251 Rust tests, 28 Flutter tests, isolated helper/installer checks, and 127 generated-configuration cases. Real activation, authenticated cancellation and hardware/desktop behavior still require disposable VM and device testing before release approval. NixOS 25.05 blocks two Gaming cases through its insecure Electron dependency check.
+The [live NixOS VM report](docs/audit/LIVE_VM_QA.md) records real UI, rebuild, generation, maintenance, cancellation and recovery tests. The [initial audit](docs/audit/NIXOS_RELEASE_QA.md) covers the module matrix and earlier safety fixes. The current packages also have authenticated Flatpak host checks and a separate NixOS guest test for reboot, rollback and recovery.
 
-The following results are historical migration checks, not a fresh Flatpak/desktop certification of this revision.
+Apply now checks the host configuration before activation and keeps a private recovery journal until the selection is saved. If an apply is interrupted, use **Restore previous system** before making further changes. This restores managed files and the previous running/boot configuration; service data is not rolled back. Install matching app and helper versions.
 
-Native Linux debug/release builds, 245 Rust tests, 22 Flutter tests, analyzer, formatting, bridge calls, live page navigation, Light/Dark appearance and minimum-size layout passed in the cloud environment. Checksummed native and Flatpak release bundles are generated in `dist/`.
+The VM has an intermittent firewall/D-Bus activation failure that also occurs with direct `nixos-rebuild`. The app reports it and recovery was tested against a real occurrence. NixOS 25.05's insecure Electron check remains enabled; affected Gaming selections must be deselected or used on a channel with supported packages.
 
-The Flatpak was built, exported, installed and tested inside its sandbox with the real Rust API. Its eleven pages, package entry, local preview, resizing and saved dark theme were checked live. Native and Flatpak also passed 2× display rendering, nested Wayland rendering and clipboard transfer. The Nix package also passes packaged API diagnostics with a Nix Mesa driver. Real NixOS rebuild, rollback, maintenance, authenticated cancellation, desktop portals/accessibility and OS theme notifications remain release gates; this Debian container cannot establish those results. Remote CI has not been run from this workspace. [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) records the exact limits.
+GitHub Actions cannot start because the repository owner's account is locked by a billing issue. Local checks do not replace successful release CI. Physical hardware, ARM64, screen readers and login to every desktop still need dedicated validation; see [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md). Built native and Flatpak artifacts and checksums are under ignored `dist/`.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains state and bridge ownership. [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) accounts for the reference features, changes and remaining QA. Older implementation documents under `docs/audit` and `docs/migration` are historical; the old frontend remains a reference until host parity checks pass.
 

@@ -11,6 +11,7 @@ mod commands;
 mod nix_gen;
 mod operation;
 mod rebuild;
+mod recovery;
 
 use anyhow::Result;
 use common::ipc::{HelperRequest, HelperResponse};
@@ -95,6 +96,20 @@ fn main() -> Result<()> {
                         },
                     }
                 }
+                if request_mutates(&request) && !matches!(request, HelperRequest::RecoverApply) {
+                    match recovery::pending() {
+                        Ok(true) if !(matches!(request, HelperRequest::WriteState { .. })
+                            && recovery::awaiting_state().unwrap_or(false)) => return HelperResponse::Error {
+                                message: "An unfinished apply needs recovery before another host change".into(),
+                                details: Some("Use Restore previous system in the app. The recovery backup is retained.".into()),
+                            },
+                        Err(error) => return HelperResponse::Error {
+                            message: "Could not inspect apply recovery; host changes are blocked".into(),
+                            details: Some(error.to_string()),
+                        },
+                        _ => {},
+                    }
+                }
                 handle_request(request)
             }),
             Err(message) => HelperResponse::Error {
@@ -123,6 +138,7 @@ fn request_mutates(request: &HelperRequest) -> bool {
             | HelperRequest::RollbackGeneration { .. }
             | HelperRequest::DeleteGenerations { .. }
             | HelperRequest::RunMaintenance { .. }
+            | HelperRequest::RecoverApply
     )
 }
 
@@ -248,6 +264,8 @@ fn handle_request(request: HelperRequest) -> HelperResponse {
         ),
         HelperRequest::EnsureDirectories => commands::ensure_directories(),
         HelperRequest::ReadState => commands::read_state(),
+        HelperRequest::GetRecovery => recovery::status(),
+        HelperRequest::RecoverApply => recovery::recover(),
         HelperRequest::WriteState { state } => commands::write_state(state),
         HelperRequest::ListGenerations => commands::list_generations(),
         HelperRequest::RollbackGeneration {
