@@ -207,6 +207,15 @@ pub struct PackageDef {
     /// nixpkgs attribute path used in generated Nix. Defaults to [`id`](Self::id).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nix_attr: Option<String>,
+    /// Installation details shown alongside the package toggle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Verified upstream project or installation documentation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    /// Visible setup entry, excluded from managed installation until packaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
 }
 
 impl PackageDef {
@@ -215,6 +224,9 @@ impl PackageDef {
             id: id.into(),
             display_name: display_name.into(),
             nix_attr: None,
+            note: None,
+            homepage: None,
+            unavailable_reason: None,
         }
     }
 
@@ -223,6 +235,26 @@ impl PackageDef {
     pub fn with_nix_attr(mut self, nix_attr: impl Into<String>) -> Self {
         self.nix_attr = Some(nix_attr.into());
         self
+    }
+
+    #[must_use]
+    pub fn with_details(mut self, homepage: &str, note: &str) -> Self {
+        self.homepage = Some(homepage.into());
+        self.note = Some(note.into());
+        self
+    }
+
+    #[must_use]
+    pub fn manual_setup(id: &str, name: &str, homepage: &str, reason: &str) -> Self {
+        let mut package = Self::new(id, name);
+        package.homepage = Some(homepage.into());
+        package.unavailable_reason = Some(reason.into());
+        package
+    }
+
+    #[must_use]
+    pub fn is_installable(&self) -> bool {
+        self.unavailable_reason.is_none()
     }
 
     /// Attribute path to emit in Nix (`nix_attr` if set, otherwise `id`).
@@ -412,9 +444,31 @@ pub fn default_bundles() -> Vec<BundleDef> {
                 PackageDef::new("vscodium", "VSCodium"),
                 PackageDef::new("zed-editor", "Zed Editor"),
                 PackageDef::new("rustup", "Rustup"),
-                PackageDef::new("nodejs", "Node.js"),
+                PackageDef::new("nodejs", "Node.js (JavaScript runtime)"),
+                PackageDef::new("npm", "npm").with_nix_attr("nodejs")
+                    .with_details("https://docs.npmjs.com/downloading-and-installing-node-js-and-npm/", "Included with Node.js; selecting both installs one copy."),
+                PackageDef::new("javascript", "JavaScript (Node.js)").with_nix_attr("nodejs"),
+                PackageDef::new("bun", "Bun"),
+                PackageDef::new("ruby", "Ruby"),
+                PackageDef::new("rubyPackages.rails", "Ruby on Rails"),
+                PackageDef::new("zig", "Zig"),
                 PackageDef::new("python3", "Python 3"),
+                PackageDef::new("flutter", "Flutter SDK"),
+                PackageDef::new("dart", "Dart SDK")
+                    .with_details("https://dart.dev/get-dart", "Flutter already includes Dart; when both are selected, Flutter supplies the SDK."),
+                PackageDef::new("go", "Go"),
+                PackageDef::new("jdk", "Java (OpenJDK)"),
+                PackageDef::new("gcc", "C / C++ (GCC)"),
+                PackageDef::new("gtk4", "GTK 4")
+                    .with_details("https://www.gtk.org/docs/installations/linux/", "Use GTK 4 and pkg-config in a project Nix development shell when compiling applications."),
+                PackageDef::new("qt6.qtbase", "Qt 6 (Qt Base)")
+                    .with_details("https://doc.qt.io/qt-6/qtmodules.html", "Core, GUI and Widgets libraries. Add further Qt modules in your project's Nix development shell."),
+                PackageDef::new("typescript", "TypeScript"),
                 PackageDef::new("docker", "Docker"),
+                PackageDef::new("distrobox", "Distrobox")
+                    .with_details("https://distrobox.it/", "Enables rootless Podman for containers."),
+                PackageDef::new("distroshelf", "DistroShelf")
+                    .with_details("https://github.com/ranfdev/DistroShelf", "Includes Distrobox and enables rootless Podman. Uses a pinned package source when absent from your channel."),
             ],
             arm_compat: ArmCompat::Partial,
             arm_note: Some("VSCode binary not available on ARM".into()),
@@ -423,11 +477,34 @@ pub fn default_bundles() -> Vec<BundleDef> {
         BundleDef {
             id: "ai-tools".into(),
             name: "AI Tools".into(),
-            description: "Local LLMs and AI development tools".into(),
+            description: "Local models, AI coding assistants, and desktop tools".into(),
             icon: "applications-science-symbolic".into(),
             category: ActionCategory::Development,
             template: "bundles/ai-tools.nix".into(),
-            packages: vec![PackageDef::new("ollama", "Ollama")],
+            packages: vec![
+                PackageDef::new("ollama", "Ollama"),
+                PackageDef::manual_setup("chatgpt-desktop", "ChatGPT Desktop", "https://chatgpt.com/download/", "Manual setup: a verified Linux Nix package is not yet integrated. The nixpkgs chatgpt package targets macOS."),
+                PackageDef::manual_setup("hermes-desktop", "Hermes Agent Desktop", "https://hermes-agent.nousresearch.com/docs/getting-started/nix-setup", "Manual setup: follow the official Nix guide. The desktop build is not yet verified for managed installation."),
+                PackageDef::new("claude-code", "Claude Code CLI")
+                    .with_details("https://code.claude.com/docs/en/setup", "Run claude and sign in after installation."),
+                PackageDef::new("codex", "OpenAI Codex CLI")
+                    .with_details("https://github.com/openai/codex", "Run codex and sign in after installation."),
+                PackageDef::new("grok-build", "Grok CLI (Grok Build)")
+                    .with_details("https://docs.x.ai/build/overview", "Official xAI coding agent; command: grok. Uses a pinned package source when absent from your channel."),
+                PackageDef::new("code-cursor", "Cursor Desktop")
+                    .with_details("https://cursor.com/download", "AI code editor; command: cursor."),
+                PackageDef::new("cursor-cli", "Cursor CLI")
+                    .with_details("https://cursor.com/docs/cli/overview", "Command: cursor-agent. Uses a pinned package source when absent from your channel."),
+                PackageDef::manual_setup("muse-code", "Muse Code", "https://dev.meta.ai/docs/muse-code", "Manual setup: Meta's Muse Code has no verified Nix package in this catalog. nixpkgs muse is an unrelated music application."),
+                PackageDef::manual_setup("grok-bot", "Grok Bot", "https://x.ai/bot", "Unavailable for managed Linux installation: the official page currently lists macOS, Windows and iOS."),
+                PackageDef::new("mistral-vibe", "Mistral Vibe CLI")
+                    .with_details("https://github.com/mistralai/mistral-vibe", "Command: vibe. Includes an unfree Textual dependency. Uses a pinned package source when absent from your channel."),
+                PackageDef::manual_setup("kimi-code", "Kimi Code CLI", "https://github.com/MoonshotAI/kimi-code", "Manual setup: the current MoonshotAI CLI has no verified Nix package in this catalog."),
+                PackageDef::new("opencode", "OpenCode")
+                    .with_details("https://opencode.ai/", "Command: opencode. Configure a model provider after installation."),
+                PackageDef::new("pi-coding-agent", "Pi Coding Agent")
+                    .with_details("https://pi.dev/", "Command: pi. Uses a pinned package source when absent from your channel."),
+            ],
             arm_compat: ArmCompat::Partial,
             arm_note: Some("Some AI tools may have limited ARM support".into()),
         },
@@ -497,11 +574,15 @@ pub fn default_bundles() -> Vec<BundleDef> {
         BundleDef {
             id: "flatpak".into(),
             name: "Flatpak Support".into(),
-            description: "Enable Flatpak for sandboxed application installation".into(),
+            description: "Flatpak applications and the Bazaar app store".into(),
             icon: "package-x-generic-symbolic".into(),
             category: ActionCategory::System,
             template: "bundles/flatpak.nix".into(),
-            packages: vec![PackageDef::new("flatpak", "Flatpak")],
+            packages: vec![
+                PackageDef::new("flatpak", "Flatpak"),
+                PackageDef::new("bazaar", "Bazaar App Store")
+                    .with_details("https://usebazaar.org/", "Enables Flatpak and desktop portals. Uses a pinned package source when absent from your channel."),
+            ],
             arm_compat: ArmCompat::Full,
             arm_note: None,
         },

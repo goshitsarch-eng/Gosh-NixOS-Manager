@@ -44,12 +44,32 @@ pub fn view(app: &AppModel) -> Element<'_, Message> {
         let body = expanded.then(|| {
             let mut packages = settings::section();
             for package in &bundle.packages {
+                if let Some(reason) = &package.unavailable_reason {
+                    packages = packages.add(
+                        settings::item::builder(package.display_name.as_str())
+                            .description(format!(
+                                "{} {}",
+                                reason,
+                                package.homepage.as_deref().unwrap_or_default()
+                            ))
+                            .control(widget::text::caption("Manual setup")),
+                    );
+                    continue;
+                }
                 let checked = selected.is_some_and(|set| set.contains(&package.id));
                 let bundle_id = bundle.id.clone();
                 let package_id = package.id.clone();
                 packages = packages.add(
                     settings::item::builder(package.display_name.as_str())
-                        .description(format!("pkgs.{}", package.id))
+                        .description(format!(
+                            "pkgs.{}{}",
+                            package.resolved_nix_attr(),
+                            package
+                                .note
+                                .as_ref()
+                                .map(|note| format!(" — {note}"))
+                                .unwrap_or_default()
+                        ))
                         .checkbox(checked, move |enabled| Message::ToggleBundlePackage {
                             bundle_id: bundle_id.clone(),
                             package: package_id.clone(),

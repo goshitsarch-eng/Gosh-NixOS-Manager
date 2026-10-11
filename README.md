@@ -4,6 +4,10 @@ NixOS Toolkit is a Linux desktop application for declarative NixOS management. T
 
 Choose from 13 desktop profiles, 16 software bundles, custom packages, hardware, network and 21 service settings. Review generated Nix locally, then apply through the host helper. Generations, maintenance and store usage also use that helper. On other Linux distributions, configuration and preview remain available; privileged actions explain their NixOS requirement.
 
+The [software bundle catalog](docs/SOFTWARE_BUNDLES.md) documents Bazaar, AI tools,
+language SDKs and container tools, with verified upstream links and installation
+notes. Tools awaiting a verified Linux package appear as manual setup entries.
+
 ![Linux Light appearance](docs/screenshots/linux-light.png)
 ![Linux Dark appearance](docs/screenshots/linux-dark.png)
 

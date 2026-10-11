@@ -251,6 +251,7 @@ class AppController extends ChangeNotifier {
     );
     if (enabled) {
       packages[id] = (bundle['packages'] as List)
+          .where((p) => (p as Map)['unavailable_reason'] == null)
           .map((p) => (p as Map)['id'])
           .toList();
     } else {
@@ -264,9 +265,16 @@ class AppController extends ChangeNotifier {
       configuration!.value('bundle_packages') as Map,
     );
     final bundle = catalog('bundles').firstWhere((b) => b['id'] == id);
+    final definition = (bundle['packages'] as List).cast<Map>().firstWhere(
+      (p) => p['id'] == package,
+    );
+    if (enabled && definition['unavailable_reason'] != null) return;
     final current = List<String>.from(
       selections[id] as List? ??
-          (bundle['packages'] as List).map((p) => (p as Map)['id']).toList(),
+          (bundle['packages'] as List)
+              .where((p) => (p as Map)['unavailable_reason'] == null)
+              .map((p) => (p as Map)['id'])
+              .toList(),
     );
     if (enabled && !current.contains(package)) current.add(package);
     if (!enabled) current.remove(package);

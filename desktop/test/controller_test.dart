@@ -222,4 +222,51 @@ void main() {
       expect(controller.error, isNull);
     },
   );
+
+  test(
+    'AI bundle excludes manual setup entries and rejects enabling them',
+    () async {
+      final bundle = controller
+          .catalog('bundles')
+          .firstWhere((b) => b['id'] == 'ai-tools');
+      controller.toggleBundle(bundle, true);
+      final selection = List<String>.from(
+        (controller.configuration!.value('bundle_packages') as Map)['ai-tools']
+            as List,
+      );
+      expect(
+        selection,
+        containsAll([
+          'claude-code',
+          'codex',
+          'grok-build',
+          'cursor-cli',
+          'mistral-vibe',
+          'opencode',
+          'pi-coding-agent',
+        ]),
+      );
+      for (final id in [
+        'chatgpt-desktop',
+        'hermes-desktop',
+        'muse-code',
+        'grok-bot',
+        'kimi-code',
+      ]) {
+        expect(selection, isNot(contains(id)));
+        controller.toggleBundlePackage('ai-tools', id, true);
+        expect(
+          (controller.configuration!.value('bundle_packages')
+              as Map)['ai-tools'],
+          isNot(contains(id)),
+        );
+      }
+      await controller.updatePreview();
+      expect(controller.preview, isNot(contains('(throw')));
+      expect(
+        controller.preview,
+        contains('nixpkgs.config.allowUnfree = true;'),
+      );
+    },
+  );
 }

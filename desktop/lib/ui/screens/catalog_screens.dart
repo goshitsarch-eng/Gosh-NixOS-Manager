@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../state/app_controller.dart';
 import '../components/settings.dart';
@@ -107,7 +108,10 @@ class BundlesScreen extends StatelessWidget {
           controller.configuration!.value('bundle_packages') as Map;
       final selected = List<String>.from(
         selection[id] as List? ??
-            (bundle['packages'] as List).map((p) => (p as Map)['id']).toList(),
+            (bundle['packages'] as List)
+                .where((p) => (p as Map)['unavailable_reason'] == null)
+                .map((p) => (p as Map)['id'])
+                .toList(),
       );
       return Card(
         child: ExpansionTile(
@@ -127,17 +131,64 @@ class BundlesScreen extends StatelessWidget {
                 child: Text(bundle['arm_note'] as String),
               ),
             ...(bundle['packages'] as List).cast<Map<String, dynamic>>().map(
-              (package) => CheckboxListTile(
-                title: Text(package['display_name'] as String),
-                subtitle: Text(package['id'] as String),
-                value: selected.contains(package['id']),
-                onChanged: enabled && controller.idle
-                    ? (value) => controller.toggleBundlePackage(
-                        id,
-                        package['id'] as String,
-                        value!,
-                      )
-                    : null,
+              (package) => Row(
+                children: [
+                  Expanded(
+                    child: CheckboxListTile(
+                      key: ValueKey('bundle-package-${package['id']}'),
+                      title: Text(package['display_name'] as String),
+                      subtitle: Text(
+                        package['unavailable_reason'] as String? ??
+                            [
+                              package['nix_attr'] as String? ??
+                                  package['id'] as String,
+                              if (package['note'] != null)
+                                package['note'] as String,
+                            ].join(' · '),
+                      ),
+                      value:
+                          package['unavailable_reason'] == null &&
+                          selected.contains(package['id']),
+                      onChanged:
+                          enabled &&
+                              controller.idle &&
+                              package['unavailable_reason'] == null
+                          ? (value) => controller.toggleBundlePackage(
+                              id,
+                              package['id'] as String,
+                              value!,
+                            )
+                          : null,
+                    ),
+                  ),
+                  if (package['homepage'] != null)
+                    IconButton(
+                      tooltip: 'Official website: ${package['display_name']}',
+                      icon: const Icon(Icons.open_in_new),
+                      onPressed: () async {
+                        final uri = Uri.parse(package['homepage'] as String);
+                        try {
+                          if (await launchUrl(uri)) return;
+                        } catch (_) {
+                          // Keep the verified URL accessible if no browser is configured.
+                        }
+                        if (!context.mounted) return;
+                        showDialog<void>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Official website'),
+                            content: SelectableText(uri.toString()),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('Close'),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                ],
               ),
             ),
           ],

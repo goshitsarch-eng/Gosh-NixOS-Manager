@@ -31,8 +31,12 @@ def cases(catalog):
     for bundle in catalog["bundles"]:
         name = bundle["id"]
         yield "bundle-template-" + name, state(enabled_bundles=[name])
-        yield "bundle-selected-" + name, state(enabled_bundles=[name], bundle_packages={name: [p["id"] for p in bundle["packages"]]})
+        yield "bundle-selected-" + name, state(enabled_bundles=[name], bundle_packages={name: [p["id"] for p in bundle["packages"] if not p.get("unavailable_reason")]})
         yield "bundle-empty-" + name, state(enabled_bundles=[name], bundle_packages={name: []})
+        if name in {"ai-tools", "devtools", "flatpak"}:
+            for package in bundle["packages"]:
+                if not package.get("unavailable_reason"):
+                    yield f"bundle-package-{name}-{package['id']}", state(enabled_bundles=[name], bundle_packages={name: [package["id"]]})
     for service in catalog["defaults"]["services_config"]:
         value = state()
         value["services_config"][service] = True

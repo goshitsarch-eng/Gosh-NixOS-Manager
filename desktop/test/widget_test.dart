@@ -60,6 +60,60 @@ void main() {
     await temp.delete(recursive: true);
   });
 
+  testWidgets('AI catalog separates selectable packages from manual setup', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1100, 760);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    controller.selectPage(2);
+    final bundle = controller
+        .catalog('bundles')
+        .firstWhere((b) => b['id'] == 'ai-tools');
+    controller.toggleBundle(bundle, true);
+    await tester.pumpWidget(
+      ToolkitApp(controller: controller, onQuit: () async {}),
+    );
+    await tester.tap(find.text('AI Tools'));
+    await tester.pumpAndSettle();
+    for (final id in [
+      'claude-code',
+      'codex',
+      'grok-build',
+      'code-cursor',
+      'cursor-cli',
+      'mistral-vibe',
+      'opencode',
+      'pi-coding-agent',
+    ]) {
+      final checkbox = tester.widget<CheckboxListTile>(
+        find.byKey(ValueKey('bundle-package-$id')),
+      );
+      expect(checkbox.value, isTrue, reason: id);
+      expect(checkbox.onChanged, isNotNull, reason: id);
+    }
+    for (final id in [
+      'chatgpt-desktop',
+      'hermes-desktop',
+      'muse-code',
+      'grok-bot',
+      'kimi-code',
+    ]) {
+      final checkbox = tester.widget<CheckboxListTile>(
+        find.byKey(ValueKey('bundle-package-$id')),
+      );
+      expect(checkbox.value, isFalse, reason: id);
+      expect(checkbox.onChanged, isNull, reason: id);
+      expect(checkbox.secondary, isNull);
+      expect(
+        find.byTooltip('Official website: ${(checkbox.title! as Text).data}'),
+        findsOneWidget,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('all pages render and package entry reaches Rust preview', (
     tester,
   ) async {

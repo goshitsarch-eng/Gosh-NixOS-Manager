@@ -243,6 +243,17 @@ elif name == 'switch-to-configuration':
         (self.managed / "state/state.json").write_text("corrupt")
         self.assertEqual(self.run_requests([{"type": "ReadState"}])[0]["payload"]["hostname"], "qa-desktop")
 
+    def test_reconstruction_preserves_bundle_aliases_without_adding_dependencies(self):
+        selected = ["npm", "javascript", "flutter", "dart", "distroshelf"]
+        self.state.update(enabled_bundles=["devtools"], bundle_packages={"devtools": selected})
+        replies = self.run_requests([self.apply_request(mode="Build")])
+        self.assertTrue(replies[0]["payload"]["success"])
+        recovered = self.run_requests([{"type": "ReadState"}])[0]["payload"]
+        self.assertEqual(recovered["bundle_packages"]["devtools"], selected)
+        (self.managed / "state/state.json").write_text("corrupt")
+        recovered = self.run_requests([{"type": "ReadState"}])[0]["payload"]
+        self.assertEqual(recovered["bundle_packages"]["devtools"], selected)
+
     def test_interactive_cancel_and_disconnect_restore_files_and_release_lock(self):
         self.seed()
         before = self.contents()

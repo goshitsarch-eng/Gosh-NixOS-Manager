@@ -140,8 +140,12 @@ impl AppModel {
                 if enabled {
                     self.state.enable_bundle(&id);
                     if let Some(bundle) = default_bundles().iter().find(|b| b.id == id) {
-                        let packages: HashSet<String> =
-                            bundle.packages.iter().map(|p| p.id.clone()).collect();
+                        let packages: HashSet<String> = bundle
+                            .packages
+                            .iter()
+                            .filter(|p| p.is_installable())
+                            .map(|p| p.id.clone())
+                            .collect();
                         self.state.set_bundle_packages(id, packages);
                     }
                 } else {
@@ -155,6 +159,14 @@ impl AppModel {
                 enabled,
             } => {
                 if !self.state.is_bundle_enabled(&bundle_id) {
+                    return Vec::new();
+                }
+                if enabled
+                    && default_bundles()
+                        .iter()
+                        .flat_map(|b| &b.packages)
+                        .any(|p| p.id == package && !p.is_installable())
+                {
                     return Vec::new();
                 }
                 if self.state.get_bundle_packages(&bundle_id).is_none() {

@@ -87,11 +87,92 @@ pub fn resolve_nix_attr(pkg_id: &str) -> String {
 }
 
 fn nix_attrs_for_package_ids(package_ids: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     package_ids
         .iter()
         .map(|id| resolve_nix_attr(id))
         .filter(|attr| is_nix_attrpath(attr))
+        .filter(|attr| seen.insert(attr.clone()))
         .collect()
+}
+
+fn package_selection_marker(package_ids: &[String]) -> String {
+    let ids: Vec<_> = package_ids
+        .iter()
+        .filter(|id| is_nix_attrpath(id))
+        .collect();
+    format!(
+        "# nixos-toolkit.packageIds = {}\n",
+        serde_json::to_string(&ids).expect("package IDs are JSON strings")
+    )
+}
+
+// This package-only fallback is fixed independently of the host's NixOS channel.
+// Keep the revision/hash in sync with the verified source in SOFTWARE_BUNDLES.md.
+const BUNDLE_PACKAGE_SOURCE: &str = r#"let
+  toolkitPackages = import (builtins.fetchTarball {
+    url = "https://github.com/NixOS/nixpkgs/archive/c59305bab2065cfecc4944690d9eedbb56f3a9fa.tar.gz";
+    sha256 = "sha256-69xHQhAeMAD2wDXO7T2pcOZIF9Sga2W+JkmY2a11Ops=";
+  }) {
+    system = pkgs.stdenv.hostPlatform.system;
+    config.allowUnfree = config.nixpkgs.config.allowUnfree or false;
+  };
+in
+"#;
+
+fn needs_package_fallback(attr: &str) -> bool {
+    matches!(
+        attr,
+        "bazaar" | "distroshelf" | "grok-build" | "cursor-cli" | "mistral-vibe" | "pi-coding-agent"
+    )
+}
+
+/// Return complete, validated Nix expressions, never interpolate arbitrary input.
+fn package_expressions(package_ids: &[String]) -> (String, String) {
+    let mut attrs = nix_attrs_for_package_ids(package_ids);
+    if attrs.iter().any(|attr| attr == "distroshelf")
+        && !attrs.iter().any(|attr| attr == "distrobox")
+    {
+        attrs.push("distrobox".into());
+    }
+    let source = if attrs.iter().any(|attr| needs_package_fallback(attr)) {
+        BUNDLE_PACKAGE_SOURCE.to_string()
+    } else {
+        String::new()
+    };
+    let catalog = default_bundles();
+    let packages = attrs
+        .iter()
+        .filter_map(|attr| {
+            // Flutter provides a matching Dart SDK. A second version causes bin/dart
+            // collisions in the system profile, including across separate bundles.
+            let expression = if attr == "dart" && attrs.iter().any(|a| a == "flutter") {
+                return None;
+            } else if let Some(package) = catalog
+                .iter()
+                .flat_map(|b| &b.packages)
+                .find(|p| p.resolved_nix_attr() == attr && !p.is_installable())
+            {
+                format!(
+                    "(throw {})",
+                    nix_escape_string(&format!(
+                        "NixOS Toolkit: {}. {}",
+                        package.display_name,
+                        package.unavailable_reason.as_deref().unwrap_or_default()
+                    ))
+                )
+            } else if attr == "flutter" {
+                "(lib.hiPrio flutter)".into()
+            } else if needs_package_fallback(attr) {
+                format!("(pkgs.{attr} or toolkitPackages.{attr})")
+            } else {
+                attr.clone()
+            };
+            Some(format!("    {expression}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (source, packages)
 }
 
 fn nix_permit_root_login(value: &str) -> &'static str {
@@ -138,7 +219,12 @@ impl<'a> NixGenOptions<'a> {
         if let Some(packages) = self.bundle_packages.get(&bundle.id) {
             packages.clone()
         } else {
-            bundle.packages.iter().map(|p| p.id.clone()).collect()
+            bundle
+                .packages
+                .iter()
+                .filter(|p| p.is_installable())
+                .map(|p| p.id.clone())
+                .collect()
         }
     }
 
@@ -376,21 +462,19 @@ pub fn generate_custom_packages_nix(packages: &[String]) -> String {
         return String::new();
     }
 
-    let packages_str = nix_attrs_for_package_ids(packages)
-        .into_iter()
-        .map(|p| format!("    {p}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let (source, packages_str) = package_expressions(packages);
+    let selection_marker = package_selection_marker(packages);
 
     format!(
         r#"# NixOS Toolkit - Custom Packages
 # DO NOT EDIT MANUALLY - Managed by nixos-toolkit
 #
 # Custom packages: {}
+{selection_marker}
 
 {{ config, lib, pkgs, ... }}:
 
-{{
+{source}{{
   environment.systemPackages = with pkgs; [
 {}
   ];
@@ -901,11 +985,8 @@ pub fn template_exists(template_path: &str) -> bool {
 
 /// Generate a packages-only fallback bundle (catalog selection + module stub).
 pub fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
-    let pkg_list = nix_attrs_for_package_ids(packages)
-        .into_iter()
-        .map(|p| format!("    {p}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let (source, pkg_list) = package_expressions(packages);
+    let selection_marker = package_selection_marker(packages);
 
     let packages_attr = if id == "fonts" {
         "fonts.packages"
@@ -916,10 +997,11 @@ pub fn generate_fallback_bundle(id: &str, packages: &[String]) -> String {
     format!(
         r#"# {} Bundle
 # Generated by NixOS Toolkit
+{selection_marker}
 
 {{ config, lib, pkgs, ... }}:
 
-{{
+{source}{{
 {}
   {packages_attr} = with pkgs; [
 {pkg_list}
@@ -948,6 +1030,10 @@ pub fn bundle_module_stub(id: &str, packages: &[String]) -> String {
                 stub.push_str(
                     "  virtualisation.docker = {\n    enable = true;\n    enableOnBoot = true;\n  };\n",
                 );
+            }
+            if package_selected(packages, "distrobox") || package_selected(packages, "distroshelf")
+            {
+                stub.push_str("  virtualisation.podman.enable = true;\n");
             }
             stub
         }
@@ -1020,7 +1106,7 @@ pub fn bundle_module_stub(id: &str, packages: &[String]) -> String {
             }
         }
         "flatpak" => {
-            if package_selected(packages, "flatpak") {
+            if package_selected(packages, "flatpak") || package_selected(packages, "bazaar") {
                 "  services.flatpak.enable = true;\n  xdg.portal.enable = true;\n  xdg.portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];\n".to_string()
             } else {
                 String::new()
@@ -1046,6 +1132,11 @@ fn attr_needs_unfree(attr: &str) -> bool {
             | "vscode"
             | "obsidian"
             | "onlyoffice-desktopeditors"
+            | "claude-code"
+            | "grok-build"
+            | "code-cursor"
+            | "cursor-cli"
+            | "mistral-vibe"
     )
 }
 
@@ -1785,6 +1876,88 @@ mod tests {
         assert!(nix.contains("julia-bin"));
         assert!(!nix.contains("    bitwarden\n"));
         assert!(!nix.contains("    julia\n"));
+    }
+
+    #[test]
+    fn language_aliases_do_not_duplicate_runtimes() {
+        let nix = generate_fallback_bundle(
+            "devtools",
+            &[
+                "nodejs".into(),
+                "npm".into(),
+                "javascript".into(),
+                "flutter".into(),
+                "dart".into(),
+                "rubyPackages.rails".into(),
+            ],
+        );
+        assert_eq!(nix.matches("    nodejs\n").count(), 1);
+        assert!(nix.contains("(lib.hiPrio flutter)"));
+        assert!(!nix.contains("    dart\n"));
+        assert!(nix.contains("rubyPackages.rails"));
+        assert!(generate_fallback_bundle("devtools", &["dart".into()]).contains("    dart\n"));
+    }
+
+    #[test]
+    fn distroshelf_and_distrobox_enable_rootless_container_runtime() {
+        for id in ["distroshelf", "distrobox"] {
+            let nix = generate_fallback_bundle("devtools", &[id.into()]);
+            assert!(nix.contains("virtualisation.podman.enable = true;"));
+            assert!(nix.contains("    distrobox\n"));
+            assert!(!nix.contains("virtualisation.docker"));
+            assert_eq!(nix.matches("environment.systemPackages =").count(), 1);
+        }
+        let empty = generate_fallback_bundle("devtools", &[]);
+        assert!(!empty.contains("podman"));
+        assert!(!empty.contains("fetchTarball"));
+    }
+
+    #[test]
+    fn bazaar_alone_enables_flatpak_and_portals() {
+        let nix = generate_fallback_bundle("flatpak", &["bazaar".into()]);
+        assert!(nix.contains("services.flatpak.enable = true;"));
+        assert!(nix.contains("xdg.portal.enable = true;"));
+        assert!(nix.contains("pkgs.bazaar or toolkitPackages.bazaar"));
+        assert!(!generate_fallback_bundle("flatpak", &[]).contains("services.flatpak"));
+    }
+
+    #[test]
+    fn manual_setup_entries_are_not_installed_by_default_or_silently_skipped() {
+        let ai = bundle_by_id("ai-tools");
+        let options = NixGenOptions::default();
+        let selected = options.get_bundle_packages(&ai);
+        for package in ai.packages.iter().filter(|p| !p.is_installable()) {
+            assert!(!selected.contains(&package.id));
+            let forced = generate_fallback_bundle("ai-tools", std::slice::from_ref(&package.id));
+            assert!(forced.contains("(throw \"NixOS Toolkit:"));
+            assert!(forced.contains(&package.display_name));
+        }
+        let default = generate_fallback_bundle("ai-tools", &selected);
+        assert!(!default.contains("throw"));
+        assert!(default.contains("claude-code"));
+        assert!(default.contains("grok-build"));
+    }
+
+    #[test]
+    fn proprietary_ai_selections_enable_unfree_without_affecting_free_tools() {
+        let ai = bundle_by_id("ai-tools");
+        for (id, expected) in [
+            ("claude-code", true),
+            ("code-cursor", true),
+            ("cursor-cli", true),
+            ("grok-build", true),
+            ("mistral-vibe", true),
+            ("codex", false),
+            ("opencode", false),
+            ("pi-coding-agent", false),
+        ] {
+            let options = NixGenOptions {
+                bundles: vec![&ai],
+                bundle_packages: HashMap::from([("ai-tools".into(), vec![id.into()])]),
+                ..Default::default()
+            };
+            assert_eq!(needs_allow_unfree(&options), expected, "{id}");
+        }
     }
 
     #[test]
