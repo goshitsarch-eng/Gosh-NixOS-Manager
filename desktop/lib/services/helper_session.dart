@@ -241,6 +241,7 @@ class _Connection {
         'EnsureDirectories': 'Ok',
         'WriteState': 'Ok',
         'ReadState': 'State',
+        'ReadStateSnapshot': 'StateSnapshot',
         'GetSystemInfo': 'SystemInfo',
         'Apply': 'ApplyComplete',
         'ListGenerations': 'Generations',

@@ -26,6 +26,17 @@ void main() {
   tearDown(() => temp.delete(recursive: true));
 
   test(
+    'state snapshots cross the real transport with their revision intact',
+    () async {
+      final response = await peer('success').request('ReadStateSnapshot');
+      expect(response['type'], 'StateSnapshot');
+      expect(response['payload']['state']['hostname'], 'desktop');
+      expect(response['payload']['revision'], 'test-revision');
+      expect(await requests(), ['BeginSession', 'ReadStateSnapshot']);
+    },
+  );
+
+  test(
     'apply streams progress and saves state after successful rebuild',
     () async {
       await peer('success').apply({

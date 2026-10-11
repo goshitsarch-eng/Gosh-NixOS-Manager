@@ -47,6 +47,16 @@ Future<void> main(List<String> args) async {
           'payload': {'message': 'Read-only state directory', 'details': null},
         }),
       );
+    } else if (type == 'ReadStateSnapshot') {
+      stdout.writeln(
+        jsonEncode({
+          'type': 'StateSnapshot',
+          'payload': {
+            'state': {'hostname': 'desktop'},
+            'revision': 'test-revision',
+          },
+        }),
+      );
     } else if (type == 'Apply') {
       stdout.writeln(
         jsonEncode({

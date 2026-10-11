@@ -184,7 +184,7 @@ action discards drafts only after confirmation when they are dirty. It refreshes
 the snapshot and review baseline. Build, Boot, Test and Switch explain their
 different activation effects; successful Build no longer claims activation.
 
-Validation passed 158 common/core/helper/fake-helper Rust tests, 38 Flutter tests,
+Validation passed 158 common/core/helper/fake-helper Rust tests, 39 Flutter tests,
 28 isolated helper tests, workspace Clippy, Flutter analysis and formatting.
 Tests cover external edits to main/managed configuration and state, added and
 unreadable Nix files, boot-selection changes, unchanged guarded dry builds,
@@ -195,3 +195,22 @@ legacy-client limitations of the revision guard are documented in BUILDING.md.
 Clicking the selected desktop card now clears that selection and its preview.
 The profile screen explains the toggle, and a widget regression selects KDE,
 clicks it again to clear, and then selects GNOME.
+
+The final native app and matching helper were built with Nix, installed into
+this VM and activated successfully. Live accessibility checks selected KDE,
+clicked it again to clear, selected GNOME, inspected the desktop change review,
+and confirmed Reload saved selections restored the clean baseline. The installed
+app then completed a guarded dry run. Both managed-file hashes matched their
+original values afterward, no recovery journal remained, the firewall was
+active, and systemd reported no failed units. A separate live probe added an
+unimported Nix file after a snapshot; the helper rejected that stale draft
+without managed writes. The probe file was removed.
+
+The real helper transport now explicitly accepts StateSnapshot responses; a
+transport regression checks that both saved state and revision arrive intact.
+The native archive and Flatpak were rebuilt, their checksums passed, and the
+installed Flatpak passed packaged Rust API/catalog/preview/host-bridge diagnostics.
+The welcome guidance was inspected in the running app. Local screenshots,
+transport/build logs and host checks are retained in ignored
+`dist/qa-evidence/safety/`. GitHub account billing remains an external CI blocker;
+these local results do not establish a passing hosted workflow.
